@@ -32,11 +32,12 @@ RFCは要件・設計・実装と検証の契約、ADRは選択理由・代替�
 | [013 個別同時打診](adr/ADR-013-parallel-outreach.md) | 全適格者へ並行に連絡 | 現行方針。旧順次方式を置換 |
 | [014 自然文承諾](adr/ADR-014-natural-consent.md) | 一意な意思・条件を承諾として扱う | 現行方針＋成立・保留条件の提案 |
 | [015 CSV原本](adr/ADR-015-csv-source.md) | CSV入出力、SaaSは次段階 | v0.4の現行方針 |
-| [016 正式採用](adr/ADR-016-csv-adoption.md) | 出力作成と正式採用を分ける | 提案。Q01未決 |
-| [017 状態の分離](adr/ADR-017-state-boundaries.md) | 案件・対話・更新・配送を分ける | ユーザー承認済み。完了境界Q07のみ未決 |
-| [018 未決の業務条件](adr/ADR-018-scope-open-decisions.md) | 超過人数、分断時間、部分欠勤、日跨ぎ、月次 | 未決。推奨と選択肢を記録 |
+| [016 正式採用](adr/ADR-016-csv-adoption.md) | 出力作成と正式採用を分ける | **Q01確定（2026-09-21）**。案Aを採用 |
+| [017 状態の分離](adr/ADR-017-state-boundaries.md) | 案件・対話・更新・配送を分ける | ユーザー承認済み。**Q07確定**。状態の意味はADR-022で更新 |
+| [018 未決の業務条件](adr/ADR-018-scope-open-decisions.md) | 超過人数、分断時間、部分欠勤、日跨ぎ、月次 | **Q02〜Q06確定（2026-09-21）**。初期推奨を採用 |
 | [019 Gatewayの保証](adr/ADR-019-gateway-contract.md) | 結果照会、能力差、出力のみの区別 | 境界は現行方針、詳細は提案 |
-| [021 2人開発の分担](adr/ADR-021-two-person-delivery.md) | 統合責任、所有領域、相互確認、日別統合 | ユーザー承認済み。実作業は未実施 |
+| [021 2人開発の分担](adr/ADR-021-two-person-delivery.md) | 統合責任、所有領域、相互確認、日別統合 | ユーザー承認済み。Day 1の環境構築まで実施 |
+| [022 引き継ぎと採用事実](adr/ADR-022-handoff-and-outcome-retention.md) | HandedOffの意味、採用事実の保持、追加する遷移の条件 | **ユーザー承認済み（2026-09-21）**。実装はDay 2以降 |
 
 ## 過去RFCの適用範囲
 

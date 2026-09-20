@@ -15,10 +15,26 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 | `operation.ts`         | ADR-006、RFC-009 D07                                  |
 | `schedule-gateway.ts`  | RFC-010 §6、ADR-019                                   |
 | `messaging-gateway.ts` | RFC-011 §6、ADR-019                                   |
-| `model-output.ts`      | RFC-011 §3、ADR-004、ADR-014（対応文型の幅はQ09未決） |
+| `model-output.ts`      | RFC-011 §3、ADR-004、ADR-014、Q09（2026-09-21確定） |
 | `errors.ts`            | 各契約の失敗表現                                      |
 
 識別子と永続化するenum値は英語（AGENTS.md）。
+
+## 遷移には条件がある
+
+矢印だけを見て状態を動かさないこと。次の関数を通す。
+
+| 関数 | 守る規則 |
+|---|---|
+| `resolveReconcile`（schedule-update） | 照合の証拠なしに照合待ちを解消しない。「照会が取れなかった」を「未採用」と読み替えない |
+| `resolveReconcileStall`（case-state） | 照会経路が使えるうちは状態を動かさない。使えなくなったら成否不明のまま要対応へ |
+| `canResumeReporting`（case-state） | 採用済みと確認でき、かつ正式版の読戻しが一致した場合だけ通知処理へ戻す |
+| `resolvePreparingStop`（case-state） | 期限を検知しただけで引き継がない。採用結果を先に確定させる |
+
+`HANDED_OFF` は「自動調整を終了し、人へ対応を引き継いだ」であり、**未確定を意味しない**
+（[ADR-022](../../docs/adr/ADR-022-handoff-and-outcome-retention.md)）。採用事実
+（`AdoptionFact`：未採用／採用済み／成否不明）は案件状態と別に保持し、画面でも区別して
+表示する。案件状態から採用可否を推定しない。
 
 ## まだ契約に無いもの（Day 2着手前に決める）
 

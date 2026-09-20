@@ -22,11 +22,15 @@ import { isValidMicroUsd, type CostKind, type MicroUsd } from "./usage";
 /**
  * 1案件あたりの呼出し回数の既定値（RFC-004 §7 の `case_call_limit`）。
  *
- * ADR-007の初期値10call／案件を、Q10確定までのMVP既定値として使う。
- * Q10が未決であることは「上限なし」ではない。採用済みのプロダクト判断ではなく、
- * 実装上の仮定（docs/OPEN-QUESTIONS.md）。
+ * Q10で24を暫定確定した（2026-09-21）。ADR-007の10call／案件は順次打診を前提にした
+ * 値のため置き換える。
+ *
+ * **24は検証前の上限候補であり、十分な回数だという保証ではない。**
+ * 返信解釈が1人1callなら8人で8callであり、10にはまだ達しない。追加確認、訂正、
+ * schema修復、再試行、モデルによる次行動提案まで含めると不足し得る、というのが
+ * 24を置いた理由。上限到達時に安全へ引き継げることを試験する（A18）。
  */
-export const DEFAULT_CASE_CALL_LIMIT = 10;
+export const DEFAULT_CASE_CALL_LIMIT = 24;
 
 export interface BudgetLimits {
   /** `case_call_limit`：1案件あたりの呼出し回数。schema修復・再試行も含む。 */

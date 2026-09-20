@@ -13,17 +13,36 @@
 
 import { z } from "zod";
 
-/** 返信から読み取った勤務意思。曖昧なものを承諾へ寄せない。 */
+/**
+ * 返信から読み取った勤務意思。曖昧なものを承諾へ寄せない。
+ *
+ * **判定対象は返信単体ではない（Q09）。** 元打診、現在の承諾、確定前か確定後かを
+ * 併せて判定する。「19時から」だけでも、元打診の終了時刻から条件が一意に定まるなら
+ * 承諾候補になり得る。逆に、対象が一意でなければ文型が明快でも承諾にしない。
+ *
+ * **「承諾として採用しない」ことと「返信を無視する」ことは別。** 承諾に使えない返信も
+ * 記録し、辞退・撤回・保留として状態へ反映する（RFC-011 §4）。
+ */
 export const replyIntentSchema = z.enum([
   /** 提示条件で勤務する意思がある。 */
   "ACCEPT",
-  /** 勤務しない。辞退理由は求めない（ADR-008）。 */
+  /**
+   * 勤務しない。辞退理由は求めない（ADR-008）。
+   * 対象が一意なら、時刻の再記載が無くても辞退として処理する（Q09）。
+   */
   "DECLINE",
-  /** 条件付き。一意に決まらないため追加確認が必要。 */
+  /**
+   * 条件付き。元打診と併せても一意に決まらないため追加確認が必要。
+   */
   "CONDITIONAL",
-  /** 以前の回答の訂正。 */
+  /**
+   * 以前の回答の訂正。
+   * 曖昧な訂正は確認へ回し、**旧承諾による選定も保留する**（Q09 / RFC-011 §4）。
+   */
   "CORRECTION",
-  /** 以前の回答の撤回。 */
+  /**
+   * 以前の回答の撤回。対象が一意なら、時刻の再記載が無くても処理する（Q09）。
+   */
   "WITHDRAW",
   /** 勤務意思として読み取れない。 */
   "UNCLEAR",
@@ -83,6 +102,28 @@ export const modelReplyOutputSchema = z.object({
   interpretation: replyInterpretationSchema,
   proposedAction: proposedActionSchema,
 });
+
+/**
+ * 解釈のfixtureが揃えるべき入力（Q09）。
+ *
+ * 例文だけのfixtureにしない。元打診、既存の承諾、確定前か確定後か、期待結果を
+ * セットにする。同じ文面でも、確定前なら再計画、確定後なら人への引き継ぎになる
+ * （RFC-011 §4の表）。
+ */
+export interface ReplyFixtureInput {
+  readonly offer: {
+    readonly date: string;
+    readonly roleCode: string;
+    readonly startAt: string;
+    readonly endAt: string;
+    readonly deadlineAt: string;
+  };
+  /** この返信の時点で、このスタッフに有効な承諾があるか。 */
+  readonly existingCommitment?: { readonly startAt: string; readonly endAt: string };
+  /** 案件がすでに正式採用済みか。確定前後で扱いが変わる。 */
+  readonly afterCommit: boolean;
+  readonly replyText: string;
+}
 
 export type ModelReplyOutput = z.infer<typeof modelReplyOutputSchema>;
 
