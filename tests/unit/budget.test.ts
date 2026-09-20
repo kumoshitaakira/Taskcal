@@ -14,7 +14,7 @@ interface LedgerState {
   caseSpend: MicroUsd;
   runSpend: MicroUsd;
   calls: number;
-  reserved: Map<string, MicroUsd>;
+  reserved: Map<string, { micro: MicroUsd; hash: string }>;
   settled: { requestId: string; actualMicroUsd?: MicroUsd; costKind: CostKind }[];
 }
 
@@ -25,7 +25,12 @@ function ledgerOf(state: LedgerState): BudgetLedger & { seenLimits: RequiredBudg
     seenLimits,
     async tryReserve(reservation: Reservation, limits: RequiredBudgetLimits) {
       seenLimits.push(limits);
-      if (state.reserved.has(reservation.requestId)) return RESERVATION_RESULT.ALREADY_RESERVED;
+      const existing = state.reserved.get(reservation.requestId);
+      if (existing) {
+        return existing.hash === reservation.requestHash
+          ? RESERVATION_RESULT.ALREADY_RESERVED
+          : RESERVATION_RESULT.HASH_MISMATCH;
+      }
       if (state.calls + 1 > limits.caseCallLimit) return RESERVATION_RESULT.EXCEEDED_CALLS;
       if (state.caseSpend + reservation.estimatedMicroUsd > limits.caseSpendLimitMicroUsd) {
         return RESERVATION_RESULT.EXCEEDED_CASE_SPEND;
@@ -33,7 +38,10 @@ function ledgerOf(state: LedgerState): BudgetLedger & { seenLimits: RequiredBudg
       if (state.runSpend + reservation.estimatedMicroUsd > limits.runSpendLimitMicroUsd) {
         return RESERVATION_RESULT.EXCEEDED_RUN_SPEND;
       }
-      state.reserved.set(reservation.requestId, reservation.estimatedMicroUsd);
+      state.reserved.set(reservation.requestId, {
+        micro: reservation.estimatedMicroUsd,
+        hash: reservation.requestHash,
+      });
       state.caseSpend += reservation.estimatedMicroUsd;
       state.runSpend += reservation.estimatedMicroUsd;
       state.calls += 1;
@@ -61,6 +69,7 @@ const ESTIMATE: MicroUsd = 5_000;
 const reservation: Reservation = {
   caseId: "c1",
   requestId: "req-1",
+  requestHash: "a".repeat(64),
   estimatedMicroUsd: ESTIMATE,
 };
 
@@ -145,10 +154,24 @@ describe("BudgetGuard（RFC-004 §7 / ADR-007 / Q10）", () => {
       { caseSpendLimitMicroUsd: MICRO_USD_PER_USD, runSpendLimitMicroUsd: MICRO_USD_PER_USD },
       ledgerOf(state),
     );
-    await guard.reserve(reservation);
-    await guard.reserve(reservation);
+    expect(await guard.reserve(reservation)).toBe(RESERVATION_RESULT.RESERVED);
+    // 2回目は ALREADY_RESERVED を返す。これは「呼出してよい」ではない。
+    expect(await guard.reserve(reservation)).toBe(RESERVATION_RESULT.ALREADY_RESERVED);
     expect(state.calls).toBe(1);
     expect(state.caseSpend).toBe(ESTIMATE);
+  });
+
+  it("同じ requestId で内容が異なれば拒否する（D07）", async () => {
+    const state = emptyState();
+    const guard = new BudgetGuard(
+      { caseSpendLimitMicroUsd: MICRO_USD_PER_USD, runSpendLimitMicroUsd: MICRO_USD_PER_USD },
+      ledgerOf(state),
+    );
+    await guard.reserve(reservation);
+    await expect(
+      guard.reserve({ ...reservation, requestHash: "b".repeat(64) }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.OPERATION_CONFLICT });
+    expect(state.calls).toBe(1);
   });
 
   it("検査と加算を1回の台帳操作で行う（同時返信で上限をすり抜けさせない）", async () => {

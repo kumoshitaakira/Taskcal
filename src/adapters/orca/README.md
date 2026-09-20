@@ -11,9 +11,14 @@ OrcaRouter経由の推論。担当A（RFC-012 §3.1）。
 - `case_spend_limit` / `run_spend_limit` / 1呼出しの見積りが未設定なら有料呼出しを
   開始しない（RFC-004 §7、ADR-007、Q10）。`case_call_limit` が未設定の場合は
   ADR-007の初期値10を既定にする。
-- 予約は `request_id` で冪等にする。worker再起動やlease失効で同じイベントを
-  再処理しても、二重に予約・課金しない。`request_id` は**呼出し元が永続化**し、
-  adapter側で採番しない。
+- 予約は `request_id` で冪等にし、`request_hash` を台帳へ保存して再予約時に照合する。
+  同じIDで内容が異なる要求は `OPERATION_CONFLICT` で拒否する（D07）。
+  `request_id` は**呼出し元が永続化**し、adapter側で採番しない。
+- **`ALREADY_RESERVED` は「呼出してよい」ではない。** 予約が一重でも、そこから
+  `fetch` すると有料推論は二重に走る。保存済み結果（`ModelCallStore`）を返すか、
+  結果が確認できなければ `RECONCILE_REQUIRED` として人の対応へ回す。再送しない。
+- モデルへは、元打診に加えて**現在の承諾と確定状態**を渡す（Q09）。訂正・撤回は
+  既存の回答を指すため、これが無いと解釈できない。氏名・連絡先は渡さない。
 - 実使用モデル・トークン・費用は、実測／推定／取得不能を区別して記録する（`usage.ts`）。
 - タイムアウト・応答喪失は `UnknownOutcomeError`。費用0にも確定失敗にもしない。
   課金不明は `UNKNOWN_CHARGE` とし、**予約を残す**（RFC-004 §7）。

@@ -7,7 +7,7 @@
 
 import "server-only";
 import { getServerEnv } from "@/config/env";
-import type { BudgetLedger } from "./budget";
+import type { BudgetLedger, ModelCallStore } from "./budget";
 import { BudgetGuard } from "./budget";
 import type { ModelGateway } from "./model-gateway";
 import { OrcaRouterClient } from "./orca-client";
@@ -15,6 +15,8 @@ import { UnconfiguredModelGateway } from "./unconfigured-gateway";
 
 export interface ModelGatewayDeps {
   readonly ledger: BudgetLedger;
+  /** 保存済み結果の照会先。再試行を再送にしないために必須。 */
+  readonly callStore: ModelCallStore;
 }
 
 export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
@@ -44,6 +46,7 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
       },
       deps.ledger,
     ),
+    callStore: deps.callStore,
     estimatedMicroUsdPerCall: env.ORCA_ESTIMATED_MICRO_USD_PER_CALL,
   });
 }

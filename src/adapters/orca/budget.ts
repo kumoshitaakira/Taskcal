@@ -53,6 +53,11 @@ export interface Reservation {
   /** RFC-004 §8 の `request_id`。呼出し元が永続化した安定ID。再試行で変えない。 */
   readonly requestId: string;
   /**
+   * 要求内容のハッシュ。**台帳へ保存し、再予約時に照合する。**
+   * 同じIDで内容が異なる要求は拒否する（ADR-006 / RFC-009 D07）。
+   */
+  readonly requestHash: string;
+  /**
    * 保守的な見積り（USD整数micro）。入力長・出力上限・候補モデル単価から決める。
    * 0以下は受け付けない。
    */
@@ -61,8 +66,15 @@ export interface Reservation {
 
 export const RESERVATION_RESULT = {
   RESERVED: "RESERVED",
-  /** 同じ requestId で予約済み。再試行では新しい予約を作らない。 */
+  /**
+   * 同じ requestId で予約済み。新しい予約を作らない。
+   *
+   * **これは「呼出してよい」という意味ではない。** 呼出し元は保存済み結果を返すか、
+   * 成否を照合するまで外部呼出しを再送してはならない（AGENTS.md）。
+   */
   ALREADY_RESERVED: "ALREADY_RESERVED",
+  /** 同じ requestId で内容が異なる。拒否する（D07）。 */
+  HASH_MISMATCH: "HASH_MISMATCH",
   EXCEEDED_CALLS: "EXCEEDED_CALLS",
   EXCEEDED_CASE_SPEND: "EXCEEDED_CASE_SPEND",
   EXCEEDED_RUN_SPEND: "EXCEEDED_RUN_SPEND",
@@ -100,12 +112,14 @@ export class BudgetGuard {
   ) {}
 
   /**
-   * 呼出し前に検査して予約する。通らなければ例外で止める。
+   * 呼出し前に検査して予約する。上限超過・内容不一致は例外で止める。
    * 「上限が少なくても無視して続行」しない（RFC-011 §7）。
    *
-   * 同じ requestId で予約済みなら何もしない（再試行で二重に課金しない）。
+   * **戻り値を必ず見ること。** `ALREADY_RESERVED` は「呼出してよい」ではなく
+   * 「この要求はすでに実行を試みている」の意味。呼出し元は保存済み結果を返すか、
+   * 成否を照合するまで外部呼出しを再送してはならない。
    */
-  async reserve(reservation: Reservation): Promise<void> {
+  async reserve(reservation: Reservation): Promise<ReservationResult> {
     if (!isValidMicroUsd(reservation.estimatedMicroUsd) || reservation.estimatedMicroUsd <= 0) {
       // 見積り0を許すと、金額上限の比較が常に成立して予算が無効になる。
       // 単価が未確認でも、0ではなく保守的な見積りを渡すこと。
@@ -118,8 +132,14 @@ export class BudgetGuard {
     const limits = this.requireLimits();
     const result = await this.ledger.tryReserve(reservation, limits);
 
+    if (result === RESERVATION_RESULT.HASH_MISMATCH) {
+      throw new TaskcalError(
+        ERROR_CODES.OPERATION_CONFLICT,
+        "同じ request_id で内容が異なる要求です。拒否します（ADR-006 / D07）。",
+      );
+    }
     if (result === RESERVATION_RESULT.RESERVED || result === RESERVATION_RESULT.ALREADY_RESERVED) {
-      return;
+      return result;
     }
     throw new TaskcalError(ERROR_CODES.BUDGET_EXCEEDED, EXCEEDED_MESSAGE[result]);
   }
@@ -151,10 +171,36 @@ export class BudgetGuard {
 }
 
 const EXCEEDED_MESSAGE: Record<
-  Exclude<ReservationResult, "RESERVED" | "ALREADY_RESERVED">,
+  Exclude<ReservationResult, "RESERVED" | "ALREADY_RESERVED" | "HASH_MISMATCH">,
   string
 > = {
   EXCEEDED_CALLS: "案件の呼出し回数上限（case_call_limit）に達しました。",
   EXCEEDED_CASE_SPEND: "案件の金額上限（case_spend_limit）に達しました。",
   EXCEEDED_RUN_SPEND: "実行全体の金額上限（run_spend_limit）に達しました。",
 };
+
+/**
+ * モデル呼出しの結果の保存先。
+ *
+ * 予約とは別に、実際の結果を保存する。`ALREADY_RESERVED` になった要求に対して
+ * 保存済み結果を返すため、および、結果が無い（＝呼出し中に落ちた）場合に
+ * 再送せず照合へ回すために要る（AGENTS.md「結果照会または照合なしに、結果不明の
+ * 外部作用を再実行しない」）。
+ */
+export interface ModelCallStore {
+  /**
+   * 保存済み結果。まだ無ければ `"NO_RESULT"`。
+   * `"NO_RESULT"` は「呼出していない」ではなく「**結果が分からない**」。
+   */
+  findResult(requestId: string): Promise<StoredModelCall | "NO_RESULT">;
+  saveResult(call: StoredModelCall): Promise<void>;
+}
+
+export interface StoredModelCall {
+  readonly requestId: string;
+  readonly requestHash: string;
+  /** モデル出力。schema不一致で保存しなかった場合は undefined。 */
+  readonly output?: unknown;
+  /** 使用量。費用の確度を含む。 */
+  readonly usage: unknown;
+}

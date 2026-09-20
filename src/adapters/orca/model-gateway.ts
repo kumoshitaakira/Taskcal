@@ -31,6 +31,23 @@ export interface InterpretReplyRequest {
     readonly endAt: string;
     readonly deadlineAt: string;
   };
+  /**
+   * この返信の時点で、このスタッフに有効な承諾（Q09）。
+   *
+   * 訂正・撤回は既存の回答を参照するため、これが無いと解釈できない。
+   * 匿名化した時間だけを渡す。氏名・連絡先は渡さない（ADR-008）。
+   */
+  readonly currentCommitment?: {
+    readonly startAt: string;
+    readonly endAt: string;
+  };
+  /**
+   * 案件がすでに正式採用済みか（Q09）。
+   *
+   * 同じ文面でも、確定前なら再計画、確定後なら人への引き継ぎになる（RFC-011 §4）。
+   * 判定するのはコードだが、モデルが intent を誤らないために文脈として渡す。
+   */
+  readonly afterCommit: boolean;
   /** 返信本文。引用されたデータとして扱い、system指示と同じ権限を与えない。 */
   readonly replyText: string;
   readonly promptVersion: string;

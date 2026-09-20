@@ -149,13 +149,18 @@ fixtureは例文だけにしない。元打診、既存の承諾、確定前か�
 レートを添えて行い、内部では円を持たない。Q10で未決なのは**上限値**であって、通貨・表現では
 ない。設定名もRFC-004 §7の`case_call_limit`／`case_spend_limit`／`run_spend_limit`に合わせる。
 
-`case_call_limit`が未設定の場合は、ADR-007の初期値**10call／案件**をMVP既定値として適用する
-（`DEFAULT_CASE_CALL_LIMIT`）。Q10が未決であることは「上限なし」を意味しない。
-これは実装上の仮定であり、採用済みのプロダクト判断ではない。
+`case_call_limit`が未設定の場合は、Q10で暫定確定した**24call／案件**を既定値として適用する
+（`DEFAULT_CASE_CALL_LIMIT`）。ADR-007の10call／案件は順次打診を前提にした値のため
+置き換えた。未設定であることは「上限なし」を意味しない。
 
-予約は`request_id`で冪等にする。worker再起動やlease失効で同じ受信イベントを再処理しても、
-二重に予約・課金しない。`request_id`は呼出し元が永続化し、adapter側で採番しない
-（ADR-006）。課金不明は`UNKNOWN_CHARGE`として予約を残す（RFC-004 §7）。
+予約は`request_id`で冪等にし、`request_hash`を台帳へ保存して再予約時に照合する。
+同じIDで内容が異なる要求は`OPERATION_CONFLICT`で拒否する（ADR-006 / D07）。
+
+**予約が一重でも、外部呼出しまで一重になるわけではない。** すでに予約済みの要求は、
+保存済み結果を返すか、成否を照合するまで再送しない。結果が確認できない場合は
+`RECONCILE_REQUIRED`として人の対応へ回す（AGENTS.md）。`request_id`は呼出し元が
+永続化し、adapter側で採番しない。課金不明は`UNKNOWN_CHARGE`として予約を残す
+（RFC-004 §7）。
 
 ### migrationの番号割当（実装上の運用）
 
