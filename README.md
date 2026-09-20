@@ -46,3 +46,7 @@ docs/
 現行方針・レビュー提案・未決事項を区別し、古いADRや提供資料は履歴として残します。過去資料内の「案05」「欠勤リカバリー」はTaskcalの旧呼称です。
 
 サービス名と移管の記録は[ADR-020](docs/adr/ADR-020-taskcal-name.md)、価格・事業検証の仮説は[RFC-006](docs/rfc/RFC-006-business.md)を参照してください。実装開始後に起動方法・設定・試験手順を追記します。
+
+## AI開発環境
+
+Codexを主系として、リポジトリ共通の指示を[`AGENTS.md`](AGENTS.md)に置いています。Claude Codeは[`CLAUDE.md`](CLAUDE.md)から同じ指示を読み込みます。実装・設計記録・レビューのスキルと、読み取り専用レビューエージェントの使い方は[AI開発ガイド](docs/AI-DEVELOPMENT.md)を参照してください。

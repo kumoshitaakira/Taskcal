@@ -33,7 +33,7 @@ RFCは要件・設計・実装と検証の契約、ADRは選択理由・代替�
 | [014 自然文承諾](adr/ADR-014-natural-consent.md) | 一意な意思・条件を承諾として扱う | 現行方針＋成立・保留条件の提案 |
 | [015 CSV原本](adr/ADR-015-csv-source.md) | CSV入出力、SaaSは次段階 | v0.4の現行方針 |
 | [016 正式採用](adr/ADR-016-csv-adoption.md) | 出力作成と正式採用を分ける | 提案。Q01未決 |
-| [017 状態の分離](adr/ADR-017-state-boundaries.md) | 案件・対話・更新・配送を分ける | 提案。完了境界Q07未決 |
+| [017 状態の分離](adr/ADR-017-state-boundaries.md) | 案件・対話・更新・配送を分ける | ユーザー承認済み。完了境界Q07のみ未決 |
 | [018 未決の業務条件](adr/ADR-018-scope-open-decisions.md) | 超過人数、分断時間、部分欠勤、日跨ぎ、月次 | 未決。推奨と選択肢を記録 |
 | [019 Gatewayの保証](adr/ADR-019-gateway-contract.md) | 結果照会、能力差、出力のみの区別 | 境界は現行方針、詳細は提案 |
 
@@ -84,6 +84,7 @@ RFCは要件・設計・実装と検証の契約、ADRは選択理由・代替�
 
 ## その他の成果物
 
+- [AI開発ガイド](AI-DEVELOPMENT.md)
 - [企画比較資料・スライド](planning/README.md)
 - [レビュー単体ファイル](reviews/README.md)
 - [移管前の配布ZIP](archive/README.md)
