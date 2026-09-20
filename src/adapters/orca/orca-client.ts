@@ -111,7 +111,7 @@ export class OrcaRouterClient implements ModelGateway {
     } catch (error) {
       // タイムアウト・接続断は「結果不明」。課金の有無も不明であり、費用0にしない。
       clearTimeout(timer);
-      throw this.unknownCharge(
+      throw await this.unknownCharge(
         requestId,
         request,
         routingSource,
@@ -125,7 +125,7 @@ export class OrcaRouterClient implements ModelGateway {
       clearTimeout(timer);
       // HTTPエラーでも課金の有無は応答から分からない。使用量を捨てず UNKNOWN として残す。
       // 応答本文はログ・UIへ出さない。
-      throw this.unknownCharge(
+      throw await this.unknownCharge(
         requestId,
         request,
         routingSource,
@@ -139,7 +139,7 @@ export class OrcaRouterClient implements ModelGateway {
       // 本文の読み取りも同じタイムアウトの対象にする（ADR-007：20秒／呼出し）。
       payload = await response.json();
     } catch (error) {
-      throw this.unknownCharge(
+      throw await this.unknownCharge(
         requestId,
         request,
         routingSource,
@@ -165,6 +165,13 @@ export class OrcaRouterClient implements ModelGateway {
     if (!parsed.success) {
       // 呼出しは成立して課金されている。実測した使用量を捨てない（ADR-007：
       // schema修復・昇格も総回数に含む）。
+      // 呼出しは成立して課金されている。予約を残さず精算する（ADR-007：
+      // schema修復・昇格も総回数に含む）。
+      await this.options.budget.settle({
+        requestId,
+        actualMicroUsd: usage.costMicroUsd,
+        costKind: usage.costKind,
+      });
       throw new InvalidModelOutputError(
         usage,
         "モデル出力がschemaに一致しません。承諾として扱いません。",
@@ -178,6 +185,12 @@ export class OrcaRouterClient implements ModelGateway {
       output: parsed.data,
       usage,
     });
+    // 予約を実費（または推定）で精算する。予約のまま残さない（RFC-004 §7）。
+    await this.options.budget.settle({
+      requestId,
+      actualMicroUsd: usage.costMicroUsd,
+      costKind: usage.costKind,
+    });
 
     return { output: parsed.data, usage };
   }
@@ -186,13 +199,19 @@ export class OrcaRouterClient implements ModelGateway {
    * 課金不明の使用量を作る。費用0にも確定失敗にもしない。
    * 予約額をそのまま残す（RFC-004 §7「課金不明はUNKNOWN_CHARGEとして予約を残す」）。
    */
-  private unknownCharge(
+  private async unknownCharge(
     requestId: string,
     request: InterpretReplyRequest,
     routingSource: (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE],
     startedAt: string,
     detail: string,
-  ): UnknownOutcomeError {
+  ): Promise<UnknownOutcomeError> {
+    // 課金不明として精算する。予約は取り消さず残す（RFC-004 §7）。
+    await this.options.budget.settle({
+      requestId,
+      actualMicroUsd: this.options.estimatedMicroUsdPerCall,
+      costKind: COST_KIND.UNKNOWN_CHARGE,
+    });
     return new UnknownOutcomeError(
       unknownChargeUsage({
         requestId,

@@ -10,58 +10,16 @@
  * 使い方: npm run migrate
  */
 
-import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
-import path from "node:path";
 import process from "node:process";
 import { config as loadDotenv } from "dotenv";
 import { Pool } from "pg";
+import { loadMigrationFiles } from "@/adapters/db/migration-files";
 
 loadDotenv({ path: ".env.local", quiet: true });
 loadDotenv({ path: ".env", quiet: true });
 
-const MIGRATIONS_DIR = path.join(process.cwd(), "src", "adapters", "db", "migrations");
 /** 同時に走ったmigrateを直列化するためのキー。 */
 const ADVISORY_LOCK_KEY = 4_812_001;
-
-type Migration = { readonly id: string; readonly filename: string; readonly sql: string };
-
-async function loadMigrations(): Promise<Migration[]> {
-  const entries = await readdir(MIGRATIONS_DIR);
-  const files = entries.filter((name) => name.endsWith(".sql")).sort();
-  const migrations: Migration[] = [];
-  const seenPrefixes = new Map<string, string>();
-
-  for (const filename of files) {
-    const id = filename.replace(/\.sql$/, "");
-    const prefix = /^(\d{4})_/.exec(filename)?.[1];
-    if (!prefix) {
-      throw new Error(`migration名は4桁連番で始めてください: ${filename}`);
-    }
-    // 2人が並行に番号を振ると、同じ番号の別ファイルが両方適用され、
-    // 適用順が辞書順に依存する。ここで止める。
-    const duplicate = seenPrefixes.get(prefix);
-    if (duplicate) {
-      throw new Error(
-        `migration番号が重複しています: ${duplicate} と ${filename}\n` +
-          `どちらかに新しい番号を振り直してください。`,
-      );
-    }
-    seenPrefixes.set(prefix, filename);
-
-    migrations.push({
-      id,
-      filename,
-      sql: await readFile(path.join(MIGRATIONS_DIR, filename), "utf8"),
-    });
-  }
-  return migrations;
-}
-
-function hashOf(sql: string): string {
-  // 改行コード差で別内容と判定しないよう正規化する。
-  return createHash("sha256").update(sql.replace(/\r\n/g, "\n")).digest("hex");
-}
 
 async function main(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
@@ -92,7 +50,7 @@ async function main(): Promise<void> {
         )
       `);
 
-      const migrations = await loadMigrations();
+      const migrations = await loadMigrationFiles();
       const { rows } = await client.query<{ id: string; checksum: string }>(
         `select id, checksum from schema_migrations`,
       );
@@ -127,7 +85,7 @@ async function main(): Promise<void> {
 
       let appliedCount = 0;
       for (const migration of migrations) {
-        const checksum = hashOf(migration.sql);
+        const checksum = migration.checksum;
         const previous = applied.get(migration.id);
         if (previous !== undefined) {
           if (previous !== checksum) {

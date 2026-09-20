@@ -7,7 +7,12 @@
 
 import "server-only";
 import { getPool } from "@/adapters/db/pool";
-import { getServerEnv } from "@/config/env";
+import {
+  MIGRATION_SYNC,
+  compareMigrations,
+  loadMigrationFiles,
+} from "@/adapters/db/migration-files";
+import { serverEnvSchema } from "@/config/env-schema";
 
 export type ComponentStatus =
   | "OK"
@@ -23,6 +28,8 @@ export interface RuntimeStatus {
     readonly status: ComponentStatus;
     readonly appliedMigrations: number;
     readonly latestMigration: string | null;
+    /** 手元のmigrationファイルと適用履歴の照合結果。 */
+    readonly migrationSync?: (typeof MIGRATION_SYNC)[keyof typeof MIGRATION_SYNC];
     readonly detail?: string;
   };
   readonly worker: {
@@ -35,6 +42,8 @@ export interface RuntimeStatus {
     readonly status: ComponentStatus;
     /** 金額上限（RFC-004 §7、Q10）が設定済みか。未設定なら有料呼出しを開始しない。 */
     readonly budgetConfigured: boolean;
+    /** 設定値が契約に合わない場合。項目名だけを出し、値は出さない（ADR-008）。 */
+    readonly invalidKeys?: readonly string[];
   };
   /** 実装していないものを一覧にする。デモで完成扱いにしないため。 */
   readonly notImplemented: readonly string[];
@@ -44,11 +53,22 @@ const WORKER_STALE_MS = 30_000;
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const checkedAt = new Date().toISOString();
-  const env = safeEnv();
+  // 環境変数は項目ごとに見る。Orcaの設定が不正でも、DBの点検は独立して行う。
+  const parsed = serverEnvSchema.safeParse(process.env);
+  const env = parsed.success ? parsed.data : undefined;
+  const invalidKeys = parsed.success
+    ? []
+    : [...new Set(parsed.error.issues.map((i) => String(i.path[0])))];
 
-  const database = await checkDatabase();
+  const databaseConfigured =
+    typeof process.env.DATABASE_URL === "string" &&
+    process.env.DATABASE_URL.trim() !== "" &&
+    !invalidKeys.includes("DATABASE_URL");
+
+  const database = await checkDatabase(databaseConfigured);
   const worker = database.status === "OK" ? await checkWorker() : UNAVAILABLE_WORKER;
 
+  const orcaInvalidKeys = invalidKeys.filter((k) => k.startsWith("ORCA_"));
   const orcaConfigured = Boolean(env?.ORCA_BASE_URL && env?.ORCA_API_KEY);
   const budgetConfigured = Boolean(
     env?.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
@@ -61,10 +81,16 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     database,
     worker,
     orcaRouter: {
-      // 実呼出しを一度も行っていないため、設定があっても OK とは言わない。
-      // 実接続の成否を確認する経路ができるまで CONFIGURED_UNVERIFIED のままにする。
-      status: orcaConfigured ? "CONFIGURED_UNVERIFIED" : "UNCONFIGURED",
+      // 設定値が不正なら、未設定とも正常とも言わない。
+      status:
+        orcaInvalidKeys.length > 0
+          ? "UNAVAILABLE"
+          : orcaConfigured
+            ? // 実呼出しを一度も行っていないため、設定があっても OK とは言わない。
+              "CONFIGURED_UNVERIFIED"
+            : "UNCONFIGURED",
       budgetConfigured,
+      ...(orcaInvalidKeys.length > 0 ? { invalidKeys: orcaInvalidKeys } : {}),
     },
     notImplemented: [
       "CSV取込・正規化・安定ID（担当B）",
@@ -76,29 +102,18 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   };
 }
 
-function safeEnv(): ReturnType<typeof getServerEnv> | null {
-  try {
-    return getServerEnv();
-  } catch {
-    return null;
-  }
-}
-
-async function checkDatabase(): Promise<RuntimeStatus["database"]> {
-  if (!safeEnv()) {
-    // DATABASE_URL が無い。接続失敗ではなく未設定として区別する。
+async function checkDatabase(configured: boolean): Promise<RuntimeStatus["database"]> {
+  if (!configured) {
+    // DATABASE_URL が無い、または不正。接続失敗ではなく未設定として区別する。
     return { status: "UNCONFIGURED", appliedMigrations: 0, latestMigration: null };
   }
+
+  let applied: { id: string; checksum: string }[];
   try {
-    const { rows } = await getPool().query<{ count: string; latest: string | null }>(
-      `select count(*)::text as count, max(id) as latest from schema_migrations`,
+    const { rows } = await getPool().query<{ id: string; checksum: string }>(
+      `select id, checksum from schema_migrations order by id`,
     );
-    const row = rows[0];
-    return {
-      status: "OK",
-      appliedMigrations: Number(row?.count ?? "0"),
-      latestMigration: row?.latest ?? null,
-    };
+    applied = rows;
   } catch (error) {
     if (error instanceof Error && /schema_migrations/.test(error.message)) {
       // 接続はできるがmigration未適用。「接続できない」と表示しない。
@@ -106,6 +121,7 @@ async function checkDatabase(): Promise<RuntimeStatus["database"]> {
         status: "UNCONFIGURED",
         appliedMigrations: 0,
         latestMigration: null,
+        migrationSync: MIGRATION_SYNC.PENDING,
         detail: "migration未適用（npm run migrate）",
       };
     }
@@ -117,6 +133,42 @@ async function checkDatabase(): Promise<RuntimeStatus["database"]> {
       detail: error instanceof Error ? error.name : "unknown error",
     };
   }
+
+  // 追跡テーブルを引けたことをDB正常の証拠にしない。手元のファイルと両方向に
+  // 照合する。最初のmigrationが失敗した場合も、未適用のまま起動した場合も検出する。
+  let comparison;
+  try {
+    comparison = compareMigrations(await loadMigrationFiles(), applied);
+  } catch (error) {
+    return {
+      status: "UNAVAILABLE",
+      appliedMigrations: applied.length,
+      latestMigration: applied.at(-1)?.id ?? null,
+      detail: error instanceof Error ? error.message : "migrationファイルを読めません",
+    };
+  }
+
+  const base = {
+    appliedMigrations: applied.length,
+    latestMigration: applied.at(-1)?.id ?? null,
+    migrationSync: comparison.sync,
+  };
+
+  if (comparison.sync === MIGRATION_SYNC.DIVERGED) {
+    return {
+      ...base,
+      status: "UNAVAILABLE",
+      detail: `適用履歴とファイルが一致しません: ${comparison.diverged.join(", ")}`,
+    };
+  }
+  if (comparison.sync === MIGRATION_SYNC.PENDING) {
+    return {
+      ...base,
+      status: "UNCONFIGURED",
+      detail: `未適用のmigrationがあります（npm run migrate）: ${comparison.pending.join(", ")}`,
+    };
+  }
+  return { ...base, status: "OK" };
 }
 
 const UNAVAILABLE_WORKER: RuntimeStatus["worker"] = {

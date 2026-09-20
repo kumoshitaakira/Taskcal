@@ -48,13 +48,16 @@ const VALID_OUTPUT = {
 };
 
 function ledgerReturning(result: (typeof RESERVATION_RESULT)[keyof typeof RESERVATION_RESULT]) {
+  const settled: { requestId: string; actualMicroUsd?: number; costKind: string }[] = [];
   const ledger: BudgetLedger = {
     async tryReserve() {
       return result;
     },
-    async settle() {},
+    async settle(input) {
+      settled.push(input);
+    },
   };
-  return ledger;
+  return { ledger, settled };
 }
 
 function storeOf(stored: StoredModelCall | "NO_RESULT") {
@@ -75,17 +78,18 @@ function clientWith(
   stored: StoredModelCall | "NO_RESULT",
 ) {
   const { store, saved } = storeOf(stored);
+  const { ledger, settled } = ledgerReturning(result);
   const client = new OrcaRouterClient({
     baseUrl: "https://example.test",
     apiKey: "dummy-key",
     budget: new BudgetGuard(
       { caseSpendLimitMicroUsd: MICRO_USD_PER_USD, runSpendLimitMicroUsd: MICRO_USD_PER_USD },
-      ledgerReturning(result),
+      ledger,
     ),
     callStore: store,
     estimatedMicroUsdPerCall: 5_000,
   });
-  return { client, saved };
+  return { client, saved, settled };
 }
 
 afterEach(() => {
@@ -154,7 +158,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     );
     vi.stubGlobal("fetch", fetchSpy);
 
-    const { client, saved } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const { client, saved, settled } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
     const result = await client.interpretReply(request);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -162,6 +166,43 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     // 次の再試行が再送にならないよう、結果を保存している。
     expect(saved).toHaveLength(1);
     expect(saved[0]?.requestHash).toBe(REQUEST_HASH);
+    // 予約を予約のまま残さない（RFC-004 §7）。
+    expect(settled).toEqual([{ requestId: "req-1", actualMicroUsd: 5_000, costKind: "ESTIMATED" }]);
+  });
+
+  it("結果不明でも精算し、予約を残す（UNKNOWN_CHARGE）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+
+    const { client, settled } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    await expect(client.interpretReply(request)).rejects.toThrow();
+
+    expect(settled).toEqual([
+      { requestId: "req-1", actualMicroUsd: 5_000, costKind: "UNKNOWN_CHARGE" },
+    ]);
+  });
+
+  it("モデル出力がschemaに合わなくても精算する（課金は発生している）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ choices: [{ message: { content: '{"intent":"???"}' } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    const { client, settled } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    await expect(client.interpretReply(request)).rejects.toThrow();
+
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.costKind).toBe("ESTIMATED");
   });
 
   it("Q09: 現在の承諾と確定状態をモデルへ渡す", async () => {

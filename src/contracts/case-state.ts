@@ -144,21 +144,45 @@ export function canResumeReporting(input: {
 }
 
 /**
- * Q13/ADR-022：`PREPARING` 中に停止条件（停止・期限・上限）へ達したときの行き先。
+ * `PREPARING` を止めた理由。行き先が変わるため、まとめて扱わない。
+ */
+export const STOP_CAUSE = {
+  /** 店長が明示的に停止した。引き継ぎではなくキャンセル（RFC-011 §5）。 */
+  MANAGER_STOP: "MANAGER_STOP",
+  /** 期限に達した。 */
+  DEADLINE: "DEADLINE",
+  /** 予算・回数の上限に達した。 */
+  LIMIT: "LIMIT",
+  /** 候補が尽きた。 */
+  CANDIDATES_EXHAUSTED: "CANDIDATES_EXHAUSTED",
+} as const;
+
+export type StopCause = (typeof STOP_CAUSE)[keyof typeof STOP_CAUSE];
+
+/**
+ * Q13/ADR-022：`PREPARING` 中に停止条件へ達したときの行き先。
  *
  * 期限を検知しただけで引き継がない。並行する正式採用の結果を先に確定させる。
  * 正式採用と同じ排他規則で停止を確定させたうえで判定する（RFC-010 §4 手順5）。
+ *
+ * 未採用を確認できた場合の行き先は**停止理由で変わる**。
+ * 店長の明示的な停止は`CANCELLED`であり、`HANDED_OFF`（期限・上限等による人への
+ * 引き継ぎ）ではない。混同すると、キャンセルを運用上の引き継ぎとして誤表示する。
  */
-export function resolvePreparingStop(input: { adoptionFact: AdoptionFact }): CaseState {
+export function resolvePreparingStop(input: {
+  adoptionFact: AdoptionFact;
+  cause: StopCause;
+}): CaseState {
   switch (input.adoptionFact) {
     case ADOPTION_FACT.NOT_ADOPTED:
-      // 未採用を確認できた。安全に引き継げる。
-      return "HANDED_OFF";
+      // 未採用を確認できた。停止理由に応じた終端へ進む。
+      return input.cause === STOP_CAUSE.MANAGER_STOP ? "CANCELLED" : "HANDED_OFF";
     case ADOPTION_FACT.ADOPTED:
-      // すでに採用済み。確定事実を保持して通常の経路へ進む。
+      // すでに採用済み。停止理由によらず確定事実を保持して通常の経路へ進む。
+      // 停止が正式採用より後なら、確定済みの取消は別の変更操作（D10）。
       return "COMMITTED";
     case ADOPTION_FACT.UNKNOWN:
-      // 結果不明。引き継がず照合へ回す。
+      // 結果不明。引き継がず照合へ回す。未採用と断定しない。
       return "RECONCILE_REQUIRED";
   }
 }

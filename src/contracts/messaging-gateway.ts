@@ -10,6 +10,7 @@
  *   - receiveEvent が常に Message を返すとは仮定しない。
  */
 
+import type { OperationRef } from "./operation";
 import type { DeliveryState, OutreachMessageKind } from "./outreach-state";
 
 /** 宛先。endpointKey が指す宛先は不変にするか、使用版を固定する（RFC-011 §6）。 */
@@ -22,21 +23,41 @@ export interface ContactEndpointRef {
 }
 
 export interface SendCommand {
-  /** 送信操作ごとのキー。意味の違うメッセージを一律抑止せず、二重送信だけを防ぐ。 */
-  readonly sendKey: string;
+  /**
+   * 送信操作ごとのキーと、内容のハッシュ。
+   *
+   * `operationId` は送信操作ごとのキー。意味の違うメッセージを一律抑止せず、
+   * 二重送信だけを防ぐ。`requestHash` は宛先・種別・本文を固定した内容のハッシュで、
+   * 同じキーで内容が変わった要求を**送信前に**拒否するために要る
+   * （ADR-006 / RFC-009 D07）。
+   *
+   * hashが無いと、adapter は変更後の通知を REPLAY として握り潰すか、別内容の
+   * 外部作用を実行するかの二択になる。どちらも正しくない。
+   */
+  readonly operation: OperationRef;
   readonly to: ContactEndpointRef;
   readonly kind: OutreachMessageKind;
   readonly body: string;
 }
 
+/** `requestHash` に含める内容。ここに無いものを変えても検出できない。 */
+export interface SendPayloadForHash {
+  readonly endpointKey: string;
+  readonly endpointVersion: number;
+  readonly kind: OutreachMessageKind;
+  readonly body: string;
+}
+
 export interface SendResult {
-  readonly sendKey: string;
+  readonly operationId: string;
   readonly state: DeliveryState;
   /**
-   * 新規送信か、同じ sendKey による再生か。
+   * 新規送信か、同じ operationId・同じ内容による再生か。
    * 区別できないと、打診数・確認数・通知数の指標が水増しされる（RFC-011 §7）。
+   *
+   * `CONFLICT` は同じキーで内容が異なる要求。**送信していない。**
    */
-  readonly match: "NEW" | "REPLAY";
+  readonly match: "NEW" | "REPLAY" | "CONFLICT";
   /** 送信先が返した識別子。照会に使う。 */
   readonly providerMessageId?: string;
   readonly detail?: string;
@@ -91,9 +112,22 @@ export type EndpointCheck = (typeof ENDPOINT_CHECK)[keyof typeof ENDPOINT_CHECK]
  * 永続化と案件内順序の採番を伴うため、repository側の契約とする（下記参照）。
  */
 export interface MessagingGateway {
+  /**
+   * 送信する。
+   *
+   * 同じ `operationId` で `requestHash` が一致すれば、再送せず保存済み結果を
+   * `REPLAY` として返す。一致しなければ `CONFLICT` を返し、**送信しない**。
+   * モデル呼出し側（`src/adapters/orca`）と同じ規則。
+   */
   send(command: SendCommand): Promise<SendResult>;
-  /** 送信結果の照会。ACCEPTED は受付であり到達の保証ではない。 */
-  getSendResult(sendKey: string): Promise<SendResult | "LOOKUP_UNAVAILABLE">;
+  /**
+   * 送信結果の照会。ACCEPTED は受付であり到達の保証ではない。
+   * 接続範囲を含めて照会する（宛先を切り替えた後に別接続の結果を拾わないため）。
+   */
+  getSendResult(ref: {
+    operationId: string;
+    connectionId: string;
+  }): Promise<SendResult | "LOOKUP_UNAVAILABLE">;
   /**
    * 宛先が現在も同じ相手を指すかを検査する。MATCHES 以外は送信しない。
    * 送信直前の連絡許可は別途検査する（RFC-011 §6）。

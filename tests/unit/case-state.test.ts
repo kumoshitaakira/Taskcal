@@ -5,6 +5,7 @@ import {
   canResumeReporting,
   resolvePreparingStop,
   resolveReconcileStall,
+  STOP_CAUSE,
   TERMINAL_CASE_STATES,
   isAllowedCaseTransition,
   type CaseState,
@@ -105,14 +106,44 @@ describe("案件状態の遷移（RFC-011 §5）", () => {
   });
 
   it("Q13: 期限を検知しただけで引き継がず、採用結果を先に確定させる（A18）", () => {
+    const deadline = { cause: STOP_CAUSE.DEADLINE } as const;
     // 未採用を確認できたときだけ引き継ぐ。
-    expect(resolvePreparingStop({ adoptionFact: ADOPTION_FACT.NOT_ADOPTED })).toBe("HANDED_OFF");
+    expect(resolvePreparingStop({ adoptionFact: ADOPTION_FACT.NOT_ADOPTED, ...deadline })).toBe(
+      "HANDED_OFF",
+    );
     // すでに採用済みなら確定事実を保持する。
-    expect(resolvePreparingStop({ adoptionFact: ADOPTION_FACT.ADOPTED })).toBe("COMMITTED");
+    expect(resolvePreparingStop({ adoptionFact: ADOPTION_FACT.ADOPTED, ...deadline })).toBe(
+      "COMMITTED",
+    );
     // 結果不明なら引き継がず照合へ回す。未採用と断定しない。
-    expect(resolvePreparingStop({ adoptionFact: ADOPTION_FACT.UNKNOWN })).toBe(
+    expect(resolvePreparingStop({ adoptionFact: ADOPTION_FACT.UNKNOWN, ...deadline })).toBe(
       "RECONCILE_REQUIRED",
     );
+  });
+
+  it("店長の明示的な停止は引き継ぎではなくキャンセル（RFC-011 §5）", () => {
+    expect(
+      resolvePreparingStop({
+        adoptionFact: ADOPTION_FACT.NOT_ADOPTED,
+        cause: STOP_CAUSE.MANAGER_STOP,
+      }),
+    ).toBe("CANCELLED");
+
+    // 停止でも、すでに採用済みなら確定事実を保持する（D10）。
+    expect(
+      resolvePreparingStop({
+        adoptionFact: ADOPTION_FACT.ADOPTED,
+        cause: STOP_CAUSE.MANAGER_STOP,
+      }),
+    ).toBe("COMMITTED");
+
+    // 停止でも、結果不明なら照合へ回す。
+    expect(
+      resolvePreparingStop({
+        adoptionFact: ADOPTION_FACT.UNKNOWN,
+        cause: STOP_CAUSE.MANAGER_STOP,
+      }),
+    ).toBe("RECONCILE_REQUIRED");
   });
 
   it("終端状態から先へ進まない", () => {

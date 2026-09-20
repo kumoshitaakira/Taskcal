@@ -4,14 +4,14 @@
 
 import "server-only";
 import { Pool } from "pg";
-import { getServerEnv } from "@/config/env";
+import { getDatabaseUrl } from "@/config/env";
 
 let pool: Pool | undefined;
 
 export function getPool(): Pool {
   if (!pool) {
     pool = new Pool({
-      connectionString: getServerEnv().DATABASE_URL,
+      connectionString: getDatabaseUrl(),
       // 外部API待ちを内側に入れない設計のため、接続待ちは短くてよい。
       connectionTimeoutMillis: 5_000,
       max: 10,

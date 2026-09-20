@@ -6,9 +6,9 @@
  */
 
 import "server-only";
-import { serverEnvSchema, type ServerEnv } from "./env-schema";
+import { databaseUrlSchema, serverEnvSchema, type ServerEnv } from "./env-schema";
 
-export { serverEnvSchema };
+export { serverEnvSchema, databaseUrlSchema };
 export type { ServerEnv };
 
 let cached: ServerEnv | undefined;
@@ -23,6 +23,19 @@ export function getServerEnv(): ServerEnv {
   }
   cached = parsed.data;
   return cached;
+}
+
+/**
+ * DATABASE_URL だけを取り出す。
+ *
+ * 他の環境変数の不正で接続できなくならないよう、全体検査を経由しない。
+ */
+export function getDatabaseUrl(): string {
+  const parsed = databaseUrlSchema.safeParse(process.env.DATABASE_URL);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "DATABASE_URL が不正です。");
+  }
+  return parsed.data;
 }
 
 /** テスト用。読み込み済みの値を破棄する。 */

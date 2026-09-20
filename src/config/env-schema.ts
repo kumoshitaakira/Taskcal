@@ -44,3 +44,13 @@ export const serverEnvSchema = z.object({
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
+
+/**
+ * DATABASE_URL だけの検査。
+ *
+ * 環境変数全体の検査とは**独立**させる。Orcaの設定値が不正なだけでDBへ
+ * 接続できなくなると、`/api/health` が「DB未設定」という誤った復旧案を示す。
+ */
+export const databaseUrlSchema = z
+  .string()
+  .min(1, "DATABASE_URL が未設定です。.env.example を参照してください。");
