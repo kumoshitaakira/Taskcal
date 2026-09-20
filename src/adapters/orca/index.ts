@@ -15,11 +15,6 @@ import { UnconfiguredModelGateway } from "./unconfigured-gateway";
 
 export interface ModelGatewayDeps {
   readonly ledger: BudgetLedger;
-  /**
-   * 1呼出しの費用見積り（JPY）。単価が未確認のため呼出し側が与える。
-   * 0を渡すと予算検査が無効になるため、`BudgetGuard` が拒否する。
-   */
-  readonly estimatedJpyPerCall: number;
 }
 
 export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
@@ -28,8 +23,13 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
   if (!env.ORCA_BASE_URL || !env.ORCA_API_KEY) {
     return new UnconfiguredModelGateway();
   }
-  if (env.ORCA_BUDGET_JPY_PER_CASE === undefined || env.ORCA_BUDGET_JPY_TOTAL === undefined) {
-    // 接続できても、金額予算が無ければ有料呼出しを開始しない。
+  if (
+    env.ORCA_CASE_SPEND_LIMIT_MICRO_USD === undefined ||
+    env.ORCA_RUN_SPEND_LIMIT_MICRO_USD === undefined ||
+    env.ORCA_ESTIMATED_MICRO_USD_PER_CALL === undefined
+  ) {
+    // 接続できても、金額上限または1呼出しの見積りが無ければ有料呼出しを開始しない
+    // （RFC-004 §7）。見積り0は予算検査を無効にするため、未設定と同じ扱いにする。
     return new UnconfiguredModelGateway();
   }
 
@@ -38,13 +38,13 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
     apiKey: env.ORCA_API_KEY,
     budget: new BudgetGuard(
       {
-        perCaseJpy: env.ORCA_BUDGET_JPY_PER_CASE,
-        totalJpy: env.ORCA_BUDGET_JPY_TOTAL,
-        maxCallsPerCase: env.ORCA_MAX_CALLS_PER_CASE,
+        caseSpendLimitMicroUsd: env.ORCA_CASE_SPEND_LIMIT_MICRO_USD,
+        runSpendLimitMicroUsd: env.ORCA_RUN_SPEND_LIMIT_MICRO_USD,
+        caseCallLimit: env.ORCA_CASE_CALL_LIMIT,
       },
       deps.ledger,
     ),
-    estimatedJpyPerCall: deps.estimatedJpyPerCall,
+    estimatedMicroUsdPerCall: env.ORCA_ESTIMATED_MICRO_USD_PER_CALL,
   });
 }
 

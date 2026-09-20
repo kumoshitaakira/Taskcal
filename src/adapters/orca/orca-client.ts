@@ -10,7 +10,6 @@
  */
 
 import "server-only";
-import { randomUUID } from "node:crypto";
 import { ERROR_CODES, TaskcalError } from "@/contracts/errors";
 import {
   MODEL_OUTPUT_SCHEMA_VERSION,
@@ -19,8 +18,8 @@ import {
 } from "@/contracts/model-output";
 import type { InterpretReplyRequest, InterpretReplyResponse, ModelGateway } from "./model-gateway";
 import type { BudgetGuard } from "./budget";
-import { CALL_OUTCOME, MEASUREMENT, ROUTING_SOURCE, unknownOutcomeUsage } from "./usage";
-import type { UsageRecord } from "./usage";
+import { CALL_OUTCOME, COST_KIND, MEASUREMENT, ROUTING_SOURCE, unknownChargeUsage } from "./usage";
+import type { MicroUsd, UsageRecord } from "./usage";
 
 export interface OrcaClientOptions {
   readonly baseUrl: string;
@@ -30,8 +29,11 @@ export interface OrcaClientOptions {
   /** 1呼出しのタイムアウト。ADR-007の初期値は20秒。 */
   readonly timeoutMs?: number;
   readonly budget: BudgetGuard;
-  /** 1呼出しの費用見積り（JPY）。単価が未確認のため呼出し側が与える。 */
-  readonly estimatedJpyPerCall: number;
+  /**
+   * 1呼出しの保守的な費用見積り（USD整数micro）。
+   * 単価が未確認のため呼出し側が与える（RFC-004 §7）。
+   */
+  readonly estimatedMicroUsdPerCall: MicroUsd;
 }
 
 export class OrcaRouterClient implements ModelGateway {
@@ -46,14 +48,17 @@ export class OrcaRouterClient implements ModelGateway {
       throw new TaskcalError(ERROR_CODES.NOT_CONFIGURED, "OrcaRouterの接続情報が未設定です。");
     }
 
-    const callId = randomUUID();
+    // 呼出し元が永続化したIDをそのまま使う。ここで採番しない（ADR-006）。
+    // adapter側で採番すると、再試行のたびに新しい予約と新しい有料呼出しが起きる。
+    const requestId = request.requestId;
     const routingSource = this.options.model ? ROUTING_SOURCE.APPLICATION : ROUTING_SOURCE.ROUTER;
 
-    // 呼出し前に予約する。予算未設定ならここで止まる（ADR-007）。
+    // 呼出し前に予約する。予算未設定ならここで止まる（RFC-004 §7）。
+    // 同じ requestId で予約済みなら新しい予約を作らない（再試行で二重課金しない）。
     await this.options.budget.reserve({
       caseId: request.caseId,
-      callId,
-      estimatedJpy: this.options.estimatedJpyPerCall,
+      requestId,
+      estimatedMicroUsd: this.options.estimatedMicroUsdPerCall,
     });
 
     const startedAt = new Date().toISOString();
@@ -75,8 +80,8 @@ export class OrcaRouterClient implements ModelGateway {
     } catch (error) {
       // タイムアウト・接続断は「結果不明」。課金の有無も不明であり、費用0にしない。
       clearTimeout(timer);
-      throw this.unknownOutcome(
-        callId,
+      throw this.unknownCharge(
+        requestId,
         request,
         routingSource,
         startedAt,
@@ -89,8 +94,8 @@ export class OrcaRouterClient implements ModelGateway {
       clearTimeout(timer);
       // HTTPエラーでも課金の有無は応答から分からない。使用量を捨てず UNKNOWN として残す。
       // 応答本文はログ・UIへ出さない。
-      throw this.unknownOutcome(
-        callId,
+      throw this.unknownCharge(
+        requestId,
         request,
         routingSource,
         startedAt,
@@ -103,8 +108,8 @@ export class OrcaRouterClient implements ModelGateway {
       // 本文の読み取りも同じタイムアウトの対象にする（ADR-007：20秒／呼出し）。
       payload = await response.json();
     } catch (error) {
-      throw this.unknownOutcome(
-        callId,
+      throw this.unknownCharge(
+        requestId,
         request,
         routingSource,
         startedAt,
@@ -116,7 +121,7 @@ export class OrcaRouterClient implements ModelGateway {
 
     const finishedAt = new Date().toISOString();
     const usage = this.extractUsage({
-      callId,
+      requestId,
       caseId: request.caseId,
       payload,
       routingSource,
@@ -138,22 +143,26 @@ export class OrcaRouterClient implements ModelGateway {
     return { output: parsed.data, usage };
   }
 
-  /** 結果不明の使用量を作る。費用0にも確定失敗にもしない（AGENTS.md）。 */
-  private unknownOutcome(
-    callId: string,
+  /**
+   * 課金不明の使用量を作る。費用0にも確定失敗にもしない。
+   * 予約額をそのまま残す（RFC-004 §7「課金不明はUNKNOWN_CHARGEとして予約を残す」）。
+   */
+  private unknownCharge(
+    requestId: string,
     request: InterpretReplyRequest,
     routingSource: (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE],
     startedAt: string,
     detail: string,
   ): UnknownOutcomeError {
     return new UnknownOutcomeError(
-      unknownOutcomeUsage({
-        callId,
+      unknownChargeUsage({
+        requestId,
         caseId: request.caseId,
         requestedModel: this.options.model,
         promptVersion: request.promptVersion,
-        schemaVersion: MODEL_OUTPUT_SCHEMA_VERSION,
+        rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
         routingSource,
+        reservedMicroUsd: this.options.estimatedMicroUsdPerCall,
         startedAt,
         finishedAt: new Date().toISOString(),
       }),
@@ -205,7 +214,7 @@ export class OrcaRouterClient implements ModelGateway {
   }
 
   private extractUsage(input: {
-    callId: string;
+    requestId: string;
     caseId: string;
     payload: unknown;
     routingSource: (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE];
@@ -214,32 +223,34 @@ export class OrcaRouterClient implements ModelGateway {
     finishedAt: string;
   }): UsageRecord {
     const record = (input.payload ?? {}) as Record<string, unknown>;
-    const actualModel = typeof record.model === "string" ? record.model : undefined;
+    const resolvedModel = typeof record.model === "string" ? record.model : undefined;
     const usage = (record.usage ?? {}) as Record<string, unknown>;
     const inputTokens = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
     const outputTokens =
       typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined;
 
     return {
-      callId: input.callId,
+      requestId: input.requestId,
       caseId: input.caseId,
       outcome: CALL_OUTCOME.SUCCEEDED,
       requestedModel: this.options.model,
-      actualModel,
+      resolvedModel,
       // 実使用モデルが取得できなければ UNKNOWN。要求モデルで代用しない。
-      modelMeasurement: actualModel ? MEASUREMENT.MEASURED : MEASUREMENT.UNKNOWN,
+      // モデルが返したモデル名をそのまま証拠にしない（RFC-004 §8）。
+      modelMeasurement: resolvedModel ? MEASUREMENT.MEASURED : MEASUREMENT.UNKNOWN,
       routingSource: input.routingSource,
       promptVersion: input.promptVersion,
-      schemaVersion: MODEL_OUTPUT_SCHEMA_VERSION,
+      rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
       inputTokens,
       outputTokens,
       tokenMeasurement:
         inputTokens !== undefined && outputTokens !== undefined
           ? MEASUREMENT.MEASURED
           : MEASUREMENT.UNKNOWN,
-      // 単価が未確認のため費用は算出しない。0を入れない。
-      costJpy: undefined,
-      costMeasurement: MEASUREMENT.UNKNOWN,
+      // 単価が未確認のため実費を算出できない。予約額を推定値として残し、0にしない。
+      costMicroUsd: this.options.estimatedMicroUsdPerCall,
+      costKind: COST_KIND.ESTIMATED,
+      latencyMs: Date.parse(input.finishedAt) - Date.parse(input.startedAt),
       startedAt: input.startedAt,
       finishedAt: input.finishedAt,
     };

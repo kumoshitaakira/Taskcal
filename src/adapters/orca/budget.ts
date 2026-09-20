@@ -1,50 +1,67 @@
 /**
  * 呼出し前の費用・回数予約。
  *
- * 出典：ADR-007、RFC-011 §7、RFC-009 D12。未決：**Q10**（上限値は未確定）。
+ * 出典：RFC-004 §7、ADR-007、RFC-011 §7、RFC-009 D12。未決：**Q10**（上限値）。
  *
- * 規則：
- *   - 金額予算が未設定なら有料呼出しを開始しない。
- *   - 呼出し前に予約し、成否不明でも予約を戻さない（0円として扱わないため）。
- *   - 上限に達したら新規実行を止め、事実を保持して引き継ぐ。
- *   - **検査と予約を1つの取引で行う。** 同時返信で複数の推論が同時に起きるため、
- *     読んでから書くまでの間に別の呼出しが通ると上限を超える（RFC-011 §7）。
- *   - Router内部の複数呼出しが見えない経路では、アプリ予約だけで硬い上限を
- *     保証できない。その限界を表示する（ADR-007）。
+ * 規則（RFC-004 §7）：
+ *   - 設定は `case_call_limit` / `case_spend_limit` / `run_spend_limit` の3つ。
+ *   - 金額は**USDの整数micro単位**。円換算は表示時のみ。
+ *   - 未設定なら有料呼出しを開始しない。
+ *   - 呼出し前に、保守的な費用を予約する。並行呼出しは**予約残額込みで**検査する。
+ *   - 実際のusage・費用を取得したら精算する。失敗・タイムアウトでも0円と扱わない。
+ *     課金不明は UNKNOWN_CHARGE として予約を残す。
+ *   - 検査と予約を1つの取引で行う。読んでから書くまでの間に別の呼出しが通ると
+ *     上限を超える（RFC-011 §7）。
+ *   - Router内部の呼出し数・課金を確認できない構成では、アプリの予約だけで
+ *     厳密な金額上限を保証しない。その限界を表示する（RFC-004 §7）。
  */
 
 import { ERROR_CODES, TaskcalError } from "@/contracts/errors";
+import { isValidMicroUsd, type CostKind, type MicroUsd } from "./usage";
 
 /**
- * 1案件あたりの呼出し回数の既定値。
+ * 1案件あたりの呼出し回数の既定値（RFC-004 §7 の `case_call_limit`）。
  *
  * ADR-007の初期値10call／案件を、Q10確定までのMVP既定値として使う。
  * Q10が未決であることは「上限なし」ではない。採用済みのプロダクト判断ではなく、
  * 実装上の仮定（docs/OPEN-QUESTIONS.md）。
  */
-export const DEFAULT_MAX_CALLS_PER_CASE = 10;
+export const DEFAULT_CASE_CALL_LIMIT = 10;
 
 export interface BudgetLimits {
-  /** 1案件あたりの金額上限（JPY）。未設定なら undefined。 */
-  readonly perCaseJpy?: number;
-  /** 全体の金額上限（JPY）。 */
-  readonly totalJpy?: number;
-  /** 1案件あたりの呼出し回数上限。schema修復・再試行も総回数に含む（ADR-007）。 */
-  readonly maxCallsPerCase?: number;
+  /** `case_call_limit`：1案件あたりの呼出し回数。schema修復・再試行も含む。 */
+  readonly caseCallLimit?: number;
+  /** `case_spend_limit`：1案件あたりの金額（USD整数micro）。 */
+  readonly caseSpendLimitMicroUsd?: MicroUsd;
+  /** `run_spend_limit`：実行全体の金額（USD整数micro）。 */
+  readonly runSpendLimitMicroUsd?: MicroUsd;
+}
+
+/** 未設定検査を通した後の上限。すべて値が入っている。 */
+export interface RequiredBudgetLimits {
+  readonly caseCallLimit: number;
+  readonly caseSpendLimitMicroUsd: MicroUsd;
+  readonly runSpendLimitMicroUsd: MicroUsd;
 }
 
 export interface Reservation {
   readonly caseId: string;
-  readonly callId: string;
-  /** 見積り費用（JPY）。0や負の値は受け付けない。 */
-  readonly estimatedJpy: number;
+  /** RFC-004 §8 の `request_id`。呼出し元が永続化した安定ID。再試行で変えない。 */
+  readonly requestId: string;
+  /**
+   * 保守的な見積り（USD整数micro）。入力長・出力上限・候補モデル単価から決める。
+   * 0以下は受け付けない。
+   */
+  readonly estimatedMicroUsd: MicroUsd;
 }
 
 export const RESERVATION_RESULT = {
   RESERVED: "RESERVED",
+  /** 同じ requestId で予約済み。再試行では新しい予約を作らない。 */
+  ALREADY_RESERVED: "ALREADY_RESERVED",
   EXCEEDED_CALLS: "EXCEEDED_CALLS",
-  EXCEEDED_CASE_JPY: "EXCEEDED_CASE_JPY",
-  EXCEEDED_TOTAL_JPY: "EXCEEDED_TOTAL_JPY",
+  EXCEEDED_CASE_SPEND: "EXCEEDED_CASE_SPEND",
+  EXCEEDED_RUN_SPEND: "EXCEEDED_RUN_SPEND",
 } as const;
 
 export type ReservationResult = (typeof RESERVATION_RESULT)[keyof typeof RESERVATION_RESULT];
@@ -55,16 +72,21 @@ export type ReservationResult = (typeof RESERVATION_RESULT)[keyof typeof RESERVA
  * **判定と加算を1つのメソッドにまとめている。** 読みと書きを別メソッドにすると、
  * 実装側でも原子化できず、同時返信時にN本が同時に上限検査を通過する。
  * DB実装では1つのSQL文または1トランザクションで行う。
+ *
+ * 予約は `requestId` で冪等にする。worker再起動やlease失効で同じイベントを
+ * 再処理したとき、二重に予約して二重に課金しないため（ADR-006 / AGENTS.md）。
  */
 export interface BudgetLedger {
   tryReserve(reservation: Reservation, limits: RequiredBudgetLimits): Promise<ReservationResult>;
-}
-
-/** 未設定検査を通した後の上限。すべて値が入っている。 */
-export interface RequiredBudgetLimits {
-  readonly perCaseJpy: number;
-  readonly totalJpy: number;
-  readonly maxCallsPerCase: number;
+  /**
+   * 実測費用で精算する（RFC-004 §7）。
+   * `costKind` が UNKNOWN_CHARGE のときは予約額を残す。取り消さない。
+   */
+  settle(input: {
+    requestId: string;
+    actualMicroUsd?: MicroUsd;
+    costKind: CostKind;
+  }): Promise<void>;
 }
 
 export class BudgetGuard {
@@ -76,39 +98,59 @@ export class BudgetGuard {
   /**
    * 呼出し前に検査して予約する。通らなければ例外で止める。
    * 「上限が少なくても無視して続行」しない（RFC-011 §7）。
+   *
+   * 同じ requestId で予約済みなら何もしない（再試行で二重に課金しない）。
    */
   async reserve(reservation: Reservation): Promise<void> {
-    if (!(reservation.estimatedJpy > 0)) {
+    if (!isValidMicroUsd(reservation.estimatedMicroUsd) || reservation.estimatedMicroUsd <= 0) {
       // 見積り0を許すと、金額上限の比較が常に成立して予算が無効になる。
       // 単価が未確認でも、0ではなく保守的な見積りを渡すこと。
       throw new TaskcalError(
         ERROR_CODES.BUDGET_NOT_CONFIGURED,
-        "1呼出しの費用見積りが未設定（0以下）のため、呼出しを開始しません。",
+        "1呼出しの費用見積り（USD整数micro）が未設定または不正なため、呼出しを開始しません。",
       );
     }
 
-    const { perCaseJpy, totalJpy } = this.limits;
-    if (perCaseJpy === undefined || totalJpy === undefined) {
+    const limits = this.requireLimits();
+    const result = await this.ledger.tryReserve(reservation, limits);
+
+    if (result === RESERVATION_RESULT.RESERVED || result === RESERVATION_RESULT.ALREADY_RESERVED) {
+      return;
+    }
+    throw new TaskcalError(ERROR_CODES.BUDGET_EXCEEDED, EXCEEDED_MESSAGE[result]);
+  }
+
+  /** 実測費用または課金不明の確定。呼出し後に必ず呼ぶ。 */
+  async settle(input: {
+    requestId: string;
+    actualMicroUsd?: MicroUsd;
+    costKind: CostKind;
+  }): Promise<void> {
+    await this.ledger.settle(input);
+  }
+
+  private requireLimits(): RequiredBudgetLimits {
+    const { caseSpendLimitMicroUsd, runSpendLimitMicroUsd } = this.limits;
+    if (caseSpendLimitMicroUsd === undefined || runSpendLimitMicroUsd === undefined) {
       throw new TaskcalError(
         ERROR_CODES.BUDGET_NOT_CONFIGURED,
-        "金額予算が未設定のため、有料の推論呼出しを開始しません（ADR-007 / Q10）。",
+        "case_spend_limit / run_spend_limit が未設定のため、有料の推論呼出しを開始しません" +
+          "（RFC-004 §7 / ADR-007 / Q10）。",
       );
     }
-
-    const result = await this.ledger.tryReserve(reservation, {
-      perCaseJpy,
-      totalJpy,
-      maxCallsPerCase: this.limits.maxCallsPerCase ?? DEFAULT_MAX_CALLS_PER_CASE,
-    });
-
-    if (result !== RESERVATION_RESULT.RESERVED) {
-      throw new TaskcalError(ERROR_CODES.BUDGET_EXCEEDED, EXCEEDED_MESSAGE[result]);
-    }
+    return {
+      caseSpendLimitMicroUsd,
+      runSpendLimitMicroUsd,
+      caseCallLimit: this.limits.caseCallLimit ?? DEFAULT_CASE_CALL_LIMIT,
+    };
   }
 }
 
-const EXCEEDED_MESSAGE: Record<Exclude<ReservationResult, "RESERVED">, string> = {
-  EXCEEDED_CALLS: "案件の呼出し回数上限に達しました。",
-  EXCEEDED_CASE_JPY: "案件の金額上限に達しました。",
-  EXCEEDED_TOTAL_JPY: "全体の金額上限に達しました。",
+const EXCEEDED_MESSAGE: Record<
+  Exclude<ReservationResult, "RESERVED" | "ALREADY_RESERVED">,
+  string
+> = {
+  EXCEEDED_CALLS: "案件の呼出し回数上限（case_call_limit）に達しました。",
+  EXCEEDED_CASE_SPEND: "案件の金額上限（case_spend_limit）に達しました。",
+  EXCEEDED_RUN_SPEND: "実行全体の金額上限（run_spend_limit）に達しました。",
 };

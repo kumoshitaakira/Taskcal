@@ -33,7 +33,7 @@ export interface RuntimeStatus {
   };
   readonly orcaRouter: {
     readonly status: ComponentStatus;
-    /** 金額予算（Q10）が設定済みか。未設定なら有料呼出しを開始しない。 */
+    /** 金額上限（RFC-004 §7、Q10）が設定済みか。未設定なら有料呼出しを開始しない。 */
     readonly budgetConfigured: boolean;
   };
   /** 実装していないものを一覧にする。デモで完成扱いにしないため。 */
@@ -51,7 +51,9 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
 
   const orcaConfigured = Boolean(env?.ORCA_BASE_URL && env?.ORCA_API_KEY);
   const budgetConfigured = Boolean(
-    env?.ORCA_BUDGET_JPY_PER_CASE !== undefined && env?.ORCA_BUDGET_JPY_TOTAL !== undefined,
+    env?.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
+    env?.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&
+    env?.ORCA_ESTIMATED_MICRO_USD_PER_CALL !== undefined,
   );
 
   return {

@@ -52,12 +52,22 @@ Bの実機でNode版が異なる場合は、`.nvmrc`（20.19.5）に合わせる
 いない**。予算予約（`src/adapters/orca/budget.ts`）と使用量記録（`usage.ts`）の枠だけを
 実装し、次の条件のいずれかで呼出しを開始しない（ADR-007）。
 
-- 接続情報または金額予算が未設定：`createModelGateway`が`UnconfiguredModelGateway`を返す。
-- 1呼出しの費用見積りが0以下：見積り0を許すと金額上限の比較が常に成立して予算が無効になる。
+- 接続情報、`case_spend_limit`、`run_spend_limit`、1呼出しの見積りのいずれかが未設定：
+  `createModelGateway`が`UnconfiguredModelGateway`を返す。
+- 1呼出しの費用見積りが0以下または整数でない：見積り0を許すと金額上限の比較が常に成立し、
+  予算が無効になる。
 
-回数上限が未設定の場合は、ADR-007の初期値**10call／案件**をMVP既定値として適用する
-（`DEFAULT_MAX_CALLS_PER_CASE`）。Q10が未決であることは「上限なし」を意味しない。
+金額は**USDの整数micro単位**で扱う（RFC-004 §7の採用済み決定）。円換算は表示時に換算日時と
+レートを添えて行い、内部では円を持たない。Q10で未決なのは**上限値**であって、通貨・表現では
+ない。設定名もRFC-004 §7の`case_call_limit`／`case_spend_limit`／`run_spend_limit`に合わせる。
+
+`case_call_limit`が未設定の場合は、ADR-007の初期値**10call／案件**をMVP既定値として適用する
+（`DEFAULT_CASE_CALL_LIMIT`）。Q10が未決であることは「上限なし」を意味しない。
 これは実装上の仮定であり、採用済みのプロダクト判断ではない。
+
+予約は`request_id`で冪等にする。worker再起動やlease失効で同じ受信イベントを再処理しても、
+二重に予約・課金しない。`request_id`は呼出し元が永続化し、adapter側で採番しない
+（ADR-006）。課金不明は`UNKNOWN_CHARGE`として予約を残す（RFC-004 §7）。
 
 ### migrationの番号割当（実装上の運用）
 

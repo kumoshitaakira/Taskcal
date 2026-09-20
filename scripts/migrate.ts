@@ -98,6 +98,20 @@ async function main(): Promise<void> {
       );
       const applied = new Map(rows.map((r) => [r.id, r.checksum]));
 
+      // 適用済みのmigrationファイルが削除・改名されると、schema_migrations に行が
+      // 残ったままファイルが無くなる。新しいDBではその変更が適用されず、既存DBには
+      // 残るため、環境ごとにschemaが食い違う。checksum検査はファイルがある側しか
+      // 見ないので、逆向きにも照合する。
+      const knownIds = new Set(migrations.map((m) => m.id));
+      const missing = [...applied.keys()].filter((id) => !knownIds.has(id)).sort();
+      if (missing.length > 0) {
+        throw new Error(
+          `適用済みmigrationのファイルが見つかりません: ${missing.join(", ")}\n` +
+            `削除・改名した場合は元に戻してください。取り消したい変更は、` +
+            `新しい番号のmigrationで打ち消します。`,
+        );
+      }
+
       // 適用済みより小さい番号のmigrationが後から足されると、既存環境と新規環境で
       // 適用順が食い違い、schemaが環境ごとに変わる。
       const maxApplied = [...applied.keys()].sort().at(-1);

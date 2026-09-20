@@ -9,6 +9,17 @@ import type { ModelReplyOutput } from "@/contracts/model-output";
 import type { UsageRecord } from "./usage";
 
 export interface InterpretReplyRequest {
+  /**
+   * RFC-004 §8 の `request_id`。**呼出し元が永続化した安定ID。**
+   *
+   * worker再起動やlease失効で同じ受信イベントを再処理したとき、同じIDを渡す。
+   * adapter側で採番すると、再試行のたびに新しい予約と新しい有料呼出しが起き、
+   * 元の呼出しと照合できない（ADR-006 / AGENTS.md「結果不明の外部作用を
+   * 照会・照合なしに再実行しない」）。
+   */
+  readonly requestId: string;
+  /** 要求内容のハッシュ。同じIDで内容が異なる要求を検出する（D07）。 */
+  readonly requestHash: string;
   readonly caseId: string;
   /** 案件内の匿名ID。実名・連絡先を渡さない（ADR-008）。 */
   readonly anonymousStaffRef: string;
