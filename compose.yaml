@@ -1,0 +1,30 @@
+# Taskcal 開発用DB（ADR-003 / RFC-003 §1）
+# 2人のPCで同じ版・同じ初期状態を再現するためにDocker Composeを正とする。
+# ここの資格情報はローカル開発専用であり、秘密値ではない。
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: taskcal-db
+    environment:
+      POSTGRES_USER: taskcal
+      POSTGRES_PASSWORD: taskcal_dev
+      POSTGRES_DB: taskcal_dev
+      # 比較・整列を環境差で変えないため、初期化オプションを固定する。
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      # ホスト側PostgreSQLと衝突させないため5433を使う。
+      # 開発用の資格情報を平文で置いているため、ループバックに限定する。
+      # 0.0.0.0 で公開すると同一LANの他端末から接続できてしまう。
+      - "127.0.0.1:5433:5432"
+    volumes:
+      # postgres:18 系は /var/lib/postgresql を単一マウント点にする（image の推奨構成）。
+      - taskcal-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskcal -d taskcal_dev"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  taskcal-db-data:
