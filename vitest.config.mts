@@ -12,6 +12,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.join(import.meta.dirname, "src"),
+      // server-only は「サーバー側だけで使う」ことをビルドへ伝えるための印で、
+      // importするとNext以外の環境では例外になる。テストでは無効化する。
+      // 印そのものの検査は `npm run build`（クライアント境界の検査）が行う。
+      "server-only": path.join(import.meta.dirname, "tests", "stubs", "server-only.ts"),
     },
   },
 });

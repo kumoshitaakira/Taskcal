@@ -51,7 +51,11 @@ export async function withTransaction<T>(
       await client.query(`set transaction isolation level ${options.isolationLevel}`);
     }
     if (options.lockTimeoutMs !== undefined) {
-      await client.query("set local lock_timeout = $1", [`${options.lockTimeoutMs}ms`]);
+      // SET はパラメーターを取れない（`set lock_timeout = $1` は 42601）。
+      // 文字列連結でSQLを組まないため、set_config(..., is_local => true) を使う。
+      await client.query("select set_config('lock_timeout', $1, true)", [
+        `${options.lockTimeoutMs}ms`,
+      ]);
     }
     const result = await currentTx.run(client, () => fn(client));
     await client.query("COMMIT");

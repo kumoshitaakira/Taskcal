@@ -88,3 +88,13 @@ export type ModelReplyOutput = z.infer<typeof modelReplyOutputSchema>;
 
 /** schema版。プロンプトと併せて版管理する（RFC-004 §末尾）。 */
 export const MODEL_OUTPUT_SCHEMA_VERSION = "reply-interpretation/0.1.0-draft";
+
+/**
+ * モデルへ渡すJSON Schema。
+ *
+ * 検査に使う zod schema から生成する。プロンプト側に手書きの形式説明を置くと、
+ * 検査側と食い違ったときにモデルが拒否され続け、費用だけを消費する。
+ */
+export function modelReplyOutputJsonSchema(): Record<string, unknown> {
+  return z.toJSONSchema(modelReplyOutputSchema) as Record<string, unknown>;
+}
