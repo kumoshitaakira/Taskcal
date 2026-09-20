@@ -1,5 +1,15 @@
 # 設計記録の変更履歴
 
+## 2026-09-21：実装開始（Day 1・担当A）
+
+- Q08（言語・DB）を確定：TypeScript／Next.js App Router／PostgreSQL 18／番号付きSQL migration／Vitest。ADR-003は差し替えず確定注記を追記した。
+- 実装上の仮定として、Node.js 20.19.5（ADR-003の初期案は24系）、TypeScript 5.9系、Vitest 4系を使う。採用済みのプロダクト判断ではない。
+- 開発環境を追加：Docker ComposeのPostgreSQL、migration runner、web／workerの2プロセス、`/api/health`、店長・スタッフの画面枠。
+- `src/contracts/` に案件状態・相手別対話状態・ScheduleUpdate・操作ID・Gateway契約・モデル出力schemaの**下書き**を追加。Bの確認後に固定する。
+- OrcaRouterのAPIキー・接続先・単価は未取得のため**実呼出しを行っていない**。予算予約と使用量記録の枠だけを実装し、金額予算が未設定なら呼出しを止める（Q10は未決のまま）。
+- RFC-012 §4のDay 1共同ゲートのうち、CSV表示・安定IDの維持・実推論1回の記録は**未達**。
+- 設計文書（`docs/`）の本文は変更していない。ADR-003への注記追記とQ08の確定記録のみ。
+
 ## 2026-09-20：2人開発の実装分担を更新
 
 - ADR-021を追加し、Aを技術責任者・統合担当、Bをドメイン・データ・検証担当とする分担をユーザー承認済みとして記録。
