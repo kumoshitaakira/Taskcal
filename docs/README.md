@@ -84,6 +84,7 @@ RFCは要件・設計・実装と検証の契約、ADRは選択理由・代替�
 
 ## その他の成果物
 
+- [AI開発ガイド](AI-DEVELOPMENT.md)
 - [企画比較資料・スライド](planning/README.md)
 - [レビュー単体ファイル](reviews/README.md)
 - [移管前の配布ZIP](archive/README.md)
