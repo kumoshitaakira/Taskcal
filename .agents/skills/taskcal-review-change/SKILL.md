@@ -1,33 +1,33 @@
 ---
 name: taskcal-review-change
-description: Review a Taskcal diff, design or implementation for domain correctness, consent safety, CSV adoption, idempotency, recovery, security, cost and four-day MVP fit. Use for PR, code, schema, API, UI and architecture reviews; do not edit unless the user separately requests fixes.
+description: Taskcalの差分・設計・実装を、ドメイン整合性、承諾、CSV正式採用、冪等性、復旧、セキュリティ、費用、4日間MVPの観点でレビューする。PR、コード、schema、API、UI、アーキテクチャのレビューに使用する。修正を別途依頼されない限り編集しない。
 ---
 
-# Review a Taskcal change
+# Taskcalの変更をレビューする
 
-## Scope the review
+## レビュー範囲を決める
 
-Inspect the requested diff or files and read only the governing sections of RFC-009 through RFC-012, related ADRs and `docs/OPEN-QUESTIONS.md`. Treat reference proposals and older RFCs as history when current records supersede them.
+指定された差分またはファイルを確認し、RFC-009〜RFC-012、関係するADR、`docs/OPEN-QUESTIONS.md`の必要な箇所だけを読む。現在の記録に置換された旧RFCや参考資料は履歴として扱う。
 
-Trace each state-changing path from authenticated input through validation, persistence, external effect, result lookup, read-back and user-visible status.
+状態変更の経路を、認証済み入力、検査、永続化、外部作用、結果照会、読戻し、ユーザー表示まで追跡する。
 
-## Review priorities
+## 優先して確認する事項
 
-Look first for defects that could:
+次の問題を最優先で探す。
 
-1. assign work without current, unambiguous consent;
-2. expose or mix staff, store or tenant data;
-3. adopt two plans, part of a plan or a stale plan;
-4. lose or duplicate work after timeout, retry, restart or concurrency;
-5. mistake prepared/exported CSV, unknown results or failed notifications for completion;
-6. allow stale AI output to override a later reply, correction, withdrawal or stop;
-7. bypass OrcaRouter, budget limits, model-output validation or server-side secret handling;
-8. expand beyond the four-day MVP without protecting the core demonstration.
+1. 最新かつ一意な本人承諾なしで勤務を割り当てる
+2. スタッフ・店舗・tenantの情報を漏えいまたは混同する
+3. 2つの計画、一部だけの計画、古い計画を正式採用する
+4. timeout、再試行、再起動、並行処理によって処理を喪失または重複する
+5. 準備済み・出力済みCSV、結果不明、通知失敗を完了として扱う
+6. 古いAI結果が新しい返信、訂正、撤回、停止を上書きする
+7. OrcaRouter、予算制限、モデル出力検査、サーバー側の秘密情報管理を迂回する
+8. 中心デモを守らずに4日間MVPの範囲を拡大する
 
-Then check API/schema compatibility, interval and timezone behavior, stable IDs, monthly-input completeness, accessibility of status UI, observability and test coverage. Map material gaps to D01-D12 or A01-A18 where possible.
+続いてAPI/schema互換性、時間区間とtimezone、安定ID、月次入力の完全性、状態UIのアクセシビリティ、可観測性、テスト範囲を確認する。可能な場合はD01〜D12またはA01〜A18へ紐づける。
 
-## Report findings
+## 指摘を報告する
 
-Lead with findings ordered by severity. For each finding, give the exact file and line, the triggering scenario, the resulting behavior and the smallest safe correction. Separate confirmed defects from questions and assumptions.
+重要度順に指摘を示す。各指摘に正確なファイルと行、発生条件、結果、最小で安全な修正案を含める。確認済みの欠陥と、質問・仮定を分ける。
 
-If no actionable finding remains, say so and list residual risks, open decisions and checks that were not run. Do not infer that a design or test passed merely because a document describes it.
+対応可能な指摘がない場合はその旨を明記し、残るリスク、未決事項、未実行の確認を示す。文書に書かれているだけで、設計やテストが合格したと推測しない。

@@ -1,40 +1,40 @@
 ---
 name: taskcal-record-decision
-description: Create or update Taskcal ADRs and RFCs when a durable product, domain, architecture, security, cost or delivery decision changes. Use when resolving open questions or changing guarantees; do not use for routine code edits that preserve the current contract.
+description: Taskcalのプロダクト、ドメイン、アーキテクチャ、セキュリティ、費用、開発に関する永続的な判断をADRとRFCへ記録する。未決事項の確定や保証の変更に使用する。既存契約を変えない通常のコード修正には使用しない。
 ---
 
-# Record a Taskcal decision
+# Taskcalの設計判断を記録する
 
-## Classify the change
+## 変更を分類する
 
-Use an ADR for the choice, context, alternatives, consequences and replacement relationship. Use an RFC for the resulting behavior, data, interfaces, flows, failure handling and acceptance criteria. A meaningful decision often needs both.
+選択、背景、代替案、帰結、置換関係にはADRを使う。結果として生じる振る舞い、データ、interface、フロー、障害処理、受入条件にはRFCを使う。重要な判断では両方が必要になる場合がある。
 
-Distinguish these states explicitly:
+次の状態を明確に区別する。
 
-- user-confirmed decision;
-- current documented design;
-- proposed review improvement;
-- reversible implementation assumption;
-- unresolved question;
-- implemented and verified behavior.
+- ユーザー確認済みの決定
+- 現在の文書上の設計
+- レビューによる改善提案
+- 変更可能な実装上の仮定
+- 未決事項
+- 実装・検証済みの振る舞い
 
-Do not turn one state into another without evidence. Preserve superseded documents as history and add links to the replacing record.
+根拠なしに状態を変更しない。置換された文書も履歴として残し、新しい記録との関係をリンクする。
 
-## Update the record set
+## 記録一式を更新する
 
-When a decision affects an entry in `docs/OPEN-QUESTIONS.md`:
+`docs/OPEN-QUESTIONS.md`の項目に関係する判断では、次を行う。
 
-1. Record the selected value, date, reason and decision owner.
-2. Add or update the ADR that explains the choice.
-3. Update the governing RFC contract and affected Mermaid diagrams.
-4. Fix the expected results in RFC-012 and any fixtures or tests.
-5. Add the change and replacement relationship to `docs/CHANGELOG.md`.
-6. Refresh `docs/README.md` and the root `README.md` only when navigation, setup or current status changed.
+1. 選択した値、日付、理由、判断主体を記録する。
+2. 選択理由を説明するADRを追加または更新する。
+3. 対象RFCの契約と関係するMermaid図を更新する。
+4. RFC-012の期待結果と、fixture・テストを更新する。
+5. `docs/CHANGELOG.md`へ変更と置換関係を追加する。
+6. ナビゲーション、起動方法、現在状態が変わった場合だけ`docs/README.md`とルートREADMEを更新する。
 
-Keep terms consistent with RFC-009 through RFC-011. In particular, do not collapse `AbsenceCase`, `Outreach`, `ScheduleUpdate` and message delivery into one state, and do not call a prepared or exported CSV formally adopted.
+用語をRFC-009〜RFC-011と一致させる。特に`AbsenceCase`、`Outreach`、`ScheduleUpdate`、メッセージ配送の状態を一つにまとめない。準備済みまたは出力済みのCSVを正式採用済みと呼ばない。
 
-## Make the record reviewable
+## レビュー可能な記録にする
 
-State what changed, what stayed unresolved, what evidence exists and what must be tested. Use concrete examples for consent, concurrency or recovery rules. Avoid claims of implementation, production readiness, cost savings or legal compliance unless the cited evidence supports them.
+変更した内容、未決のまま残す内容、存在する証拠、必要な検証を記載する。承諾、並行処理、復旧の規則は具体例で示す。根拠がない実装完了、本番対応、費用削減、法令適合を主張しない。
 
-Check links, numbering, status labels and old/new precedence before finishing.
+完了前にリンク、番号、状態表示、新旧文書の優先順位を確認する。

@@ -1,11 +1,11 @@
-# Claude Code project instructions
+# Claude Code プロジェクト指示
 
 @AGENTS.md
 
-## Claude Code compatibility
+## Claude Code互換設定
 
-`AGENTS.md` is the canonical project guidance. Do not maintain a separate copy of its rules here.
+`AGENTS.md`をプロジェクト指示の正本とする。このファイルに同じ規則を複製しない。
 
-Project skills are authored once under `.agents/skills/` and exposed to Claude Code through `.claude/skills/` symlinks. Invoke them as `/taskcal-implement`, `/taskcal-record-decision` and `/taskcal-review-change` when useful.
+プロジェクトスキルの正本は `.agents/skills/` に置き、`.claude/skills/` のシンボリックリンクからClaude Codeへ公開する。必要に応じて `/taskcal-implement`、`/taskcal-record-decision`、`/taskcal-review-change` を呼び出す。
 
-Project subagents live under `.claude/agents/`. The main conversation owns all edits and integration. Use the Taskcal reviewers for bounded, read-only review work and return their findings to the main conversation.
+プロジェクトのサブエージェントは `.claude/agents/` に置く。主会話が全ての編集と統合を担当する。Taskcalのレビューエージェントには限定した読み取り専用レビューだけを委譲し、指摘を主会話へ返す。
