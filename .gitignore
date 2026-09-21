@@ -46,3 +46,5 @@ next-env.d.ts
 
 # CSV作業用領域（正式採用前の成果物。勤務照会へ混ぜない: RFC-010 §4）
 /var/
+# Claude Code のプレビュー設定。ツール固有の設定で、チームの成果物ではない。
+.claude/launch.json
