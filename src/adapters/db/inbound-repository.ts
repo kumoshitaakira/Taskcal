@@ -136,7 +136,9 @@ export function createPgInboundEventRepository(): InboundEventRepository {
           event.channelVerified,
           resolved.senderIdentity,
           messageId,
-          event.inReplyToMessageId ?? null,
+          // 保存する値は小文字へ揃える。UUIDは大文字でも同じ値だが、text列に
+          // 書き方の違いのまま残すと、後から突き合わせるときに揺れる。
+          event.inReplyToMessageId?.toLowerCase() ?? null,
         ],
       );
 

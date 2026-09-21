@@ -324,6 +324,32 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
     expect(stored.rows[0]?.n).toBe(1);
   });
 
+  it("大文字のUUIDでも受信を保存し、小文字へ揃えて残す", async () => {
+    // 入口の z.uuid() は大文字・混在を受理する。DBの検査が小文字しか通さないと、
+    // 書き方の違いだけで受信そのものがロールバックされる。
+    const upper = randomUUID().toUpperCase();
+    const result = await receive(event({ inReplyToMessageId: upper }));
+    expect(result).toMatchObject({ ok: true, senderIdentity: "UNMATCHED" });
+
+    const stored = await withTransaction((tx) =>
+      tx.query<{ in_reply_to_message_ref: string }>(
+        `select in_reply_to_message_ref from inbound_event
+          where connection_id = $1 and in_reply_to_message_ref is not null`,
+        [CONNECTION],
+      ),
+    );
+    expect(stored.rows[0]?.in_reply_to_message_ref).toBe(upper.toLowerCase());
+  });
+
+  it("大文字のUUIDで返信対象を指しても、同じ打診として照合できる", async () => {
+    const result = await receive(event({ inReplyToMessageId: offerMessageId.toUpperCase() }));
+    expect(result).toMatchObject({
+      ok: true,
+      senderIdentity: "VERIFIED_OUTREACH_TARGET",
+      caseId,
+    });
+  });
+
   it("返信対象を持たない受信は、本人と確認できないものとして扱う", async () => {
     const result = await receive(event({ inReplyToMessageId: undefined }));
     expect(result).toMatchObject({ ok: true, senderIdentity: "UNMATCHED" });
