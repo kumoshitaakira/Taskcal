@@ -74,6 +74,7 @@ npm run build          # 本番ビルド
 
 ```bash
 npm run format         # prettier --write
+npm run check:docs     # 環境変数名・既定値とドキュメントの整合
 npm run test:unit      # 単体のみ（DB不要）
 npm run test:integration  # 統合のみ（起動中のDBが必要）
 npm run check:orca     # OrcaRouterの設定点検（実呼出しはしない）
@@ -81,6 +82,27 @@ npm run check:orca     # OrcaRouterの設定点検（実呼出しはしない）
 
 `DATABASE_URL` が未設定の場合、統合テストは実行されずskipされます。skipは合格では
 ありません。skip時は理由が標準エラーへ出ます。
+
+### CI
+
+`.github/workflows/ci.yml` がPRと `main` へのpushで次を実行します。ローカルで実行する
+コマンドと同じものを、同じ順で走らせます。
+
+| 検査 | 目的 |
+|---|---|
+| 環境ファイルが追跡されていないか | `.env.example` 以外の `.env*` をコミットさせない（ADR-008） |
+| `format:check` / `lint` / `typecheck` | 記載済みコマンドの実行（AGENTS.md） |
+| `check:docs` | 環境変数名・既定値とドキュメントの食い違いを止める |
+| `migrate` と再実行 | 実PostgreSQL 18へ適用し、再実行で `applied=0` になること |
+| `test` | 単体＋統合（統合はCIの実DBに対して実行される） |
+| `build` | 本番ビルド |
+| `check:orca` | 設定の点検のみ。**実呼出しはしない** |
+
+CIはOrcaRouterのキーを持ちません。実モデル評価はCIの対象外で、手元で予算を設定して
+実行します（ADR-007）。
+
+Codexによるレビューは、リポジトリに入れたGitHub Appが担当します。workflowでは動かして
+いません。PRへ `@codex review` とコメントすると再実行できます。
 
 ### ディレクトリと担当
 

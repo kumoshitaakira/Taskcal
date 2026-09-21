@@ -12,6 +12,7 @@
     "worker": "tsx src/worker/main.ts",
     "migrate": "tsx scripts/migrate.ts",
     "check:orca": "tsx scripts/check-orca.ts",
+    "check:docs": "tsx scripts/check-docs.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint",
     "format": "prettier --write .",

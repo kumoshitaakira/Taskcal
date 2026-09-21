@@ -1,0 +1,99 @@
+name: CI
+
+# PRと main への push で走らせる。Codexのレビューは別途GitHub Appが担当する。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 同じブランチへ連続でpushしたとき、古い実行を止める。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: 検査とテスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      db:
+        # ローカルの compose.yaml と同じ版を使う（ADR-003：PostgreSQL 18系）。
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: taskcal
+          POSTGRES_PASSWORD: taskcal_dev
+          POSTGRES_DB: taskcal_dev
+        options: >-
+          --health-cmd "pg_isready -U taskcal -d taskcal_dev"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+        ports:
+          # ローカルと同じ 5433 に合わせる。
+          - 5433:5432
+
+    env:
+      # CI専用のローカルDB。秘密値ではない。
+      DATABASE_URL: postgres://taskcal:taskcal_dev@127.0.0.1:5433/taskcal_dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 版は .nvmrc を正とする。2人のPCとCIで同じ版を使う。
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 依存を入れる
+        run: npm ci
+
+      # --- 秘密情報の混入を止める（AGENTS.md：秘密情報・ローカル環境ファイルをコミットしない） ---
+      - name: 環境ファイルが追跡されていないか
+        run: |
+          tracked=$(git ls-files | grep -E '^\.env' | grep -v '^\.env\.example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::環境ファイルが追跡されています: $tracked"
+            exit 1
+          fi
+
+      # --- 速い検査から順に ---
+      - name: 整形
+        run: npm run format:check
+
+      - name: lint
+        run: npm run lint
+
+      - name: 型検査
+        run: npm run typecheck
+
+      - name: コードと文書の整合
+        run: npm run check:docs
+
+      # --- 実DBを使う検査 ---
+      - name: migrationを適用する
+        run: npm run migrate
+
+      - name: 冪等性（migrateの再実行で増えない）
+        run: |
+          out=$(npm run migrate --silent)
+          echo "$out"
+          echo "$out" | grep -q 'applied=0' || {
+            echo "::error::再実行で applied=0 になりません"
+            exit 1
+          }
+
+      - name: テスト
+        run: npm test
+
+      - name: ビルド
+        run: npm run build
+
+      # --- 実接続していないことを明示する ---
+      - name: OrcaRouterの設定点検（実呼出しなし）
+        run: npm run check:orca
