@@ -67,7 +67,8 @@ const VALID_OUTPUT = {
     intent: "ACCEPT",
     offeredRanges: [{ startAt: "2026-09-21T19:00:00+09:00", endAt: "2026-09-21T22:00:00+09:00" }],
     unresolvedConditions: [],
-    evidenceSpans: [],
+    // 意思を読み取った根拠。空のままだと採用されない（RFC-004 §3）。
+    evidenceSpans: [{ start: 0, end: 3 }],
   },
   proposedAction: "RECORD_COMMITMENT_CANDIDATE",
 };
@@ -141,6 +142,37 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(result.output.interpretation.intent).toBe("ACCEPT");
+  });
+
+  it("入力上限を下げても、保存済み結果は再生できる", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { store } = storeOf({
+      requestId: "req-1",
+      requestHash: REQUEST_HASH,
+      outcome: "VALID",
+      output: VALID_OUTPUT,
+      usage: usageOf(),
+      maskedReplyText: "19時からなら行けます",
+    });
+    const { ledger } = ledgerReturning(RESERVATION_RESULT.RESERVED);
+    const client = new OrcaRouterClient({
+      baseUrl: "https://example.test",
+      apiKey: "dummy-key",
+      budget: new BudgetGuard(
+        { caseSpendLimitMicroUsd: MICRO_USD_PER_USD, runSpendLimitMicroUsd: MICRO_USD_PER_USD },
+        ledger,
+      ),
+      callStore: store,
+      // 保存した時点より厳しい上限。再生はこれに依存してはいけない。
+      bounds: { maxReplyChars: 1, maxOutputTokens: 512 },
+      prices: { inputMicroUsdPerKiloToken: 3_000, outputMicroUsdPerKiloToken: 15_000 },
+    });
+
+    const result = await client.interpretReply(request);
+    expect(result.output.interpretation.intent).toBe("ACCEPT");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("予約済みだが結果が不明なら、再送せず照合へ回す", async () => {

@@ -46,6 +46,17 @@ const optionalHttpUrl = z
       ctx.addIssue({ code: "custom", message: "http または https のURLを指定してください。" });
       return z.NEVER;
     }
+    if (parsed.username !== "" || parsed.password !== "") {
+      // Node の fetch は資格情報を含むURLを、ネットワークへ出す前に TypeError で
+      // 拒否する。ここで止めないと、予約だけして一度も送っていない呼出しを
+      // UNKNOWN_CHARGE として照合待ちにしてしまう（RFC-004 §7）。
+      // 資格情報をURLへ書くこと自体もログ・エラーへ漏れる経路になる（ADR-008）。
+      ctx.addIssue({
+        code: "custom",
+        message: "URLに資格情報を含めないでください。認証は ORCA_API_KEY で行います。",
+      });
+      return z.NEVER;
+    }
     return value;
   });
 

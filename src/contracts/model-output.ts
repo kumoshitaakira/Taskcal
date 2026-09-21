@@ -150,6 +150,17 @@ export function validateEvidenceSpans(
       return { ok: false, reason: "根拠の位置が本文の範囲を超えています。" };
     }
   }
+
+  // 意味を読み取ったと言う以上、本文のどこを根拠にしたかを示させる。
+  // 空配列や長さ0のspanを通すと、根拠の無い ACCEPT が採用解釈として保存され、
+  // 後から「なぜその条件だと判断したか」を説明できない（RFC-004 §3、D03）。
+  // UNCLEAR は「読み取れなかった」という結論なので、根拠を要求しない。
+  if (interpretation.intent !== "UNCLEAR") {
+    const hasNonEmpty = interpretation.evidenceSpans.some((span) => span.end > span.start);
+    if (!hasNonEmpty) {
+      return { ok: false, reason: "意思を読み取った根拠が示されていません。" };
+    }
+  }
   return { ok: true };
 }
 

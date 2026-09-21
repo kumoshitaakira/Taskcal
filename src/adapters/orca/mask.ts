@@ -55,18 +55,29 @@ const SIMPLE_RULES: {
     pattern: /https?:\/\/[^\s、。，．；：！？「」『』（）〔〕【】〈〉《》…・\u3000]+/g,
     token: "[URL]",
   },
-  // LINE ID 等のアカウント表記。前置きのある形と、独立した @英数字 の両方。
-  {
-    kind: "accountId",
-    pattern: /(?:LINE|line|ライン)\s*(?:ID|id|ＩＤ)?\s*[:：]?\s*[A-Za-z0-9._-]{2,}/g,
-    token: "[アカウントID]",
-  },
-  {
-    kind: "accountId",
-    pattern: /(?<![A-Za-z0-9._-])@[A-Za-z0-9._-]{2,}/g,
-    token: "[アカウントID]",
-  },
 ];
+
+/**
+ * LINE ID 等のアカウント表記。
+ *
+ * **ID部分に英字が1文字も無ければマスクしない。** `ID` も区切りも省略できる形に
+ * すると、`LINE 18-22で勤務できます` の `18-22` や `line 18時から` の `18` を
+ * IDとして飲み込み、勤務条件が消える。実際にそうなっていた。
+ *
+ * 英字を要求する結果、数字だけのIDは取りこぼす。このモジュールは完全な匿名化を
+ * 保証しない（RFC-004 §5）一方、勤務条件を壊すと解釈そのものが成立しないため、
+ * 取りこぼす側へ倒す。
+ */
+const ACCOUNT_ID_PATTERN =
+  /(?:LINE|line|ライン)\s*(?:の)?\s*(?:ID|id|ＩＤ|アイディー)?\s*(?:は)?\s*[:：]?\s*([A-Za-z0-9._-]{2,})/g;
+
+/** 独立した @英数字。同じく英字を要求する。 */
+const MENTION_PATTERN = /(?<![A-Za-z0-9._-])@([A-Za-z0-9._-]{2,})/g;
+
+/** 英字を含むか。含まなければアカウントIDとして扱わない。 */
+function looksLikeAccountId(value: string): boolean {
+  return /[A-Za-z]/.test(value);
+}
 
 /**
  * 電話番号。
@@ -128,6 +139,13 @@ export function maskContactInfo(text: string): MaskResult {
       const tail = match.slice(trimmed.length);
       summary[rule.kind] += 1;
       return rule.token + tail;
+    });
+  }
+  for (const pattern of [ACCOUNT_ID_PATTERN, MENTION_PATTERN]) {
+    result = result.replace(pattern, (match, id: string) => {
+      if (!looksLikeAccountId(id)) return match;
+      summary.accountId += 1;
+      return "[アカウントID]";
     });
   }
   result = result.replace(PHONE_PATTERN, () => {

@@ -98,6 +98,24 @@ describe("根拠の位置の検査（RFC-004 §3）", () => {
     expect(r.ok).toBe(true);
   });
 
+  it("意思を読み取ったのに根拠が無ければ拒否する（D03 / RFC-004 §3）", () => {
+    for (const spans of [[], [{ start: 0, end: 0 }]]) {
+      const r = validateEvidenceSpans(
+        { ...base, intent: "ACCEPT", evidenceSpans: spans },
+        "0123456789",
+      );
+      expect(r.ok, JSON.stringify(spans)).toBe(false);
+    }
+  });
+
+  it("UNCLEAR は「読み取れなかった」結論なので根拠を求めない", () => {
+    const r = validateEvidenceSpans(
+      { ...base, intent: "UNCLEAR", evidenceSpans: [] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(true);
+  });
+
   it("逆転した範囲はschemaで弾く", () => {
     const parsed = modelReplyOutputSchema.safeParse({
       interpretation: { ...base, evidenceSpans: [{ start: 5, end: 2 }] },

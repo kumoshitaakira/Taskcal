@@ -64,17 +64,24 @@ export class OrcaRouterClient implements ModelGateway {
   }
 
   async interpretReply(request: InterpretReplyRequest): Promise<InterpretReplyResponse> {
-    if (!this.isConfigured()) {
-      throw new TaskcalError(ERROR_CODES.NOT_CONFIGURED, "OrcaRouterの接続情報が未設定です。");
-    }
-
     // 呼出し元が永続化したIDをそのまま使う。ここで採番しない（ADR-006）。
     // adapter側で採番すると、再試行のたびに新しい予約と新しい有料呼出しが起きる。
     const requestId = request.requestId;
     const routingSource = this.options.model ? ROUTING_SOURCE.APPLICATION : ROUTING_SOURCE.ROUTER;
 
-    // 入力長を先に縛る。上限を超える入力は、見積りを超える費用になり得るため
-    // 呼出さない（RFC-004 §7）。
+    // **保存済み結果の照会を最初に行う。** 再生は外部呼出しを要さないため、
+    // 接続設定・入力上限・単価・予算のどれにも依存させない。ここより後に置くと、
+    // 例えば ORCA_MAX_REPLY_CHARS を下げただけで、確定済みの解釈が設定を戻すまで
+    // 復旧できなくなる（AGENTS.md：保存済み結果を返すか照合する）。
+    const replayed = await this.replayStored(request);
+    if (replayed) return replayed;
+
+    if (!this.isConfigured()) {
+      throw new TaskcalError(ERROR_CODES.NOT_CONFIGURED, "OrcaRouterの接続情報が未設定です。");
+    }
+
+    // ここから先は新規の呼出し。入力長を縛る。上限を超える入力は、見積りを
+    // 超える費用になり得るため呼出さない（RFC-004 §7）。
     assertWithinInputBounds(request.replyText.length, this.options.bounds);
 
     // 送信前に連絡先等をマスクする（RFC-004 §5）。決定的に動くので、同じ要求から
@@ -101,58 +108,15 @@ export class OrcaRouterClient implements ModelGateway {
     });
 
     if (reservation === RESERVATION_RESULT.ALREADY_RESERVED) {
-      // この要求はすでに実行を試みている。予約が一重でも、ここで fetch すると
-      // 有料推論が二重に走る。保存済み結果を返すか、照合へ回す
+      // 予約はあるのに結果が無い（冒頭の照会で見つからなかった）。呼出し中に
+      // 落ちた可能性がある。ここで fetch すると有料推論が二重に走るため、
+      // 結果を照合するまで再送しない
       // （AGENTS.md「結果照会または照合なしに、結果不明の外部作用を再実行しない」）。
-      const stored = await this.options.callStore.findResult(requestId);
-      if (stored === "NO_RESULT") {
-        throw new TaskcalError(
-          ERROR_CODES.RECONCILE_REQUIRED,
-          "同じ request_id の呼出しが実行済みですが、結果が確認できません。" +
-            "結果を照合するまで再送しません。",
-        );
-      }
-      if (stored.requestHash !== request.requestHash) {
-        throw new TaskcalError(
-          ERROR_CODES.OPERATION_CONFLICT,
-          "同じ request_id で内容が異なる要求です。拒否します。",
-        );
-      }
-      // 結果を保存した直後、精算の前に停止していた可能性がある。予約が残り続けると
-      // 後続の呼出しを誤って上限で止めるため、保存済みusageで精算をやり直す。
-      // settle は requestId で冪等（BudgetLedger の契約）。
-      await this.options.budget.settle({
-        requestId,
-        actualMicroUsd: stored.usage.costMicroUsd,
-        costKind: stored.usage.costKind,
-      });
-
-      if (stored.outcome === "SCHEMA_INVALID") {
-        // 判明している検証失敗。結果不明ではないので、同じ失敗を決定的に返す。
-        throw new InvalidModelOutputError(
-          stored.usage,
-          "モデル出力がschemaに一致しません（保存済みの結果）。承諾として扱いません。",
-        );
-      }
-      if (stored.outcome === "UNKNOWN") {
-        // 課金不明のまま終わった呼出し。再送せず、同じ結果不明を返す。
-        throw new UnknownOutcomeError(
-          stored.usage,
-          "前回の呼出しの結果が不明のままです（保存済みの記録）。再送しません。",
-        );
-      }
-      const replayed = modelReplyOutputSchema.safeParse(stored.output);
-      if (!replayed.success) {
-        throw new TaskcalError(
-          ERROR_CODES.RECONCILE_REQUIRED,
-          "保存済みの呼出し結果がschemaに一致しません。再送せず人の対応へ回します。",
-        );
-      }
-      return {
-        output: replayed.data,
-        usage: stored.usage,
-        maskedReplyText: stored.maskedReplyText,
-      };
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        "同じ request_id の呼出しが実行済みですが、結果が確認できません。" +
+          "結果を照合するまで再送しません。",
+      );
     }
 
     const startedAt = new Date().toISOString();
@@ -312,6 +276,61 @@ export class OrcaRouterClient implements ModelGateway {
     });
 
     return { output: parsed.data, usage: validUsage, maskedReplyText: masked.text };
+  }
+
+  /**
+   * 保存済み結果があれば、それを返す（再生）。
+   *
+   * 外部呼出しを行わないため、接続設定・入力上限・単価・予算に依存させない。
+   * 保存直後・精算前に停止していた可能性があるので、保存済みusageで精算を
+   * やり直してから返す（`settle` は requestId で冪等）。
+   */
+  private async replayStored(
+    request: InterpretReplyRequest,
+  ): Promise<InterpretReplyResponse | undefined> {
+    const stored = await this.options.callStore.findResult(request.requestId);
+    if (stored === "NO_RESULT") return undefined;
+
+    if (stored.requestHash !== request.requestHash) {
+      throw new TaskcalError(
+        ERROR_CODES.OPERATION_CONFLICT,
+        "同じ request_id で内容が異なる要求です。拒否します。",
+      );
+    }
+
+    await this.options.budget.settle({
+      requestId: request.requestId,
+      actualMicroUsd: stored.usage.costMicroUsd,
+      costKind: stored.usage.costKind,
+    });
+
+    if (stored.outcome === "SCHEMA_INVALID") {
+      // 判明している検証失敗。結果不明ではないので、同じ失敗を決定的に返す。
+      throw new InvalidModelOutputError(
+        stored.usage,
+        "モデル出力がschemaに一致しません（保存済みの結果）。承諾として扱いません。",
+      );
+    }
+    if (stored.outcome === "UNKNOWN") {
+      // 課金不明のまま終わった呼出し。再送せず、同じ結果不明を返す。
+      throw new UnknownOutcomeError(
+        stored.usage,
+        "前回の呼出しの結果が不明のままです（保存済みの記録）。再送しません。",
+      );
+    }
+
+    const parsed = modelReplyOutputSchema.safeParse(stored.output);
+    if (!parsed.success) {
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        "保存済みの呼出し結果がschemaに一致しません。再送せず人の対応へ回します。",
+      );
+    }
+    return {
+      output: parsed.data,
+      usage: stored.usage,
+      maskedReplyText: stored.maskedReplyText,
+    };
   }
 
   /**

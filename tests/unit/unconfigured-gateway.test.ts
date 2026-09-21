@@ -51,7 +51,8 @@ const VALID_OUTPUT = {
     intent: "ACCEPT",
     offeredRanges: [{ startAt: "2026-09-21T19:00:00+09:00", endAt: "2026-09-21T22:00:00+09:00" }],
     unresolvedConditions: [],
-    evidenceSpans: [],
+    // 意思を読み取った根拠。空のままだと採用されない（RFC-004 §3）。
+    evidenceSpans: [{ start: 0, end: 3 }],
   },
   proposedAction: "RECORD_COMMITMENT_CANDIDATE",
 };

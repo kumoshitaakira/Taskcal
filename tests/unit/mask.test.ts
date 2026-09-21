@@ -42,11 +42,25 @@ describe("送信前のマスク（RFC-004 §5 / ADR-008）", () => {
     }
   });
 
+  it("LINE表記が勤務条件を飲み込まない（ID部分に英字を要求する）", () => {
+    for (const text of [
+      "LINE 18-22で勤務できます",
+      "line 18時から",
+      "LINE 0900-1730 で",
+      "ラインで連絡します",
+      "LINEします",
+    ]) {
+      expect(maskContactInfo(text).text, text).toBe(text);
+    }
+  });
+
   it("表記ゆれのある連絡先も拾う", () => {
     expect(maskContactInfo("03-1234-5678").text).toBe("[電話番号]");
     expect(maskContactInfo("taro＠example.com").text).toBe("[メールアドレス]");
     expect(maskContactInfo("ライン taro_123").text).toBe("[アカウントID]");
     expect(maskContactInfo("@taro_123").text).toBe("[アカウントID]");
+    expect(maskContactInfo("LINEのIDはtaro_123です").text).toBe("[アカウントID]です");
+    expect(maskContactInfo("line id taro.123").text).toBe("[アカウントID]");
   });
 
   it("勤務条件の時刻・日付を壊さない（過剰なマスクは解釈を壊す）", () => {
@@ -90,6 +104,7 @@ describe("送信前のマスク（RFC-004 §5 / ADR-008）", () => {
       ["taro@example.com。18時から", "。18時から"],
       ["LINE ID: taro_123。19時から", "。19時から"],
       ["@taro_123 19時から行けます", "19時から行けます"],
+      ["LINE ID taro_123 19時から", "19時から"],
     ];
     for (const [input, mustKeep] of cases) {
       expect(maskContactInfo(input).text, input).toContain(mustKeep);
