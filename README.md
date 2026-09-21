@@ -85,69 +85,24 @@ npm run check:orca     # OrcaRouterの設定点検（実呼出しはしない）
 
 ### CI
 
-`.github/workflows/ci.yml` がPRと `main` へのpushで次を実行します。ローカルで実行する
-コマンドと同じものを、同じ順で走らせます。
+`.github/workflows/ci.yml` がPRと `main` へのpushで走ります。**3つのジョブを並行**で
+回します。ローカルで実行するコマンドと同じものを使います。
 
-| 検査 | 目的 |
-|---|---|
-| 環境ファイルが追跡されていないか | `.env.example` 以外の `.env*` をコミットさせない（ADR-008） |
-| `format:check` / `lint` / `typecheck` | 記載済みコマンドの実行（AGENTS.md） |
-| `check:docs` | 環境変数名・既定値とドキュメントの食い違いを止める |
-| `migrate` と再実行 | 実PostgreSQL 18へ適用し、再実行で `applied=0` になること |
-| `test` | 単体＋統合（統合はCIの実DBに対して実行される） |
-| `build` | 本番ビルド |
-| `check:orca` | 設定の点検のみ。**実呼出しはしない** |
+| ジョブ | 内容 | DB |
+|---|---|---|
+| 静的検査 | 環境ファイルの混入検査、`format:check`、`lint`、`typecheck`、`check:docs`、`check:orca` | 不要 |
+| ビルド | `build` | 不要 |
+| テストとmigration | `migrate` と再実行（`applied=0`）、統合テストがskipされていないこと、`test` | PostgreSQL 18 |
 
-CIはOrcaRouterのキーを持ちません。実モデル評価はCIの対象外で、手元で予算を設定して
-実行します（ADR-007）。
+分割している理由は2つです。PostgreSQLの起動に17秒かかりますが、必要なのはテストだけで、
+静的検査とビルドを待たせません。また直列だと、整形で落ちた時点でテストが走らず、修正して
+push し直してから初めてテストの失敗に気付くことになります。並行なら全ての失敗が一度に出ます。
+
+CIはOrcaRouterのキーを持ちません。`check:orca` は設定の点検のみで、**実呼出しはしません**。
+実モデル評価はCIの対象外で、手元で予算を設定して実行します（ADR-007）。
 
 Codexによるレビューは、リポジトリに入れたGitHub Appが担当します。workflowでは動かして
 いません。PRへ `@codex review` とコメントすると再実行できます。
-
-### ディレクトリと担当
-
-RFC-012 §3.1の所有範囲に対応します。所有は排他的な編集権ではなく、設計・完了・説明の責任です。
-
-```text
-src/app/                  A  店長画面・スタッフ画面・Route Handlers
-src/application/          A  use case、状態遷移、正式採用の進行制御
-src/agent/                A  返信解釈、action選択、費用記録
-src/adapters/orca/        A  OrcaRouter、予算予約、使用量記録
-src/adapters/db/          A  接続、transaction、migration runner
-src/adapters/db/migrations/ B作成・A承認（0001はworker基盤でA、業務は0002以降）
-src/adapters/channel/     A  模擬メッセージ受信箱
-src/worker/               A  常駐worker
-src/contracts/            共同 API・イベント・モデル出力のschema
-src/config/               A  環境変数の検査
-src/domain/interval/      B  時間区間、重複、充足計算（README のみ。実装は未着手）
-src/domain/selection/     B  候補評価、勤務計画の選定（同上）
-src/adapters/csv/         B  CSV正規化、安定ID、読戻し（同上）
-fixtures/ tests/          B中心 デモデータ、単体・統合・受入試験
-```
-
-`src/contracts/` はDay 1に共同で固定します。以後の変更は、変更者でない側の確認を必須とします（ADR-021）。
-現時点では**下書き**で、承諾（Commitment）・選定結果・永続化した解釈の型がまだありません。
-不足の一覧は [`src/contracts/README.md`](src/contracts/README.md) にあります。
-
-### 現時点で動かないもの
-
-RFC-012 §4のDay 1共同ゲートのうち、以下は**未達**です。デモや進捗報告で完成扱いにしないでください。
-
-- CSVを読んで画面表示、並べ替え後も同じ勤務IDを維持（担当BのU02が未着手）
-- 実推論1回のモデル・費用状態の保存（OrcaRouterの接続情報と金額予算が未取得。Q10未決）
-
-`/api/health` の `orcaRouter` は、接続設定があっても `CONFIGURED_UNVERIFIED`（設定あり・
-未検証）までしか返しません。実接続を一度も確認していないため「正常」とは表示しません。
-
-費用の上限は `case_spend_limit` / `run_spend_limit` / `case_call_limit` の3つで、金額は
-**USDの整数micro単位**です（RFC-004 §7）。円換算は表示時のみ行います。`case_call_limit` の
-既定は24（Q10の暫定値。検証前の上限候補であり、十分な回数だという保証ではありません）。
-金額の上限値は単価判明後に設定します。
-
-RFC-012 §2 が求める Q01〜Q07・Q09 の確定会議は未実施です。担当BのU02・U03は
-Q02〜Q06の確定に依存するため、Day 2に入る前に固定してください。
-
-`src/adapters/orca/orca-client.ts` の要求・応答形式はOpenAI互換を仮定した下書きで、実接続で検証していません。
 
 ## 文書の扱い
 

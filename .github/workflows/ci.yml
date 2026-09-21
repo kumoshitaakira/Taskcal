@@ -14,9 +14,64 @@ concurrency:
 permissions:
   contents: read
 
+# 3つのジョブを並行で回す。理由は2つ。
+#   - PostgreSQLの起動に17秒かかるが、必要なのは test だけ。静的検査とビルドに
+#     待たせない。
+#   - 直列だと、整形で落ちた時点でテストが走らない。修正してpushし直してから
+#     テストの失敗に気付くことになる。並行なら全ての失敗が一度に出る。
 jobs:
-  verify:
-    name: 検査とテスト
+  static:
+    name: 静的検査
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 版は .nvmrc を正とする。2人のPCとCIで同じ版を使う。
+          node-version-file: .nvmrc
+          cache: npm
+      - name: 依存を入れる
+        run: npm ci
+
+      # 秘密情報の混入を止める（AGENTS.md：秘密情報・ローカル環境ファイルをコミットしない）
+      - name: 環境ファイルが追跡されていないか
+        run: |
+          tracked=$(git ls-files | grep -E '^\.env' | grep -v '^\.env\.example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::環境ファイルが追跡されています: $tracked"
+            exit 1
+          fi
+
+      # 個別のstepに分ける。どの検査で落ちたかをPRの画面で分かるようにするため。
+      - name: 整形
+        run: npm run format:check
+      - name: lint
+        run: npm run lint
+      - name: 型検査
+        run: npm run typecheck
+      - name: コードと文書の整合
+        run: npm run check:docs
+      - name: OrcaRouterの設定点検（実呼出しなし）
+        run: npm run check:orca
+
+  build:
+    name: ビルド
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: 依存を入れる
+        run: npm ci
+      - name: ビルド
+        run: npm run build
+
+  test:
+    name: テストとmigration
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -43,39 +98,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          # 版は .nvmrc を正とする。2人のPCとCIで同じ版を使う。
           node-version-file: .nvmrc
           cache: npm
-
       - name: 依存を入れる
         run: npm ci
 
-      # --- 秘密情報の混入を止める（AGENTS.md：秘密情報・ローカル環境ファイルをコミットしない） ---
-      - name: 環境ファイルが追跡されていないか
-        run: |
-          tracked=$(git ls-files | grep -E '^\.env' | grep -v '^\.env\.example$' || true)
-          if [ -n "$tracked" ]; then
-            echo "::error::環境ファイルが追跡されています: $tracked"
-            exit 1
-          fi
-
-      # --- 速い検査から順に ---
-      - name: 整形
-        run: npm run format:check
-
-      - name: lint
-        run: npm run lint
-
-      - name: 型検査
-        run: npm run typecheck
-
-      - name: コードと文書の整合
-        run: npm run check:docs
-
-      # --- 実DBを使う検査 ---
       - name: migrationを適用する
         run: npm run migrate
 
@@ -88,12 +117,15 @@ jobs:
             exit 1
           }
 
+      # 統合テストは DATABASE_URL が無いとskipする。CIでskipさせない。
+      - name: 統合テストが実行されたことを確かめる
+        run: |
+          out=$(npm run test:integration 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q 'skipped'; then
+            echo "::error::統合テストがskipされました。DATABASE_URL を確認してください"
+            exit 1
+          fi
+
       - name: テスト
         run: npm test
-
-      - name: ビルド
-        run: npm run build
-
-      # --- 実接続していないことを明示する ---
-      - name: OrcaRouterの設定点検（実呼出しなし）
-        run: npm run check:orca
