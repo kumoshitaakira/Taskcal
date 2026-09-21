@@ -10,11 +10,13 @@ import { randomUUID } from "node:crypto";
 import { createDefaultMessagingGateway } from "../adapters/channel";
 import { createPgAbsenceCaseRepository } from "../adapters/db/case-repository";
 import { createPgOperationResultStore } from "../adapters/db/operation-result-store";
+import { createPgInboundEventRepository } from "../adapters/db/inbound-repository";
 import { createPgOutboxRepository } from "../adapters/db/outbox-repository";
 import { createPgOutreachRepository } from "../adapters/db/outreach-repository";
 import { createPgScheduleReadRepository } from "../adapters/db/schedule-repository";
 import type { Clock, IdGenerator } from "../contracts/repository";
 import { createAbsenceCase } from "./create-absence-case";
+import { receiveInboundEvent } from "./receive-inbound-event";
 import { createRosterEligibility } from "./roster-eligibility";
 import { sendOutbox } from "./send-outbox";
 import { startOutreach } from "./start-outreach";
@@ -26,6 +28,7 @@ export function buildAppServices() {
   const cases = createPgAbsenceCaseRepository();
   const outreaches = createPgOutreachRepository();
   const outbox = createPgOutboxRepository();
+  const inbound = createPgInboundEventRepository();
   const operations = createPgOperationResultStore();
   const schedules = createPgScheduleReadRepository();
   const roster = createRosterEligibility();
@@ -35,6 +38,7 @@ export function buildAppServices() {
     cases,
     outreaches,
     outbox,
+    inbound,
     operations,
     schedules,
     messaging,
@@ -50,6 +54,7 @@ export function buildAppServices() {
       ids: idGenerator,
     }),
     sendOutbox: sendOutbox({ outbox, outreaches, messaging }),
+    receiveInboundEvent: receiveInboundEvent({ inbound, outreaches }),
   };
 }
 

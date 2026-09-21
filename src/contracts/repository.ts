@@ -176,6 +176,9 @@ export type PersistInboundResult =
       readonly linked: true;
       readonly match: "NEW" | "DUPLICATE";
       readonly stored: PersistedInboundEvent;
+      readonly inboundEventId: string;
+      /** 案件へ結び付いた受信は不変のMessageとしても残す（RFC-009 §3）。 */
+      readonly messageId: string;
     }
   | {
       readonly linked: false;
@@ -190,6 +193,9 @@ export interface InboundEventRepository {
    *
    * 重複排除キーは provider・connectionId の範囲を含める（A15）。案件へ結び付か
    * なかった受信も捨てずに保存する。本文で名乗った staffId を本人とみなさない。
+   *
+   * 案件へ結び付いた受信は、イベントと Message を同じ取引で保存する。片方だけが
+   * 残ると、解釈が参照する Message が無い受信ができる。
    */
   persist(
     tx: TxHandle,

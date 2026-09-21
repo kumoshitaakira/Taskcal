@@ -194,15 +194,42 @@ describe.skipIf(!connectionString)("schemaの不変条件（DATABASE_URL 必須�
   });
 
   it("案件へ結び付いた受信の順序は重複しない", async () => {
+    // 案件へ結び付いた受信は Message も持つ（0009 の対）。
+    const messageId = randomUUID();
+    await tx.query(
+      `insert into outreach_message (message_id, case_id, direction, body)
+       values ($1, $2, 'INBOUND', '行けます')`,
+      [messageId, caseId],
+    );
     const insert = `insert into inbound_event
         (inbound_event_id, case_id, outreach_id, received_seq, provider, connection_id,
          provider_event_id, occurred_at, received_at, from_provider, from_connection_id,
-         from_endpoint_key, from_endpoint_version, body, channel_verified, sender_identity)
+         from_endpoint_key, from_endpoint_version, body, channel_verified, sender_identity,
+         message_id)
       values ($1, $2, null, 1, 'mock', 'mock:1', $3, now(), now(), 'mock', 'mock:1',
-              'staff-a', 1, '行けます', true, 'UNMATCHED')`;
-    await tx.query(insert, [randomUUID(), caseId, `evt-${randomUUID()}`]);
-    const code = await expectRejected(tx, insert, [randomUUID(), caseId, `evt-${randomUUID()}`]);
+              'staff-a', 1, '行けます', true, 'UNMATCHED', $4)`;
+    await tx.query(insert, [randomUUID(), caseId, `evt-${randomUUID()}`, messageId]);
+    const code = await expectRejected(tx, insert, [
+      randomUUID(),
+      caseId,
+      `evt-${randomUUID()}`,
+      messageId,
+    ]);
     expect(code).toBe("23505");
+  });
+
+  it("案件へ結び付いた受信はMessageを伴わないと保存できない（0009）", async () => {
+    const code = await expectRejected(
+      tx,
+      `insert into inbound_event
+         (inbound_event_id, case_id, received_seq, provider, connection_id, provider_event_id,
+          occurred_at, received_at, from_provider, from_connection_id,
+          from_endpoint_key, from_endpoint_version, body, channel_verified, sender_identity)
+       values ($1, $2, 99, 'mock', 'mock:1', $3, now(), now(), 'mock', 'mock:1',
+               'staff-a', 1, '行けます', true, 'UNMATCHED')`,
+      [randomUUID(), caseId, `evt-${randomUUID()}`],
+    );
+    expect(code).toBe("23514");
   });
 
   it("ADR-006：同じスタッフの勤務が重なる行を拒否する", async () => {
