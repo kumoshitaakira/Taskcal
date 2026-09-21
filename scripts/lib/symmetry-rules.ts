@@ -88,6 +88,93 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     members: [{ name: "async interpretReply", file: "src/adapters/orca/orca-client.ts" }],
     mustContain: ["budget.reserve", "budget.settle"],
   },
+  {
+    label: "状態機械は遷移表と終端状態を対で持つ（ADR-017 / RFC-011 §5）",
+    members: [
+      { name: "export const ALLOWED_CASE_TRANSITIONS", file: "src/contracts/case-state.ts" },
+      {
+        name: "export const ALLOWED_OUTREACH_TRANSITIONS",
+        file: "src/contracts/outreach-state.ts",
+      },
+      {
+        name: "export const ALLOWED_SCHEDULE_UPDATE_TRANSITIONS",
+        file: "src/contracts/schedule-update.ts",
+      },
+      { name: "export const ALLOWED_COMMITMENT_TRANSITIONS", file: "src/contracts/commitment.ts" },
+    ],
+    // prettier が折り返すため、1行に収まる前提の語を使わない。
+    mustContain: ["Readonly<", "Record<"],
+  },
+  {
+    label: "各状態機械が終端状態を宣言する（RFC-011 §5 / A11）",
+    members: [
+      { name: "export const TERMINAL_CASE_STATES", file: "src/contracts/case-state.ts" },
+      { name: "export const TERMINAL_OUTREACH_STATES", file: "src/contracts/outreach-state.ts" },
+      {
+        name: "export const TERMINAL_SCHEDULE_UPDATE_STATES",
+        file: "src/contracts/schedule-update.ts",
+      },
+      {
+        name: "export const TERMINAL_COMMITMENT_STATUSES",
+        file: "src/contracts/commitment.ts",
+      },
+    ],
+    mustContain: ["readonly"],
+  },
+  {
+    label: "選定可否を status 単独で決めない（D04 / A05）",
+    members: [
+      { name: "export function isSelectableCommitment", file: "src/contracts/commitment.ts" },
+    ],
+    mustContain: ["hasUnprocessedReply", "supersededBy", "deadlineAt"],
+  },
+  {
+    label: "配送状態で打診状態を動かさない（A11 / RFC-011 §6）",
+    members: [
+      { name: "export function resolveOutreachAfterSend", file: "src/contracts/outreach-state.ts" },
+    ],
+    mustContain: ["FAILED", "UNKNOWN", "DELIVERY_NOT_SENT"],
+  },
+  {
+    label: "本人と確認できない受信で状態を動かさない（A15 / RFC-011 §6）",
+    members: [
+      {
+        name: "export function resolveOutreachAfterInbound",
+        file: "src/contracts/outreach-state.ts",
+      },
+    ],
+    mustContain: ["VERIFIED_OUTREACH_TARGET", "hasBody"],
+  },
+  {
+    label: "repository の全操作が取引ハンドルを取る（RFC-010 §4 手順6 / D06）",
+    members: [
+      { name: "export interface AbsenceCaseRepository", file: "src/contracts/repository.ts" },
+      { name: "export interface OutreachRepository", file: "src/contracts/repository.ts" },
+      { name: "export interface CommitmentRepository", file: "src/contracts/repository.ts" },
+      { name: "export interface InboundEventRepository", file: "src/contracts/repository.ts" },
+      {
+        name: "export interface ReplyInterpretationRepository",
+        file: "src/contracts/repository.ts",
+      },
+      { name: "export interface OperationResultStore", file: "src/contracts/repository.ts" },
+      { name: "export interface OutboxRepository", file: "src/contracts/repository.ts" },
+    ],
+    mustContain: ["tx: TxHandle"],
+  },
+  {
+    label: "受信の永続化と解釈が案件内の受信順を持つ（A12 / RFC-011 §4）",
+    members: [
+      { name: "export interface InboundEventRepository", file: "src/contracts/repository.ts" },
+      {
+        name: "export interface ReplyInterpretationRepository",
+        file: "src/contracts/repository.ts",
+      },
+    ],
+    // 受信側は PersistedInboundEvent（caseId と receivedSeq を必須にした型）で、
+    // 解釈側は receivedSeq を直接受け取る。表現が違うため any。
+    mode: "any",
+    mustContain: ["receivedSeq", "PersistedInboundEvent"],
+  },
 ];
 
 /**

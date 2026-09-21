@@ -2,14 +2,18 @@
 
 API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A・Bの共同所有**。
 
-現状：**Day 1の下書き**。Bの確認を経て固定する。固定後の変更は、変更者でない側の
-確認を必須とする（ADR-021）。
+現状：Day 1の下書きに、Day 2（担当A）で承諾・選定結果・打診の遷移・永続化の口を
+足したもの。Bの確認を経て固定する。固定後の変更は、変更者でない側の確認を必須と
+する（ADR-021）。
 
 出典対応：
 
 | ファイル               | 出典                                                  |
 | ---------------------- | ----------------------------------------------------- |
 | `case-state.ts`        | RFC-011 §5 の状態図、ADR-017                          |
+| `commitment.ts`        | RFC-011 §3・§4、RFC-009 D03・D04、ADR-014、Q09        |
+| `selection.ts`         | RFC-009 §3・§6、Q02、Q06                              |
+| `repository.ts`        | RFC-010 §4 手順6、RFC-011 §4、ADR-006                 |
 | `outreach-state.ts`    | RFC-011 §2、ADR-013                                   |
 | `schedule-update.ts`   | RFC-010 §6・§7、ADR-016、ADR-019                      |
 | `operation.ts`         | ADR-006、RFC-009 D07                                  |
@@ -31,6 +35,9 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 | `canResumeReporting`（case-state） | 採用済みと確認でき、かつ正式版の読戻しが一致した場合だけ通知処理へ戻す |
 | `resolvePreparingStop`（case-state） | 期限を検知しただけで引き継がない。採用結果を先に確定させる |
 | `resolveCaseReconcile`（case-state） | 未採用と**確認**できたときだけ調整中へ戻す。確認せず戻すと二重採用になる |
+| `isSelectableCommitment`（commitment） | `status === "ACTIVE"` だけで選定しない。未処理の新しい返信・置き換え・期限も見る（D04、A05） |
+| `resolveOutreachAfterSend`（outreach-state） | 配送状態を打診状態へそのまま写さない。届いたと確認できるまで送信待ちに留める（A11） |
+| `resolveOutreachAfterInbound`（outreach-state） | 本人と確認できない受信で状態を動かさない。動かさないことと受信を捨てることは別（A15） |
 
 `resolveReconcile`（ScheduleUpdate側）と `resolveCaseReconcile`（案件側）は対になる。
 同じ照合結果から両方の状態を決めること。片方だけ動かさない。
@@ -44,18 +51,27 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 （`AdoptionFact`：未採用／採用済み／成否不明）は案件状態と別に保持し、画面でも区別して
 表示する。案件状態から採用可否を推定しない。
 
-## まだ契約に無いもの（Day 2着手前に決める）
+## 取引境界は application 側が決める
 
-この下書きには、以下がまだありません。「Day 1に固定した」と読まないでください。
+`repository.ts` の全ての操作が `tx: TxHandle` を取ります。repository が自分で取引を
+開くと、正式採用の一括保存（正式版参照・内部勤務表・採用済み計画・案件の確定事実・
+操作結果・通知待ちを同じ取引で保存する）が黙って複数の取引へ割れ、一部だけが正式勤務
+として残ります（RFC-010 §4 手順6、D06）。
+
+`TxHandle` を `object` にしてあるのは、`src/contracts/` を `pg` へ依存させないためです。
+実体は `src/adapters/db/transaction.ts` の `Tx` で、`withTransaction` が渡します。
+
+## まだ契約に無いもの
 
 | 不足 | 必要になる時点 | 関連 |
 |---|---|---|
-| `Commitment`（版付きの承諾、`supersedes`、選定可能な版は一つ） | 返信から承諾を作る時 | RFC-011 §4、D04 |
-| `SelectionResult`（選んだ承諾のID・版、規則版、検査時の入力版） | 選定を実装する時 | RFC-009 §3 |
-| 永続化した`ReplyInterpretation`（messageId、receivedSeq、案件版、callId の紐づけ） | A12を実装する時 | RFC-011 §4 |
+| `SelectionResultRepository` / `ScheduleUpdateRepository` | 正式採用を実装する時 | RFC-010 §4 |
 | worker の lease / fence token | 同じイベントの二重処理を防ぐ時 | ADR-006 |
 
-`schedule-gateway.ts` の `commitmentId` は、まだ定義の無い概念への文字列参照です。
+`schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
+を指します。`selection.ts` の `SelectionPlanner` と `EligibilityChecker` は**担当Bが
+`src/domain/` で実装する口**で、実装はまだありません。呼び出し側は未実装を成功として
+扱わず、`NOT_IMPLEMENTED` を返します。
 
 `worker_heartbeat`（migration 0001）は生存確認だけで、二重処理を防ぐ仕組みではありません。
 `worker_name` が主キーのため、同名workerが2本立っても upsert で上書きされ、`/api/health`

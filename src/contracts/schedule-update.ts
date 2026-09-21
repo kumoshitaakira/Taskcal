@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { ERROR_CODES, TaskcalError } from "./errors";
 
 export const SCHEDULE_UPDATE_STATES = [
   /** 作業用成果物を作っている。 */
@@ -38,6 +39,12 @@ export const scheduleUpdateStateSchema = z.enum(SCHEDULE_UPDATE_STATES);
  *
  * ADOPTED / REJECTED は終端。確定済みの取消は別の変更操作にする（D10）。
  */
+/** 終端。確定済みの取消は別の変更操作にする（D10）。 */
+export const TERMINAL_SCHEDULE_UPDATE_STATES: readonly ScheduleUpdateState[] = [
+  "ADOPTED",
+  "REJECTED",
+];
+
 export const ALLOWED_SCHEDULE_UPDATE_TRANSITIONS: Readonly<
   Record<ScheduleUpdateState, readonly ScheduleUpdateState[]>
 > = {
@@ -52,7 +59,13 @@ export function isAllowedScheduleUpdateTransition(
   from: ScheduleUpdateState,
   to: ScheduleUpdateState,
 ): boolean {
-  return ALLOWED_SCHEDULE_UPDATE_TRANSITIONS[from].includes(to);
+  const allowed = ALLOWED_SCHEDULE_UPDATE_TRANSITIONS[from];
+  if (!allowed) {
+    // DB由来の未知の値。黙って false を返すと、遷移禁止と区別できない。
+    // 案件・打診・承諾の各検査と同じ扱いにする。
+    throw new TaskcalError(ERROR_CODES.INVALID_INPUT, `未知の更新状態です: ${String(from)}`);
+  }
+  return allowed.includes(to);
 }
 
 /**

@@ -89,6 +89,9 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   { name: "assertWithinInputBounds", from: ["src/adapters/orca/orca-client.ts"] },
   { name: "estimateCallCost", from: ["src/adapters/orca/orca-client.ts"] },
   { name: "compareMigrations", from: ["src/application/runtime-status.ts"] },
+  // 対称性の判定本体。ここが呼ばれていないと、テストが見ている evaluateRule と
+  // 実際に走る判定が別物になる。
+  { name: "evaluateRule", from: ["scripts/check-consistency.ts"] },
 ];
 
 /** 文書として走査する範囲。 */
@@ -267,12 +270,12 @@ async function checkSymmetry(): Promise<void> {
         problems.push(`${member.file} に ${member.name} がありません（対称性: ${rule.label}）`);
         continue;
       }
-      const missing = rule.mustContain.filter((needle) => !body.includes(needle));
-      const failed =
-        rule.mode === "any" ? missing.length === rule.mustContain.length : missing.length > 0;
-      if (failed) {
+      // 判定は evaluateRule に集約する。ここへ複製すると、テストが見ているのは
+      // evaluateRule だけになり、実際に走る判定が無検査になる。
+      const verdict = evaluateRule(rule, body);
+      if (!verdict.ok) {
         problems.push(
-          `${member.file} の ${member.name} に ${missing.join(" / ")} がありません` +
+          `${member.file} の ${member.name} に ${verdict.missing.join(" / ")} がありません` +
             `（対称性: ${rule.label}）`,
         );
       }
