@@ -100,3 +100,51 @@ export async function startOutreachAction(formData: FormData): Promise<void> {
     result.started,
   );
 }
+
+/**
+ * 正式採用の失敗理由を通知コードへ写す。
+ *
+ * **未実装・結果不明・拒否を同じ文言に畳まない。** 畳むと「まだ繋がっていない」と
+ * 「やってみて断られた」と「成否が分からない」が区別できず、採用していないのに
+ * 失敗したように、あるいは失敗したのに単なる未実装のように読める（ADR-022）。
+ */
+function adoptNoticeOf(code: ErrorCode, outcome?: "REJECTED" | "RECONCILE_REQUIRED"): NoticeCode {
+  if (outcome === "RECONCILE_REQUIRED") return NOTICE.ADOPT_RECONCILE;
+  switch (code) {
+    case ERROR_CODES.NOT_IMPLEMENTED:
+    case ERROR_CODES.NOT_CONFIGURED:
+      return NOTICE.ADOPT_NOT_IMPLEMENTED;
+    case ERROR_CODES.CASE_STOPPED:
+      return NOTICE.ADOPT_STOPPED;
+    case ERROR_CODES.DEADLINE_EXCEEDED:
+      return NOTICE.ADOPT_DEADLINE;
+    case ERROR_CODES.RECONCILE_REQUIRED:
+      return NOTICE.ADOPT_RECONCILE;
+    case ERROR_CODES.OPERATION_CONFLICT:
+    case ERROR_CODES.REVISION_CONFLICT:
+      return NOTICE.ADOPT_CONFLICT;
+    default:
+      return NOTICE.ADOPT_REJECTED;
+  }
+}
+
+export async function adoptPlanAction(formData: FormData): Promise<void> {
+  const operationId = String(formData.get("operationId") ?? "");
+  const caseId = String(formData.get("caseId") ?? "");
+  if (!operationId || !caseId) back("/manager", NOTICE.INPUT_MISSING);
+
+  const services = buildAppServices();
+  const result = await services.adoptPlan({ operationId, caseId });
+
+  revalidatePath("/manager");
+  revalidatePath("/staff");
+  if (!result.ok) back("/manager", adoptNoticeOf(result.code, result.outcome));
+  if (result.outcome === "NOT_FEASIBLE") back("/manager", NOTICE.ADOPT_NOT_FEASIBLE);
+  // 採用済みと読戻し一致は別。一致していなければ要対応だが、採用は取り消さない（D09）。
+  const code = !result.readBackMatches
+    ? NOTICE.ADOPT_ATTENTION
+    : result.replayed
+      ? NOTICE.ADOPT_REPLAYED
+      : NOTICE.ADOPT_ADOPTED;
+  back("/manager", code, result.adopted);
+}

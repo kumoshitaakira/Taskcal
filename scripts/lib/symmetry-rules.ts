@@ -191,8 +191,57 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
       },
       { name: "export interface OperationResultStore", file: "src/contracts/repository.ts" },
       { name: "export interface OutboxRepository", file: "src/contracts/repository.ts" },
+      // 正式採用の一括保存に参加する repository。ここが自分で取引を開くと、
+      // 手順6が黙って複数の取引へ割れる（A08）。
+      { name: "export interface SelectionResultRepository", file: "src/contracts/repository.ts" },
+      { name: "export interface ScheduleUpdateRepository", file: "src/contracts/repository.ts" },
+      {
+        name: "export interface AuthoritativeScheduleRefRepository",
+        file: "src/contracts/repository.ts",
+      },
+      { name: "export interface ShiftAssignmentRepository", file: "src/contracts/repository.ts" },
     ],
     mustContain: ["tx: TxHandle"],
+  },
+  {
+    label: "正式採用は一つの取引で全てを保存する（RFC-010 §4 手順6 / D06 / A08）",
+    members: [{ name: "async function adopt", file: "src/application/adopt-plan.ts" }],
+    // 勤務・正式版参照・採用済み計画・案件の確定事実・操作結果・通知待ちが同じ
+    // 取引に揃っていること。ひとつでも外へ出ると、一部だけが正式勤務として残る。
+    mustContain: [
+      "deps.assignments.addAdditional",
+      "deps.assignments.markAbsent",
+      "deps.authoritative.swap",
+      "deps.scheduleUpdates.advance",
+      "deps.operations.complete",
+      "enqueueNotifications",
+    ],
+  },
+  {
+    label: "照合の結果から更新と案件の両方を決める（ADR-022 / A03 / A13）",
+    members: [
+      { name: "async function adopt", file: "src/application/adopt-plan.ts" },
+      { name: "async function settleNotAdopted", file: "src/application/adopt-plan.ts" },
+      { name: "async function markReconcileRequired", file: "src/application/adopt-plan.ts" },
+    ],
+    // 片方だけで状態を決めると、更新は採用済みなのに案件は調整中、という食い違いが
+    // できる。同じ finding を両方へ渡すこと。
+    mustContain: ["resolveReconcile", "resolveCaseReconcile"],
+  },
+  {
+    label: "外部作用は取引の外で行う（RFC-010 §5）",
+    members: [
+      { name: "async function applyToSource", file: "src/application/adopt-plan.ts" },
+      { name: "async function lookUp", file: "src/application/adopt-plan.ts" },
+    ],
+    // 取引の内側から呼ぶと、HTTP・ファイル待ちの間、案件行のロックを保持する。
+    mustContain: ["assertOutsideTransaction"],
+  },
+  {
+    label: "採用結果の照合は勤務ID・担当者・役割・区間・件数を見る（RFC-010 §4 手順4 / A07）",
+    members: [{ name: "function matchesExpected", file: "src/application/adopt-plan.ts" }],
+    // IDごとの一致だけでは、余分な代替勤務が生えていても気付けない。
+    mustContain: ["staffId", "roleCode", "sameInstant", "length", "ABSENT"],
   },
   {
     label: "モデル呼出しは取引の外で行い、受信順のガードを通す（A12 / RFC-010 §5）",

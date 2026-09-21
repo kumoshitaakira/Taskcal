@@ -192,6 +192,12 @@ export interface ReadBackResult {
  * 「正式採用直後の応答喪失＝呼出し元からは不明」に該当する。
  * reject 後は `getUpdateResult` で照合するまで再実行しない（A03、D09、AGENTS.md）。
  * 可能な実装は例外を投げず `kind: "UNKNOWN"` を返すこと。
+ *
+ * **例外はふたつだけある。** `TaskcalError` の `NOT_IMPLEMENTED` と `NOT_CONFIGURED` は
+ * 「adapter が外部作用の**前に**断った」を意味し、外部作用は起きていない。これを
+ * 成否不明として扱うと、まだ何も繋がっていない案件が全て照合待ちになり、本当の
+ * 結果不明と区別できなくなる。この2つ以外の例外は成否不明として扱う。
+ * adapter はこの2つを、外部へ要求を出す前にだけ投げること。
  */
 export interface ScheduleGateway {
   readonly capabilities: SourceCapabilities;

@@ -287,7 +287,7 @@ export function CasePanel({ view, timeZone }: { view: CaseView; timeZone: string
       <div className="panel">
         {view.scheduleUpdates.length === 0 ? (
           <p className="lede" style={{ margin: 0 }}>
-            ありません。正式採用は未実装です（CSVの生成・読戻しは担当B）。
+            ありません。正式採用の進行は実装済みですが、CSVの生成・読戻しと候補選定（担当B）が未実装のため、まだ成果物を作れません。
           </p>
         ) : (
           <dl>

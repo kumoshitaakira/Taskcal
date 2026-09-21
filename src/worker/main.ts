@@ -2,7 +2,7 @@
  * 常駐worker。担当A（ADR-003：webとworkerは別プロセス・単一DB・同じリリース単位）。
  *
  * 2026-09-22時点の状態：
- *   通知待ち（outbox）の送信と、未処理の返信の解釈を処理する。
+ *   通知待ち（outbox）の送信、未処理の返信の解釈、通知処理中の案件の完了判定を行う。
  *   **期限の検知・停止・復旧は未実装。**
  *   解釈はOrcaRouterが未設定なら何もしない（模擬結果を返さない）。
  *
@@ -48,7 +48,9 @@ async function main(): Promise<void> {
   // 接続できなければ起動しない。黙って空回りさせない。
   await pool.query("select 1");
   process.stdout.write(`worker: 起動 instance=${instanceId}\n`);
-  process.stdout.write("worker: 通知待ちの送信と、未処理の返信の解釈を処理します。\n");
+  process.stdout.write(
+    "worker: 通知待ちの送信、未処理の返信の解釈、通知処理の完了判定を行います。\n",
+  );
   process.stdout.write("worker: 期限の検知・停止・復旧は未実装です。\n");
 
   const { buildAppServices } = await import("@/application/deps");
@@ -87,6 +89,22 @@ async function main(): Promise<void> {
       // 保留は進捗であって成功ではない。何が止めたかを出す。
       const detail = "blocked" in outcome ? `保留 ${outcome.blocked}` : outcome.applied;
       process.stdout.write(`worker: 解釈 ${outcome.inboundEventId} -> ${detail}\n`);
+    }
+
+    // Q07：正式採用・読戻し・必要通知の受付まで済んだ案件を完了させる。
+    // 通知が止まっている案件は、勤務を取り消さずに要対応へ回す（A13 / D09）。
+    while (running && drained < DRAIN_LIMIT) {
+      const outcome = await services.settleReporting().catch((error: unknown) => {
+        process.stderr.write(
+          `worker: 完了判定で例外 ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return { handled: false } as const;
+      });
+      if (!outcome.handled) break;
+      process.stdout.write(`worker: 通知処理 ${outcome.caseId} -> ${outcome.to}\n`);
+      // まだ通知を待っている案件は進んでいない。同じ案件を選び直して空回りしない。
+      if (outcome.to === "WAITING") break;
+      drained += 1;
     }
 
     if (drained === 0) await sleep(TICK_MS, () => running);

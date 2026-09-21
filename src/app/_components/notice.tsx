@@ -22,6 +22,16 @@ export const NOTICE = {
   OUTREACH_CONFLICT: "OUTREACH_CONFLICT",
   OUTREACH_STOPPED: "OUTREACH_STOPPED",
   OUTREACH_DEADLINE: "OUTREACH_DEADLINE",
+  ADOPT_ADOPTED: "ADOPT_ADOPTED",
+  ADOPT_REPLAYED: "ADOPT_REPLAYED",
+  ADOPT_ATTENTION: "ADOPT_ATTENTION",
+  ADOPT_NOT_FEASIBLE: "ADOPT_NOT_FEASIBLE",
+  ADOPT_REJECTED: "ADOPT_REJECTED",
+  ADOPT_RECONCILE: "ADOPT_RECONCILE",
+  ADOPT_NOT_IMPLEMENTED: "ADOPT_NOT_IMPLEMENTED",
+  ADOPT_STOPPED: "ADOPT_STOPPED",
+  ADOPT_DEADLINE: "ADOPT_DEADLINE",
+  ADOPT_CONFLICT: "ADOPT_CONFLICT",
   REPLY_RECORDED: "REPLY_RECORDED",
   REPLY_DUPLICATE: "REPLY_DUPLICATE",
   REPLY_UNMATCHED: "REPLY_UNMATCHED",
@@ -46,6 +56,22 @@ const TEXT: Record<NoticeCode, (count?: number) => string> = {
   OUTREACH_CONFLICT: () => "この案件ではすでに打診を開始しています。",
   OUTREACH_STOPPED: () => "停止済みの案件です。新規の打診は行いません（D10）。",
   OUTREACH_DEADLINE: () => "回答期限を過ぎています。",
+  ADOPT_ADOPTED: (count) => `${count ?? 0}件の代替勤務を正式採用しました。読戻しも一致しています。`,
+  ADOPT_REPLAYED: (count) => `同じ操作なので、採用済みの${count ?? 0}件を表示しています。`,
+  // 採用は取り消さない。確定した事実を保ったまま、読戻しの不一致だけを伝える（D09）。
+  ADOPT_ATTENTION: (count) =>
+    `${count ?? 0}件を正式採用しましたが、正式版の読戻しが一致しません。採用は取り消さず要対応にしました（A07 / D09）。`,
+  ADOPT_NOT_FEASIBLE: () =>
+    "実行可能な計画がありませんでした。案件は調整中のままです（A16）。選定結果は記録しています。",
+  ADOPT_REJECTED: () => "前提が変わったため採用しませんでした。成果物は未採用として残しています。",
+  // 未採用と断定しない。再実行もしない（A03 / ADR-022）。
+  ADOPT_RECONCILE: () =>
+    "勤務表の更新結果を照合できません。再実行せず、照合できるまで待ちます（A03）。",
+  ADOPT_NOT_IMPLEMENTED: () =>
+    "正式採用に必要なCSVの生成・読戻し・選定が未実装です（担当B）。採用は行っていません。",
+  ADOPT_STOPPED: () => "停止済みの案件です。正式採用は行いません（D10）。",
+  ADOPT_DEADLINE: () => "回答期限を過ぎています。正式採用は行いません。",
+  ADOPT_CONFLICT: () => "案件または勤務表が並行して更新されました。読み直してください。",
   REPLY_RECORDED: (seq) => `返信を受け取りました（受信順 ${seq ?? "-"}）。`,
   REPLY_DUPLICATE: () => "同じ返信をすでに受け取っています。",
   REPLY_UNMATCHED: () =>
@@ -56,6 +82,11 @@ const TEXT: Record<NoticeCode, (count?: number) => string> = {
 };
 
 const BAD: readonly NoticeCode[] = [
+  NOTICE.ADOPT_REJECTED,
+  NOTICE.ADOPT_NOT_IMPLEMENTED,
+  NOTICE.ADOPT_STOPPED,
+  NOTICE.ADOPT_DEADLINE,
+  NOTICE.ADOPT_CONFLICT,
   NOTICE.CASE_CONFLICT,
   NOTICE.CASE_INVALID,
   NOTICE.CASE_OUT_OF_SCOPE,

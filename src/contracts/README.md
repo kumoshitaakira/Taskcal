@@ -13,7 +13,7 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 | `case-state.ts`        | RFC-011 §5 の状態図、ADR-017                          |
 | `commitment.ts`        | RFC-011 §3・§4、RFC-009 D03・D04、ADR-014、Q09        |
 | `selection.ts`         | RFC-009 §3・§6、Q02、Q06                              |
-| `repository.ts`        | RFC-010 §4 手順6、RFC-011 §4、ADR-006                 |
+| `repository.ts`        | RFC-010 §4 手順6、RFC-011 §4、ADR-006、D05・D06       |
 | `outreach-state.ts`    | RFC-011 §2、ADR-013                                   |
 | `schedule-update.ts`   | RFC-010 §6・§7、ADR-016、ADR-019                      |
 | `operation.ts`         | ADR-006、RFC-009 D07                                  |
@@ -35,7 +35,7 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 | `canResumeReporting`（case-state） | 採用済みと確認でき、かつ正式版の読戻しが一致した場合だけ通知処理へ戻す |
 | `resolvePreparingStop`（case-state） | 期限を検知しただけで引き継がない。採用結果を先に確定させる |
 | `resolveCaseReconcile`（case-state） | 未採用と**確認**できたときだけ調整中へ戻す。確認せず戻すと二重採用になる |
-| `isSelectableCommitment`（commitment） | `status === "ACTIVE"` だけで選定しない。未処理の新しい返信・置き換え・期限も見る（D04、A05） |
+| `isSelectableCommitment`（commitment） | `status === "ACTIVE"` だけで選定しない。未処理の新しい返信・置き換え・期限も見る（D04、A05）。**選定時と正式採用の直前の両方で通す** |
 | `resolveOutreachAfterSend`（outreach-state） | 配送状態を打診状態へそのまま写さない。届いたと確認できるまで送信待ちに留める（A11） |
 | `resolveOutreachAfterInbound`（outreach-state） | 本人と確認できない受信で状態を動かさない。動かさないことと受信を捨てることは別（A15） |
 
@@ -45,6 +45,10 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 `ScheduleGateway` の4操作（`loadSchedule` / `applyUpdate` / `getUpdateResult` /
 `readBack`）はすべて `connectionId` を取る。`loadSchedule` は正式版参照も取り、
 初回取込み以外では必ず渡す（RFC-010 §2、A01、D11）。
+
+`ScheduleGateway` の例外は原則「成否不明」で、`NOT_APPLIED` や失敗と等価ではない。
+**例外はふたつだけ**で、`NOT_IMPLEMENTED` と `NOT_CONFIGURED` は「adapter が外部作用の
+**前に**断った」を意味する。adapter はこの2つを、外部へ要求を出す前にだけ投げること。
 
 `HANDED_OFF` は「自動調整を終了し、人へ対応を引き継いだ」であり、**未確定を意味しない**
 （[ADR-022](../../docs/adr/ADR-022-handoff-and-outcome-retention.md)）。採用事実
@@ -65,8 +69,8 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 
 | 不足 | 必要になる時点 | 関連 |
 |---|---|---|
-| `SelectionResultRepository` / `ScheduleUpdateRepository` | 正式採用を実装する時 | RFC-010 §4 |
 | worker の lease / fence token | 同じイベントの二重処理を防ぐ時 | ADR-006 |
+| 採用済み勤務の取消・変更 | 確定後の変更を扱う時（D10：別の変更操作にする） | RFC-009 D10 |
 
 `schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
 を指します。`selection.ts` の `SelectionPlanner` と `EligibilityChecker` は**担当Bが

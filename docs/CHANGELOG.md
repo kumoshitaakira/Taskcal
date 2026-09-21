@@ -1,5 +1,40 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：Day 2（担当A）— 正式採用の進行を実装
+
+RFC-010 §4 の手順1〜7（選定の固定 → 作業用成果物 → 読戻し → 直前再検査 → 一括採用 →
+正式版の再照合 → 通知）を `src/application/adopt-plan.ts` に実装した。
+
+**本番経路ではまだ成立しない。** 候補選定（`SelectionPlanner`）とCSVの生成・読戻し
+（`ScheduleGateway`）が担当Bの未実装のため、`UnimplementedScheduleGateway` と
+`createUnimplementedSelectionPlanner` が `NOT_IMPLEMENTED` を投げる。合成の根へ fake を
+入れていないので、画面には未実装として出る。
+
+- `src/contracts/repository.ts` へ `SelectionResultRepository` /
+  `ScheduleUpdateRepository` / `AuthoritativeScheduleRefRepository` /
+  `ShiftAssignmentRepository` を追加。README が「まだ契約に無いもの」として挙げていた
+  2項目を埋めた。Bの確認待ち。
+- `src/contracts/schedule-gateway.ts` に**例外の意味の例外**を明記した。Gatewayの例外は
+  原則「成否不明」だが、`NOT_IMPLEMENTED` と `NOT_CONFIGURED` は「外部作用の前に断った」。
+  区別しないと、まだ繋がっていない案件が全て照合待ちになり、本当の結果不明と混ざる。
+- migration `0013` を追加。`schedule_update.case_version`（準備開始**後**の案件版）。
+  `selection_result.case_version` は検査時点の版で、準備開始の遷移で1つ進むため、
+  そのままではD08の直前再検査に使えなかった。
+- `settle-reporting.ts` を追加し、workerのループへ入れた。Q07の完了境界（正式採用・
+  読戻し・必要通知の受付）まで進んだ案件を完了させ、通知が止まった案件は**勤務を
+  取り消さずに**要対応へ回す（D09）。
+- 操作IDを二つに分けた。画面の冪等キー（`adopt:{caseId}:{uuid}`、描画ごと）と、
+  外部作用の冪等キー（`apply:{selectionId}`、不変の選定結果から決まる）。前者を内容から
+  決めると、未実装で一度断った案件を実装が入った後も同じ拒否で返し続ける。
+- 対称性検査へ4件、`MUST_BE_CALLED` へ5件を追加した。「一取引で全てを保存する」
+  「照合の結果から更新と案件の両方を決める」「外部作用は取引の外」「照合は勤務ID・
+  担当者・役割・区間・件数を見る」。
+- 実際に検証した受入ケースに **A02・A03・A04・A05・A08** が加わった。A07・A13 は一部。
+  **選定規則（A16・A17）とCSV往復（A01・A06・A14）は未検証**——テストは担当Bの口を
+  台に差し替えている。
+- 設計文書（RFC）の本文は変更していない。新しいADRも追加していない（RFC-010 §4 の
+  手順をそのまま実装しただけで、新しい永続的な選択をしていないため）。
+
 ## 2026-09-22：受入fixtureレビューコメントとmain競合の対応
 
 - 正式採用前の`input.schedule.assignmentIds`を最後に確認した正式版の既存勤務だけに限定し、

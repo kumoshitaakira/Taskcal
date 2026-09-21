@@ -17,9 +17,11 @@ application責務を置く。業務のuse case本体、状態遷移、正式採�
 | `receive-inbound-event.ts` | 受信の永続化と受信順の採番 | A12、A15 |
 | `interpret-reply.ts` | 返信の解釈と承諾の生成 | A12、D03・D04、Q03〜Q05、Q09 |
 | `interpret-pending.ts` | 未処理の返信を1件解釈する（workerの1ステップ） | 未設定なら何もしない |
+| `adopt-plan.ts` | 正式採用の進行（RFC-010 §4 手順1〜7） | D05・D06・D08・D09、A02〜A08 |
+| `settle-reporting.ts` | 通知処理の完了判定（workerの1ステップ） | Q07、A13、D09 |
 | `roster-eligibility.ts` | **名簿だけの候補列挙。適格性検査ではない** | D01の名簿部分のみ |
 | `case-view.ts` / `staff-view.ts` | 画面の読み取りモデル | ADR-017・ADR-022（状態を畳まない） |
-| `offer-message.ts` | 打診・追加確認の本文 | RFC-011 §3 |
+| `offer-message.ts` | 打診・追加確認・確定・非選定・募集終了の本文 | RFC-011 §3、Q07 |
 | `deps.ts` | 合成の根 | fake を本番経路へ入れない |
 
 ## 取引の中と外
@@ -82,7 +84,36 @@ repository 越しに読む。決定的なロジックを永続化の形から切
 - 返信解釈：OrcaRouterが未設定なら `NOT_CONFIGURED`。ただし **worker は呼出しを止めない**
   ——`UnconfiguredModelGateway` は保存済み結果を再生するので、設定を見て手前で止めると
   課金済みの結果が永久に適用されない。新規の呼出しはgateway側が止める。
-- 選定・正式採用：未実装。`/manager` と `/api/health` の「未実装」に出す。
+- 候補選定（`SelectionPlanner`）：`NOT_IMPLEMENTED` を投げる。「選べなかった」と
+  「選ぶ規則が無い」は別（A16）。
+- CSVの生成・読戻し（`ScheduleGateway`）：`UnimplementedScheduleGateway` が
+  `NOT_IMPLEMENTED` を投げる。**正式採用の進行そのものは実装済み**だが、この口が無い
+  ため本番経路では成立しない。`/manager` と `/api/health` の「未実装」に出す。
 - 送信結果の照合：未実装。`send-outbox.ts` は結果不明（`UNKNOWN`）の項目を再送しない。
   `claimNext` が `UNKNOWN` を取り出さないため、**照合の経路ができるまで止まったまま**に
   なる。失敗と断定しないための意図的な停止であり、静かに再送しないことが目的。
+
+## 正式採用の手順と取引（`adopt-plan.ts`）
+
+RFC-010 §4 をその順で実装している。取引は**二つだけ**で、外部作用はその外に置く。
+
+| 手順 | 取引 | 内容 | 失敗したとき |
+|---|---|---|---|
+| 1-2 | 外 | 案件・正式版参照を読み、`loadSchedule` で月内入力の完全性まで取る（D08） | 拒否として確定 |
+| 選定固定 | A | 選定結果を不変で保存し、案件を `PREPARING` へ、更新を `PREPARING` で作る | `NOT_FEASIBLE` は調整中のまま据え置く（A16） |
+| 3 | 外 | `applyUpdate`。`additions`/`absences` は `shiftAssignmentId` 昇順（A06） | 成否不明は**再実行せず** `RECONCILE_REQUIRED`（A03） |
+| 4 | 外 | `readBack` で勤務ID・担当・役割・区間・件数を照合 → `PREPARED` | 不一致は採用しない。完了にもしない（A07） |
+| 5 | B 冒頭 | 直前再検査：案件版・停止・期限・入力版・承諾の版・未処理返信・月次完全性（D08） | 更新を `REJECTED`、案件を調整中へ（A05） |
+| 6 | B | 勤務の追加・元勤務の欠勤・正式版参照のCAS・採用事実・操作結果・通知待ちを**一括**保存 | 取引ごと巻き戻す。一部だけ正式勤務にしない（A08） |
+| 7 | 外 | 正式版参照から読み直して照合 → `REPORTING` | 不一致は `ATTENTION`。確定事実は消さない（D09） |
+
+操作IDは二つある。**用途が違うので一つに畳まない。**
+
+- `adopt:{caseId}:{uuid}`（`ADOPT_PLAN`）は画面の冪等キー。描画ごとに作る。内容から
+  決めてしまうと、未実装で一度断った案件を実装が入った後も同じ拒否で返し続ける。
+- `apply:{selectionId}`（`APPLY_UPDATE`）は**外部作用**の冪等キー。不変の選定結果から
+  決まるので、落ちて再開しても同じ値になり、`getUpdateResult` で照会できる（RFC-010 §7）。
+
+`Gateway` の例外は原則「成否不明」だが、`NOT_IMPLEMENTED` と `NOT_CONFIGURED` だけは
+「外部作用の前に断った」を意味する。これを成否不明として扱うと、まだ繋がっていない案件が
+全て照合待ちになり、本当の結果不明と区別できない。

@@ -7,8 +7,6 @@
  * 一括保存（正式版参照・内部勤務表・採用済み計画・案件の確定事実・操作結果・通知待ちを
  * 同じ取引で保存する）が黙って複数の取引へ割れ、一部だけが正式勤務として残る（D06）。
  * 取引境界は `src/application/` が決める。
- *
- * 選定結果と勤務表更新の repository は、正式採用を実装するときに足す。
  */
 
 import type { AdoptionFact, CaseState, Handoff, StopCause } from "./case-state";
@@ -18,7 +16,15 @@ import type { ContactEndpointRef, InboundEvent, PersistedInboundEvent } from "./
 import type { PersistedReplyInterpretation } from "./model-output";
 import type { OperationId, OperationMatch, OperationRef } from "./operation";
 import type { OutreachMessageKind, OutreachState, SenderIdentity } from "./outreach-state";
-import type { ConnectionId, ScheduleId, ShiftAssignmentId } from "./schedule-gateway";
+import type {
+  AuthoritativeScheduleRef,
+  ConnectionId,
+  ScheduleId,
+  ShiftAssignmentId,
+  SourceRevision,
+} from "./schedule-gateway";
+import type { ScheduleUpdateState, UpdateResultKind } from "./schedule-update";
+import type { SelectionResult } from "./selection";
 
 /**
  * 取引ハンドル。
@@ -415,4 +421,187 @@ export interface OutboxRepository {
     },
   ): Promise<"UPDATED" | "LEASE_LOST">;
   listByCase(tx: TxHandle, caseId: string): Promise<readonly OutboxItem[]>;
+}
+
+// ---------------------------------------------------------------------------
+// 選定結果
+// ---------------------------------------------------------------------------
+
+/**
+ * 不変の選定結果（RFC-009 §3）。
+ *
+ * **保存後に書き換えない。** 承諾0件の評価でも残す。書き換えると「なぜその計画を
+ * 選んだか」を後から説明できなくなり、正式採用直前の再検査（D08）が照合する相手を失う。
+ */
+export interface SelectionResultRepository {
+  /**
+   * 選定結果と、選定・非選定の内訳を保存する。
+   *
+   * 非選定の承諾も残す。誰に非選定通知を出すかはここから決まる（Q07）。
+   * 版は保存時点の承諾行から取る——呼出し元が別に持ち回ると、ロックの外で
+   * 読んだ古い版を書き込み得る。
+   */
+  save(tx: TxHandle, result: SelectionResult): Promise<void>;
+  findById(tx: TxHandle, selectionId: string): Promise<SelectionResult | "NOT_FOUND">;
+}
+
+// ---------------------------------------------------------------------------
+// 勤務表更新
+// ---------------------------------------------------------------------------
+
+export interface ScheduleUpdateSnapshot {
+  readonly scheduleUpdateId: string;
+  readonly caseId: string;
+  /**
+   * 準備を始めた**後**の案件版。正式採用の直前にこの版と照合する（D08）。
+   *
+   * `SelectionResult.caseVersion` は検査した時点（`COORDINATING`）の版で、準備開始の
+   * 遷移で1つ進む。両方を残さないと、「自分で進めた1つ」と「別の変更で進んだ1つ」を
+   * 区別できない（A04・A05）。
+   */
+  readonly caseVersion: number;
+  readonly selectionId: string;
+  /** 外部作用（`applyUpdate`）の操作ID。照会はこれで行う（RFC-010 §7）。 */
+  readonly operationId: OperationId;
+  readonly connectionId: ConnectionId;
+  readonly scheduleId: ScheduleId;
+  readonly expectedSourceRevision: SourceRevision;
+  readonly state: ScheduleUpdateState;
+  /** Gatewayが返した結果種別。状態とは別に残す（PREPARED と ADOPTED は別）。 */
+  readonly resultKind?: UpdateResultKind;
+  readonly artifactRef?: string;
+  readonly newSourceRevision?: SourceRevision;
+  readonly revisionCheckEnforced: boolean;
+  readonly adoptedAt?: string;
+  readonly createdAt: string;
+}
+
+export interface CreateScheduleUpdateInput {
+  readonly scheduleUpdateId: string;
+  readonly caseId: string;
+  /** 準備開始の遷移を済ませた後の案件版。 */
+  readonly caseVersion: number;
+  readonly selectionId: string;
+  readonly operationId: OperationId;
+  readonly connectionId: ConnectionId;
+  readonly scheduleId: ScheduleId;
+  readonly expectedSourceRevision: SourceRevision;
+}
+
+export interface ScheduleUpdateRepository {
+  create(tx: TxHandle, input: CreateScheduleUpdateInput): Promise<ScheduleUpdateSnapshot>;
+  /**
+   * `isAllowedScheduleUpdateTransition` を通したうえで状態を進める。
+   *
+   * `ADOPTED` は D05 の部分一意索引が最後に拒否する。**別の操作キーでも
+   * 1案件に2つ目の採用を作らない**（A04）。拒否は `ALREADY_ADOPTED` で返し、
+   * 呼出し元が採用済みの事実として扱えるようにする。
+   */
+  advance(
+    tx: TxHandle,
+    input: {
+      scheduleUpdateId: string;
+      to: ScheduleUpdateState;
+      resultKind?: UpdateResultKind;
+      artifactRef?: string;
+      newSourceRevision?: SourceRevision;
+      revisionCheckEnforced?: boolean;
+      /** `ADOPTED` のときだけ必須。DBの制約が対で入ることを要求する。 */
+      adoptedAt?: string;
+    },
+  ): Promise<"UPDATED" | "NOT_ALLOWED" | "ALREADY_ADOPTED">;
+  findById(tx: TxHandle, scheduleUpdateId: string): Promise<ScheduleUpdateSnapshot | "NOT_FOUND">;
+  /** 操作IDから引く。結果不明の再開で、同じ操作の成果物を探すのに使う（RFC-010 §7）。 */
+  findByOperation(
+    tx: TxHandle,
+    operationId: OperationId,
+  ): Promise<ScheduleUpdateSnapshot | "NOT_FOUND">;
+  /** 案件の、まだ終端に入っていない更新。再開時の続きを決める。 */
+  findOpenByCase(tx: TxHandle, caseId: string): Promise<ScheduleUpdateSnapshot | "NONE">;
+}
+
+// ---------------------------------------------------------------------------
+// 正式版参照
+// ---------------------------------------------------------------------------
+
+export interface AuthoritativeRefSnapshot extends AuthoritativeScheduleRef {
+  readonly connectionId: ConnectionId;
+  /** A04：期待版付きで切り替えるための版。 */
+  readonly version: number;
+  readonly adoptedByScheduleUpdateId?: string;
+}
+
+export interface AuthoritativeScheduleRefRepository {
+  get(
+    tx: TxHandle,
+    ref: { connectionId: ConnectionId; scheduleId: ScheduleId },
+  ): Promise<AuthoritativeRefSnapshot | "NOT_FOUND">;
+  /**
+   * A04：期待版付きで正式版参照を差し替える。
+   *
+   * **同じ旧版から作った二つの計画の一方だけを通す。** 期待版と一致しなければ
+   * 1行も更新せず `REVISION_CONFLICT` を返す。読んでから書くまでの間に別の採用が
+   * 通った場合を、ここで止める（RFC-010 §5）。
+   */
+  swap(
+    tx: TxHandle,
+    input: {
+      connectionId: ConnectionId;
+      scheduleId: ScheduleId;
+      expectedVersion: number;
+      sourceRevision: SourceRevision;
+      artifactRef: string;
+      adoptedAt: string;
+      adoptedByScheduleUpdateId: string;
+    },
+  ): Promise<"UPDATED" | "REVISION_CONFLICT">;
+}
+
+// ---------------------------------------------------------------------------
+// 勤務（内部勤務表への書込み）
+// ---------------------------------------------------------------------------
+
+export interface AddAssignmentInput {
+  /** 選定時に確定させたID。再試行で採番し直さない（RFC-010 §3、D05）。 */
+  readonly shiftAssignmentId: ShiftAssignmentId;
+  readonly scheduleId: ScheduleId;
+  readonly storeId: string;
+  readonly staffId: string;
+  readonly roleCode: string;
+  readonly startAt: string;
+  readonly endAt: string;
+  readonly sourceCaseId: string;
+  readonly sourceCommitmentId: string;
+}
+
+/** 追加できなかった理由。どれも「一部だけ正式勤務にしない」ために区別する（A08）。 */
+export const ADD_ASSIGNMENT_REFUSAL = {
+  /** D05：その承諾からの勤務がすでにある。 */
+  DUPLICATE_COMMITMENT: "DUPLICATE_COMMITMENT",
+  /** ADR-006：同じスタッフの勤務が重なる。 */
+  OVERLAP: "OVERLAP",
+} as const;
+
+export type AddAssignmentRefusal =
+  (typeof ADD_ASSIGNMENT_REFUSAL)[keyof typeof ADD_ASSIGNMENT_REFUSAL];
+
+export interface ShiftAssignmentRepository {
+  /**
+   * 代替勤務を1件足す。**採用取引の中で全件を入れる**（D06）。
+   *
+   * 制約違反は取引を中断させるため、内部で SAVEPOINT を張って理由を返す。
+   * 呼出し元は1件でも拒否されたら取引ごと巻き戻す（A08）。
+   */
+  addAdditional(
+    tx: TxHandle,
+    input: AddAssignmentInput,
+  ): Promise<"INSERTED" | AddAssignmentRefusal>;
+  /**
+   * 元勤務を欠勤にする。`CANCELLED`（勤務自体が無くなった）と混同しない。
+   * Q04により全時間欠勤のみを扱うので、区間は分割しない。
+   */
+  markAbsent(
+    tx: TxHandle,
+    input: { shiftAssignmentId: ShiftAssignmentId },
+  ): Promise<"UPDATED" | "NOT_SCHEDULED">;
 }

@@ -96,9 +96,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       "適格性の検査（可能時間・月次上限・勤務の重複）。打診の候補は名簿だけで選んでいる（担当B）",
       "候補選定・勤務計画の決定（担当B）",
       "返信解釈（OrcaRouterの接続情報と金額予算が未取得のため実推論を行っていない）",
-      "正式採用・CSV生成・読戻し・結果照合",
+      "CSV生成・読戻し・結果照会（ScheduleGateway の実装）。正式採用の進行は実装済みだが、この口が NOT_IMPLEMENTED を投げるため成立しない（担当B）",
       "送信結果が不明・配送に失敗した通知の復旧。UNKNOWN と FAILED は再送せず止まったまま",
       "期限の検知、案件の停止・再開、要対応からの復旧",
+      "採用済み勤務の取消・変更（D10：確定済みの取消は別の変更操作）",
       "worker の fence token（通知待ちの lease はアイテム単位のみ）",
     ],
   };

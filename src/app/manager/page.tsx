@@ -5,7 +5,7 @@ import { getRuntimeStatus } from "@/application/runtime-status";
 import { CasePanel } from "../_components/case-panel";
 import { Notice } from "../_components/notice";
 import { NotImplementedList, StatusPanel } from "../_components/status-panel";
-import { createAbsenceCaseAction, startOutreachAction } from "./actions";
+import { adoptPlanAction, createAbsenceCaseAction, startOutreachAction } from "./actions";
 
 // 起動状態と案件を毎回確認する。
 export const dynamic = "force-dynamic";
@@ -70,12 +70,26 @@ export default async function ManagerPage({
   const outreachOperationId = view.activeCase
     ? `outreach:${view.activeCase.caseId}`
     : `outreach:${randomUUID()}`;
+  // 正式採用は描画ごとに新しいキーにする。二重クリック・再読込は同じキーだが、
+  // 一度断られた後の再試行は別の操作にする——未実装で断った結果を、実装が入った後も
+  // 同じ拒否として返し続けないため（`src/application/adopt-plan.ts`）。
+  const adoptOperationId = `adopt:${view.activeCase?.caseId ?? "none"}:${randomUUID()}`;
+  // 進行中の更新は作り直さず再開する（RFC-010 §7）。停止済みの案件では出さない（D10）。
+  const resuming =
+    view.activeCase?.state === "PREPARING" || view.activeCase?.state === "RECONCILE_REQUIRED";
+  const canAdopt = Boolean(
+    view.activeCase &&
+    !view.activeCase.stopCause &&
+    (resuming ||
+      (view.activeCase.state === "COORDINATING" &&
+        view.activeCase.outreaches.some((outreach) => outreach.selectable))),
+  );
 
   return (
     <main>
       <h1>店長画面</h1>
       <p className="lede">
-        欠勤の登録、名簿上の同職種への同時打診、返信の受信までが動きます。適格性（可能時間・月次上限・勤務の重複）は未検査で、返信の解釈・正式採用も未実装です。
+        欠勤の登録、名簿上の同職種への同時打診、返信の受信までが動きます。適格性（可能時間・月次上限・勤務の重複）は未検査です。正式採用の進行は実装済みですが、選定とCSVの生成・読戻し（担当B）が無いため、実際には未実装として断ります。
       </p>
       <nav className="links">
         <Link href="/">トップ</Link>
@@ -103,6 +117,23 @@ export default async function ManagerPage({
           </p>
         </div>
       )}
+
+      {canAdopt && view.activeCase ? (
+        <form action={adoptPlanAction} className="panel">
+          <input type="hidden" name="operationId" value={adoptOperationId} />
+          <input type="hidden" name="caseId" value={view.activeCase.caseId} />
+          <p className="lede" style={{ margin: 0 }}>
+            {resuming
+              ? // 再実行しない。進行中の更新は作り直さず、照会して照合してから進む（A03）。
+                "進行中の勤務表更新があります。作り直さず、結果を照会して照合してから続きを進めます。"
+              : "選定可の承諾から計画を固定し、作業用CSVの生成・読戻しを経て正式採用します。採用の直前に案件版・停止・期限・承諾・未処理返信・月内入力の完全性をもう一度検査します（D08）。"}{" "}
+            <strong>
+              選定とCSVの生成・読戻しは未実装（担当B）なので、現在は必ず未実装として断ります。
+            </strong>
+          </p>
+          <button type="submit">{resuming ? "正式採用の続きを進める" : "正式採用へ進む"}</button>
+        </form>
+      ) : null}
 
       {view.activeCase && view.activeCase.outreaches.length === 0 ? (
         <form action={startOutreachAction} className="panel">

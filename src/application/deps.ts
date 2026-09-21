@@ -8,6 +8,8 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { createDefaultMessagingGateway } from "../adapters/channel";
+import { createUnimplementedScheduleGateway } from "../adapters/csv/unimplemented-schedule-gateway";
+import { createPgAuthoritativeScheduleRefRepository } from "../adapters/db/authoritative-ref-repository";
 import { createPgBudgetLedger } from "../adapters/db/budget-ledger";
 import { createPgCommitmentRepository } from "../adapters/db/commitment-repository";
 import { createPgAbsenceCaseRepository } from "../adapters/db/case-repository";
@@ -18,15 +20,24 @@ import { createPgModelCallStore } from "../adapters/db/model-call-store";
 import { createPgOutboxRepository } from "../adapters/db/outbox-repository";
 import { createPgOutreachRepository } from "../adapters/db/outreach-repository";
 import { createPgScheduleReadRepository } from "../adapters/db/schedule-repository";
+import { createPgScheduleUpdateRepository } from "../adapters/db/schedule-update-repository";
+import { createPgSelectionResultRepository } from "../adapters/db/selection-repository";
+import { createPgShiftAssignmentRepository } from "../adapters/db/shift-assignment-repository";
 import { createPgStoreRepository } from "../adapters/db/store-repository";
 import type { Clock, IdGenerator } from "../contracts/repository";
 import { createModelGateway } from "../adapters/orca";
+import { adoptPlan } from "./adopt-plan";
 import { createAbsenceCase } from "./create-absence-case";
 import { interpretPending } from "./interpret-pending";
 import { interpretReply } from "./interpret-reply";
 import { receiveInboundEvent } from "./receive-inbound-event";
-import { createRosterEligibility } from "./roster-eligibility";
+import {
+  createRosterEligibility,
+  createUnimplementedEligibilityRecheck,
+  createUnimplementedSelectionPlanner,
+} from "./roster-eligibility";
 import { sendOutbox } from "./send-outbox";
+import { settleReporting } from "./settle-reporting";
 import { startOutreach } from "./start-outreach";
 
 const clock: Clock = { now: () => new Date().toISOString() };
@@ -48,8 +59,17 @@ export function buildAppServices() {
   const operations = createPgOperationResultStore();
   const schedules = createPgScheduleReadRepository();
   const stores = createPgStoreRepository();
+  const selections = createPgSelectionResultRepository();
+  const scheduleUpdates = createPgScheduleUpdateRepository();
+  const authoritative = createPgAuthoritativeScheduleRefRepository();
+  const assignments = createPgShiftAssignmentRepository();
   const roster = createRosterEligibility();
   const messaging = createDefaultMessagingGateway({ operations });
+  // 担当Bの実装が入るまでの未実装の口。模擬結果を返さず NOT_IMPLEMENTED を投げる。
+  // 入ったらこの3行を差し替え、runtime-status の notImplemented から落とす。
+  const gateway = createUnimplementedScheduleGateway();
+  const planner = createUnimplementedSelectionPlanner();
+  const eligibility = createUnimplementedEligibilityRecheck();
   const interpret = interpretReply({
     model,
     cases,
@@ -74,7 +94,12 @@ export function buildAppServices() {
     model,
     operations,
     schedules,
+    selections,
+    scheduleUpdates,
+    authoritative,
+    assignments,
     messaging,
+    gateway,
     clock,
     createAbsenceCase: createAbsenceCase({
       cases,
@@ -95,6 +120,26 @@ export function buildAppServices() {
       ids: idGenerator,
     }),
     sendOutbox: sendOutbox({ outbox, outreaches, messaging }),
+    settleReporting: settleReporting({ cases, outbox }),
+    adoptPlan: adoptPlan({
+      cases,
+      commitments,
+      outreaches,
+      inbound,
+      stores,
+      selections,
+      scheduleUpdates,
+      authoritative,
+      assignments,
+      schedules,
+      outbox,
+      operations,
+      gateway,
+      planner,
+      eligibility,
+      clock,
+      ids: idGenerator,
+    }),
     receiveInboundEvent: receiveInboundEvent({ inbound, outreaches }),
     interpretReply: interpret,
     interpretPending: interpretPending({ model, inbound, interpret }),
