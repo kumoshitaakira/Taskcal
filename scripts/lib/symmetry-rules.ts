@@ -261,6 +261,26 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["DECLINE", "WITHDRAW", "HELD", "CLARIFYING"],
   },
   {
+    label: "制約違反で弾く経路は SAVEPOINT で囲む（D02 / A08：拒否の記録を書けなくしない）",
+    members: [
+      {
+        name: "export function createPgAbsenceCaseRepository",
+        file: "src/adapters/db/case-repository.ts",
+      },
+      {
+        name: "export function createPgScheduleUpdateRepository",
+        file: "src/adapters/db/schedule-update-repository.ts",
+      },
+      {
+        name: "export function createPgShiftAssignmentRepository",
+        file: "src/adapters/db/shift-assignment-repository.ts",
+      },
+    ],
+    // 制約違反は取引全体を中断させる。囲まないと、違反を検出した後に呼出し元が
+    // 拒否の記録すら書けない（「current transaction is aborted」）。
+    mustContain: ["savepoint", "rollback to savepoint"],
+  },
+  {
     label: "営業日を date 型のまま受け取らない（RFC-009 §5：表示と月境界は店舗timezone）",
     members: [
       { name: "const COLUMNS", file: "src/adapters/db/case-repository.ts" },
@@ -269,6 +289,11 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
         file: "src/adapters/db/schedule-repository.ts",
       },
       { name: "export function createAbsenceCase", file: "src/application/create-absence-case.ts" },
+      // 月内入力の欠けた日（date[]）も同じ。Date[] で受けるとJSTで1日ずれる。
+      {
+        name: "export function createPgSelectionResultRepository",
+        file: "src/adapters/db/selection-repository.ts",
+      },
     ],
     // node-pg は date 列をローカル深夜の Date にする。JST では toISOString() が
     // 前日になり、営業日が1日ずれる。SQL側で文字列にして受け取る。

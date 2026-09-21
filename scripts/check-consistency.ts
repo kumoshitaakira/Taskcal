@@ -101,7 +101,12 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   { name: "isAllowedCommitmentTransition", from: ["src/adapters/db/commitment-repository.ts"] },
   { name: "resolveOutreachAfterSend", from: ["src/application/send-outbox.ts"] },
   { name: "resolveOutreachAfterInbound", from: ["src/application/receive-inbound-event.ts"] },
-  { name: "computeRequestHash", from: ["src/application/start-outreach.ts"] },
+  {
+    name: "computeRequestHash",
+    // 外部作用の内容ハッシュを作る経路。ここを落とすと、同じ操作IDで内容の違う
+    // 要求を REPLAY として握り潰す（ADR-006 / D07）。
+    from: ["src/application/start-outreach.ts", "src/application/adopt-plan.ts"],
+  },
   {
     name: "isSelectableCommitment",
     // D08：選定の時点と、正式採用の直前の両方で通す。片方だけでは、準備中に
