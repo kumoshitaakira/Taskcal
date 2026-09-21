@@ -2,16 +2,17 @@
  * OrcaRouterの接続設定を点検する。**実呼出しは行わない。**
  *
  * 未設定を「成功」と表示しない（AGENTS.md「品質と証拠」）。
- * 判定には `src/config/env.ts` と同じschemaを使う。存在の有無だけを見ると、
- * `abc` や `-1` のような不正値でも CONFIGURED と表示され、実際には
- * createModelGateway の手前で起動が失敗する。
+ * 判定にはアプリと同じschemaを使う。存在の有無だけを見ると、`abc` や `-1` のような
+ * 不正値でも CONFIGURED と表示され、実際には createModelGateway の手前で起動が失敗する。
+ *
+ * 検査する範囲は OrcaRouter 関連だけ。DATABASE_URL の有無で結果を変えない。
  *
  * 使い方: npm run check:orca
  */
 
 import process from "node:process";
 import { config as loadDotenv } from "dotenv";
-import { serverEnvSchema } from "@/config/env-schema";
+import { orcaEnvSchema } from "@/config/env-schema";
 
 loadDotenv({ path: ".env.local", quiet: true });
 loadDotenv({ path: ".env", quiet: true });
@@ -28,7 +29,8 @@ const KEYS = [
   "ORCA_MAX_OUTPUT_TOKENS",
 ] as const;
 
-const parsed = serverEnvSchema.safeParse(process.env);
+// OrcaRouter関連だけを見る。DATABASE_URL の有無で結果を変えない。
+const parsed = orcaEnvSchema.safeParse(process.env);
 
 process.stdout.write("OrcaRouter 接続設定の点検（実呼出しは行いません）\n");
 
@@ -42,13 +44,8 @@ if (!parsed.success) {
     // 値そのものは出さない（ADR-008）。
     process.stdout.write(`  ${key.padEnd(33)}: ${problem ? `不正（${problem}）` : "—"}\n`);
   }
-  const orcaIssues = KEYS.filter((k) => issues.has(k));
-  if (orcaIssues.length > 0) {
-    process.stdout.write("\n結果: INVALID（設定値が契約に合いません）\n");
-    process.stdout.write("  この状態ではアプリが起動しません。値を修正してください。\n");
-  } else {
-    process.stdout.write("\n結果: INVALID（OrcaRouter以外の環境変数に問題があります）\n");
-  }
+  process.stdout.write("\n結果: INVALID（設定値が契約に合いません）\n");
+  process.stdout.write("  この状態ではアプリが起動しません。値を修正してください。\n");
   process.exitCode = 1;
 } else {
   const env = parsed.data;

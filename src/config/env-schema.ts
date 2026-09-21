@@ -51,6 +51,27 @@ export const serverEnvSchema = z.object({
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 
 /**
+ * OrcaRouter関連だけのschema。
+ *
+ * `DATABASE_URL` を含めない。OrcaRouterの設定を点検するのに、DBの設定を
+ * 要求する理由はない。全体検査に混ぜると、無関係な項目の不足で
+ * 「OrcaRouterの設定が不正」と報告してしまう（`check:orca`／CIの静的検査）。
+ */
+export const orcaEnvSchema = serverEnvSchema.pick({
+  ORCA_BASE_URL: true,
+  ORCA_API_KEY: true,
+  ORCA_CASE_SPEND_LIMIT_MICRO_USD: true,
+  ORCA_RUN_SPEND_LIMIT_MICRO_USD: true,
+  ORCA_CASE_CALL_LIMIT: true,
+  ORCA_INPUT_MICRO_USD_PER_KTOK: true,
+  ORCA_OUTPUT_MICRO_USD_PER_KTOK: true,
+  ORCA_MAX_REPLY_CHARS: true,
+  ORCA_MAX_OUTPUT_TOKENS: true,
+});
+
+export type OrcaEnv = z.infer<typeof orcaEnvSchema>;
+
+/**
  * DATABASE_URL だけの検査。
  *
  * 環境変数全体の検査とは**独立**させる。Orcaの設定値が不正なだけでDBへ
