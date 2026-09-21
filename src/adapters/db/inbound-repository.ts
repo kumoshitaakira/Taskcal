@@ -116,8 +116,8 @@ export function createPgInboundEventRepository(): InboundEventRepository {
            (inbound_event_id, case_id, outreach_id, received_seq, provider, connection_id,
             provider_event_id, occurred_at, received_at, from_provider, from_connection_id,
             from_endpoint_key, from_endpoint_version, body, channel_verified, sender_identity,
-            message_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+            message_id, in_reply_to_message_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           inboundEventId,
           resolved.caseId ?? null,
@@ -136,6 +136,7 @@ export function createPgInboundEventRepository(): InboundEventRepository {
           event.channelVerified,
           resolved.senderIdentity,
           messageId,
+          event.inReplyToMessageId ?? null,
         ],
       );
 
@@ -199,6 +200,48 @@ export function createPgInboundEventRepository(): InboundEventRepository {
         caseId: row.case_id,
         receivedSeq: Number(row.received_seq),
       };
+    },
+
+    async markBlocked(handle: TxHandle, input) {
+      const tx = handle as Tx;
+      // 理由の無い保留を作らない。いつ止まったかも残す。
+      await tx.query(
+        `update inbound_event
+            set interpretation_block = $2, blocked_at = now()
+          where inbound_event_id = $1 and interpretation_block is null`,
+        [input.inboundEventId, input.reason],
+      );
+    },
+
+    async clearBlocked(handle: TxHandle, input) {
+      const tx = handle as Tx;
+      const { rowCount } = await tx.query(
+        `update inbound_event
+            set interpretation_block = null, blocked_at = null
+          where interpretation_block = $1`,
+        [input.reason],
+      );
+      return rowCount ?? 0;
+    },
+
+    async findNextInterpretable(handle: TxHandle) {
+      const tx = handle as Tx;
+      // 受信順の昇順。古い返信から順に適用する（RFC-011 §4）。
+      // 空本文は解釈しない。停止した案件も進めない（D10）。
+      const { rows } = await tx.query<{ inbound_event_id: string }>(
+        `select e.inbound_event_id
+           from inbound_event e
+           join outreach o on o.outreach_id = e.outreach_id
+           join absence_case c on c.case_id = e.case_id
+          where e.received_seq > o.last_applied_seq
+            and e.interpretation_block is null
+            and e.body is not null
+            and e.body <> ''
+            and c.stopped_at is null
+          order by e.received_seq
+          limit 1`,
+      );
+      return rows[0]?.inbound_event_id ?? "NONE";
     },
 
     async hasUnprocessed(handle: TxHandle, outreachId: string) {

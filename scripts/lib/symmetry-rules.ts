@@ -136,6 +136,27 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["FAILED", "UNKNOWN", "DELIVERY_NOT_SENT"],
   },
   {
+    label: "返信は対象の不変参照から打診を引く（RFC-011 §3 / D03）",
+    members: [
+      {
+        name: "export function receiveInboundEvent",
+        file: "src/application/receive-inbound-event.ts",
+      },
+    ],
+    // 宛先だけで逆引きすると、同じ相手への過去の打診と現在の打診を区別できない。
+    // 対象が引けても、宛先が丸ごと一致しなければ本人とみなさない（A15）。
+    mustContain: ["inReplyToMessageId", "sameEndpoint"],
+  },
+  {
+    label: "解釈できない受信は取り出し対象から外す（A12 / RFC-011 §4）",
+    members: [
+      { name: "export function interpretPending", file: "src/application/interpret-pending.ts" },
+    ],
+    // 受信順は進めない（適用していないため）が、取り出し続けると後続の返信を
+    // 処理できない。理由を残して外す。
+    mustContain: ["markBlocked", "findNextInterpretable"],
+  },
+  {
     label: "本人と確認できない受信で状態を動かさない（A15 / RFC-011 §6）",
     members: [
       {

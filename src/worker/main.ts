@@ -84,7 +84,9 @@ async function main(): Promise<void> {
       });
       if (!outcome.handled) break;
       drained += 1;
-      process.stdout.write(`worker: 解釈 ${outcome.inboundEventId}\n`);
+      // 保留は進捗であって成功ではない。何が止めたかを出す。
+      const detail = "blocked" in outcome ? `保留 ${outcome.blocked}` : outcome.applied;
+      process.stdout.write(`worker: 解釈 ${outcome.inboundEventId} -> ${detail}\n`);
     }
 
     if (drained === 0) await sleep(TICK_MS, () => running);

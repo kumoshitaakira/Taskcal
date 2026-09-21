@@ -10,6 +10,7 @@
  */
 
 import "server-only";
+import { ERROR_CODES, TaskcalError } from "../../contracts/errors";
 import type { PersistedReplyInterpretation } from "../../contracts/model-output";
 import type {
   InterpretationApplication,
@@ -26,13 +27,20 @@ export function createPgReplyInterpretationRepository(): ReplyInterpretationRepo
       applied: InterpretationApplication,
     ) {
       const tx = handle as Tx;
-      await tx.query(
+      // 同じ受信を再処理すると `requestId` が同じになり、行は既にある。
+      // `do nothing` にすると呼出し元が今回作ったIDを承諾から参照し、存在しない行を
+      // 指して外部キー違反になる。**保存された行のIDを返す。**
+      //
+      // 適用結果（applied）だけは更新する。解釈の内容（output）は書き換えない——
+      // 版付きの解釈は不変で、applied は「案件へ適用したか」という別の軸。
+      const { rows } = await tx.query<{ interpretation_id: string }>(
         `insert into reply_interpretation
            (interpretation_id, case_id, message_id, inbound_event_id, received_seq,
             case_version, request_id, output, masked_reply_text, applied)
          select $1, m.case_id, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
            from outreach_message m where m.message_id = $2
-         on conflict (message_id, request_id) do nothing`,
+         on conflict (message_id, request_id) do update set applied = excluded.applied
+         returning interpretation_id`,
         [
           record.interpretationId,
           record.messageId,
@@ -45,6 +53,12 @@ export function createPgReplyInterpretationRepository(): ReplyInterpretationRepo
           applied,
         ],
       );
+      const stored = rows[0]?.interpretation_id;
+      if (!stored) {
+        // 対象Messageが無い。承諾の根拠を残せないので、黙って続けない。
+        throw new TaskcalError(ERROR_CODES.INVALID_INPUT, "解釈の対象Messageが見つかりません。");
+      }
+      return { interpretationId: stored };
     },
 
     async tryAdvanceAppliedSeq(handle: TxHandle, input) {

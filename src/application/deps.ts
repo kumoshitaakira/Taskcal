@@ -85,7 +85,7 @@ export function buildAppServices() {
     sendOutbox: sendOutbox({ outbox, outreaches, messaging }),
     receiveInboundEvent: receiveInboundEvent({ inbound, outreaches }),
     interpretReply: interpret,
-    interpretPending: interpretPending({ model, interpret }),
+    interpretPending: interpretPending({ model, inbound, interpret }),
   };
 }
 

@@ -68,6 +68,9 @@ export default async function StaffPage({
                       name="endpointVersion"
                       value={item.endpoint.endpointVersion}
                     />
+                    {/* 返信対象の不変参照。どの打診への返信かをこれで決める（RFC-011 §3）。
+                        宛先だけで逆引きすると、同じ相手への過去の打診と区別できない。 */}
+                    <input type="hidden" name="inReplyToMessageId" value={item.messageId} />
                     {/* 描画時に決めるので、二重送信が同じ受信イベントになる。 */}
                     <input type="hidden" name="eventId" value={`ui-${randomUUID()}`} />
                     <label htmlFor={`body-${item.inboxItemId}`}>返信</label>

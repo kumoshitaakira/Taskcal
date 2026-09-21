@@ -35,6 +35,8 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
   const endpointKey = `staff:${randomUUID()}`;
   let caseId: string;
   let outreachId: string;
+  /** 返信対象の送信Message。どの打診への返信かはこれで決まる（RFC-011 §3）。 */
+  let offerMessageId: string;
 
   function event(overrides: Partial<InboundEvent> = {}): InboundEvent {
     const now = new Date().toISOString();
@@ -50,6 +52,7 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
         endpointKey,
         endpointVersion: 1,
       },
+      inReplyToMessageId: offerMessageId,
       body: "大丈夫です",
       channelVerified: false,
       ...overrides,
@@ -99,7 +102,14 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
   beforeEach(async () => {
     caseId = randomUUID();
     outreachId = randomUUID();
+    offerMessageId = randomUUID();
     await withTransaction(async (tx) => {
+      // 解釈を先に消す。受信イベントを参照しているため（外部キーの順）。
+      await tx.query(
+        `delete from reply_interpretation where inbound_event_id in
+           (select inbound_event_id from inbound_event where connection_id in ($1, $2))`,
+        [CONNECTION, OTHER_CONNECTION],
+      );
       await tx.query(`delete from inbound_event where connection_id in ($1, $2)`, [
         CONNECTION,
         OTHER_CONNECTION,
@@ -135,11 +145,22 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
                  'AWAITING_REPLY', 'staff-1')`,
         [outreachId, caseId, staffId, CONNECTION, endpointKey],
       );
+      await tx.query(
+        `insert into outreach_message (message_id, case_id, outreach_id, direction, kind, body)
+         values ($1, $2, $3, 'OUTBOUND', 'INITIAL_OFFER', '打診')`,
+        [offerMessageId, caseId, outreachId],
+      );
     });
   });
 
   afterAll(async () => {
     await withTransaction(async (tx) => {
+      // 解釈を先に消す。受信イベントを参照しているため（外部キーの順）。
+      await tx.query(
+        `delete from reply_interpretation where inbound_event_id in
+           (select inbound_event_id from inbound_event where connection_id in ($1, $2))`,
+        [CONNECTION, OTHER_CONNECTION],
+      );
       await tx.query(`delete from inbound_event where connection_id in ($1, $2)`, [
         CONNECTION,
         OTHER_CONNECTION,
@@ -227,6 +248,82 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
     expect(first).toMatchObject({ match: "NEW" });
     // 宛先の接続が違うので打診とは結び付かないが、イベントとしては新規。
     expect(second).toMatchObject({ match: "NEW", senderIdentity: "UNMATCHED" });
+  });
+
+  it("過去の打診への返信が、同じ相手への現在の打診へ紐づかない", async () => {
+    // 案件Aを終わらせ、同じスタッフへ案件Bで打診する。スタッフ画面にはAのカードも
+    // 残るので、Aのカードから返信され得る。
+    const oldCaseId = caseId;
+    const oldOutreachId = outreachId;
+    const oldMessageId = offerMessageId;
+
+    const newCaseId = randomUUID();
+    const newOutreachId = randomUUID();
+    const newMessageId = randomUUID();
+    await withTransaction(async (tx) => {
+      await tx.query(`update absence_case set state = 'CANCELLED' where case_id = $1`, [oldCaseId]);
+      await tx.query(
+        `insert into absence_case
+           (case_id, store_id, connection_id, schedule_id, business_date,
+            absent_shift_assignment_id, absent_staff_id, role_code,
+            required_start_at, required_end_at, deadline_at, state, run_id)
+         values ($1, $2, $3, $4, '2026-09-27', $5, $6, 'FLOOR',
+                 '2026-09-27T12:00:00+09:00', '2026-09-27T16:00:00+09:00',
+                 '2026-09-27T10:00:00+09:00', 'COORDINATING', 'run-inbound-2')`,
+        [newCaseId, storeId, CONNECTION, scheduleId, absentShift, otherStaffId],
+      );
+      await tx.query(
+        `insert into outreach
+           (outreach_id, case_id, staff_id, endpoint_provider, endpoint_connection_id,
+            endpoint_key, endpoint_version, offered_start_at, offered_end_at,
+            state, anonymous_staff_ref)
+         values ($1, $2, $3, 'mock', $4, $5, 1,
+                 '2026-09-27T12:00:00+09:00', '2026-09-27T16:00:00+09:00',
+                 'AWAITING_REPLY', 'staff-1')`,
+        [newOutreachId, newCaseId, staffId, CONNECTION, endpointKey],
+      );
+      await tx.query(
+        `insert into outreach_message (message_id, case_id, outreach_id, direction, kind, body)
+         values ($1, $2, $3, 'OUTBOUND', 'INITIAL_OFFER', '打診B')`,
+        [newMessageId, newCaseId, newOutreachId],
+      );
+    });
+
+    // 旧案件のカードから返信する。宛先は同じ。
+    const result = await receive(event({ inReplyToMessageId: oldMessageId }));
+    expect(result).toMatchObject({ ok: true, caseId: oldCaseId });
+
+    const linked = await withTransaction((tx) =>
+      tx.query<{ outreach_id: string }>(
+        "select outreach_id from inbound_event where case_id = $1",
+        [oldCaseId],
+      ),
+    );
+    // 新しい案件の打診へ付け替わっていないこと。
+    expect(linked.rows[0]?.outreach_id).toBe(oldOutreachId);
+    expect(linked.rows[0]?.outreach_id).not.toBe(newOutreachId);
+
+    await withTransaction(async (tx) => {
+      await tx.query("delete from inbound_event where case_id = $1", [newCaseId]);
+      await tx.query("delete from outreach_message where case_id = $1", [newCaseId]);
+      await tx.query("delete from outreach where case_id = $1", [newCaseId]);
+      await tx.query("delete from absence_case where case_id = $1", [newCaseId]);
+    });
+  });
+
+  it("返信対象を持たない受信は、本人と確認できないものとして扱う", async () => {
+    const result = await receive(event({ inReplyToMessageId: undefined }));
+    expect(result).toMatchObject({ ok: true, senderIdentity: "UNMATCHED" });
+    expect(result.ok && result.caseId).toBeUndefined();
+  });
+
+  it("返信対象は合うが宛先が違う受信を、本人とみなさない（A15）", async () => {
+    const result = await receive(
+      event({
+        from: { provider: "mock", connectionId: CONNECTION, endpointKey, endpointVersion: 9 },
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, senderIdentity: "UNMATCHED" });
   });
 
   it("A15：宛先の版が変わっていれば本人と確認できない。受信は捨てずに残す", async () => {

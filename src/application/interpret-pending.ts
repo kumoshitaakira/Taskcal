@@ -1,48 +1,79 @@
 /**
  * 未処理の返信を1件だけ解釈する（workerの1ステップ）。
  *
- * **モデルが未設定なら何もしない。** 未設定のまま回すと、1件ごとに
- * `NOT_CONFIGURED` を記録し続けることになる。未設定であることは
- * `/api/health` と画面の「未実装」に出ているので、ここでは静かに止まる。
+ * **「適用していない」と「これ以上自動では進められない」を分ける。**
+ * 解釈が失敗しても受信順は進めない（適用していないものを適用済みにしないため：A12）。
+ * しかしそれだけだと、同じ受信を毎ティック選び直し、後ろに並んだ他のスタッフの返信を
+ * 永久に処理できない。失敗した受信は保留の印を付けて取り出し対象から外す。
  *
- * 取り出しは受信順の昇順。古い返信から順に適用する（RFC-011 §4）。
+ * **モデルが未設定でも呼ぶ。** `UnconfiguredModelGateway` は保存済み結果を再生する。
+ * 呼び出す前に設定を見て止めると、課金済みで保存された結果が永久に適用されない。
+ * 新規の呼出しはgateway側が `NOT_CONFIGURED` で止める。
  */
 
 import "server-only";
 import { withTransaction } from "../adapters/db/transaction";
 import type { ModelGateway } from "../adapters/orca/model-gateway";
+import { ERROR_CODES, type ErrorCode } from "../contracts/errors";
+import type { InboundEventRepository, InterpretationApplication } from "../contracts/repository";
 import type { interpretReply } from "./interpret-reply";
 
 export interface InterpretPendingDeps {
   readonly model: ModelGateway;
+  readonly inbound: InboundEventRepository;
   readonly interpret: ReturnType<typeof interpretReply>;
 }
 
 export type InterpretPendingOutcome =
-  | { readonly handled: false; readonly reason: "NOT_CONFIGURED" | "NONE" }
-  | { readonly handled: true; readonly inboundEventId: string };
+  | { readonly handled: false; readonly reason: "NONE" }
+  | {
+      readonly handled: true;
+      readonly inboundEventId: string;
+      readonly applied: InterpretationApplication;
+    }
+  | {
+      readonly handled: true;
+      readonly inboundEventId: string;
+      /** 自動では進められないので取り出し対象から外した。 */
+      readonly blocked: ErrorCode;
+    };
+
+/**
+ * 設定が戻ったら、設定が理由の保留だけを戻す。
+ *
+ * 他の理由（予算超過・結果不明）は自動で戻さない。**戻す条件が別**で、
+ * 人の判断か照合が要る（未実装）。ここでまとめて戻すと、止めた理由を無視して
+ * 同じ失敗を繰り返す。
+ */
+async function releaseConfigurationBlocks(deps: InterpretPendingDeps): Promise<number> {
+  if (!deps.model.isConfigured()) return 0;
+  return withTransaction((tx) =>
+    deps.inbound.clearBlocked(tx, { reason: ERROR_CODES.NOT_CONFIGURED }),
+  );
+}
 
 export function interpretPending(deps: InterpretPendingDeps) {
+  let releasedOnce = false;
+
   return async function runOnce(): Promise<InterpretPendingOutcome> {
-    if (!deps.model.isConfigured()) return { handled: false, reason: "NOT_CONFIGURED" };
+    if (!releasedOnce) {
+      await releaseConfigurationBlocks(deps);
+      releasedOnce = true;
+    }
 
-    const next = await withTransaction(async (tx) => {
-      const { rows } = await tx.query<{ inbound_event_id: string }>(
-        `select e.inbound_event_id
-           from inbound_event e
-           join outreach o on o.outreach_id = e.outreach_id
-           join absence_case c on c.case_id = e.case_id
-          where e.received_seq > o.last_applied_seq
-            and e.body is not null
-            and c.stopped_at is null
-          order by e.received_seq
-          limit 1`,
-      );
-      return rows[0]?.inbound_event_id;
-    });
+    const next = await withTransaction((tx) => deps.inbound.findNextInterpretable(tx));
+    if (next === "NONE") return { handled: false, reason: "NONE" };
 
-    if (!next) return { handled: false, reason: "NONE" };
-    await deps.interpret({ inboundEventId: next });
-    return { handled: true, inboundEventId: next };
+    const result = await deps.interpret({ inboundEventId: next });
+    if (result.ok) {
+      return { handled: true, inboundEventId: next, applied: result.applied };
+    }
+
+    // 失敗。受信順は進めないが、取り出し対象からは外す。理由を残して後から追える
+    // ようにする。設定が理由の保留は、設定が戻ったときにだけ自動で戻す。
+    await withTransaction((tx) =>
+      deps.inbound.markBlocked(tx, { inboundEventId: next, reason: result.code }),
+    );
+    return { handled: true, inboundEventId: next, blocked: result.code };
   };
 }

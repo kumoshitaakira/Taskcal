@@ -129,10 +129,13 @@ function checkOfferedRange(input: {
     // Q05：日跨ぎは範囲外。黙って同一営業日へ丸めない。
     return { ok: false, reason: CHECK_REJECTION.OUT_OF_SCOPE, detail: "OVERNIGHT" };
   }
-  const minutes = (end - start) / 60_000;
-  if (minutes % TIME_GRANULARITY_MINUTES !== 0) {
+  // **長さだけを見ない。** 18:07〜19:07 は長さ60分で割り切れるが、開始も終了も
+  // 15分の位置に乗っていない。承諾になれば、その時刻の勤務が確定する（Q10）。
+  const onGrid = (at: number) => at % (TIME_GRANULARITY_MINUTES * 60_000) === 0;
+  if (!onGrid(start) || !onGrid(end)) {
     return { ok: false, reason: CHECK_REJECTION.OUT_OF_SCOPE, detail: "GRANULARITY" };
   }
+  const minutes = (end - start) / 60_000;
   if (minutes > MAX_ADDITIONAL_SHIFT_MINUTES) {
     return { ok: false, reason: CHECK_REJECTION.OUT_OF_SCOPE, detail: "TOO_LONG" };
   }
@@ -284,9 +287,8 @@ export function interpretReply(deps: InterpretReplyDeps) {
     //    含む）が無かったことになる（D04・A05・A12）。
     //    このロック順（案件 → 打診）は受信経路と同じにする。逆にするとデッドロックする。
     return withTransaction(async (tx) => {
-      const interpretationId = deps.ids.next();
       const record = {
-        interpretationId,
+        interpretationId: deps.ids.next(),
         messageId,
         inboundEventId: input.inboundEventId,
         receivedSeq: stored.receivedSeq,
@@ -338,7 +340,9 @@ export function interpretReply(deps: InterpretReplyDeps) {
         ? INTERPRETATION_APPLICATION.APPLIED
         : INTERPRETATION_APPLICATION.REJECTED_BY_CHECK;
 
-      await deps.interpretations.save(tx, record, applied);
+      // 同じ受信の再処理では行が既にある。**保存された行のID**を使う——今回作った
+      // IDで承諾を作ると、存在しない解釈を指して外部キー違反になる。
+      const { interpretationId } = await deps.interpretations.save(tx, record, applied);
 
       // 確定後の変更申告は承諾を動かさない。元の勤務を保持して人へ返す（A13）。
       if (afterCommit) {

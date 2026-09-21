@@ -14,7 +14,7 @@
 
 import "server-only";
 import { ERROR_CODES, TaskcalError, type ErrorCode } from "../contracts/errors";
-import type { InboundEvent } from "../contracts/messaging-gateway";
+import type { ContactEndpointRef, InboundEvent } from "../contracts/messaging-gateway";
 import {
   resolveOutreachAfterInbound,
   SENDER_IDENTITY,
@@ -61,6 +61,16 @@ function summarize(stored: PersistInboundResult, identity: SenderIdentity) {
       };
 }
 
+/** 宛先が丸ごと一致するか。provider・接続・キー・版のどれが欠けても本人とみなさない。 */
+function sameEndpoint(a: ContactEndpointRef, b: ContactEndpointRef): boolean {
+  return (
+    a.provider === b.provider &&
+    a.connectionId === b.connectionId &&
+    a.endpointKey === b.endpointKey &&
+    a.endpointVersion === b.endpointVersion
+  );
+}
+
 export function receiveInboundEvent(deps: ReceiveInboundEventDeps) {
   return async function run(event: InboundEvent): Promise<ReceiveInboundEventResult> {
     if (!event.eventId || !event.provider || !event.connectionId) {
@@ -72,10 +82,24 @@ export function receiveInboundEvent(deps: ReceiveInboundEventDeps) {
     }
 
     return withTransaction(async (tx) => {
-      const outreach = await deps.outreaches.findByEndpoint(tx, event.from);
+      // 返信対象の不変参照から打診を引く（RFC-011 §3）。
+      //
+      // **宛先だけで逆引きしない。** 同じ相手へ過去の案件でも打診していると、
+      // 古い打診への返信を現在の案件の承諾として扱ってしまう。スタッフ画面には
+      // 過去のメッセージも残るので、実際に起こり得る。
+      const target = event.inReplyToMessageId
+        ? await deps.outreaches.findByRepliedMessage(tx, event.inReplyToMessageId)
+        : "NOT_FOUND";
+
+      // 対象が引けても、宛先が打診時に固定したものと**丸ごと**一致しなければ
+      // 本人とは言えない（A15）。版まで見る。
+      const outreach =
+        target !== "NOT_FOUND" && sameEndpoint(target.endpoint, event.from) ? target : "NOT_FOUND";
+
       const identity: SenderIdentity =
         outreach === "NOT_FOUND"
-          ? SENDER_IDENTITY.UNMATCHED
+          ? // 対象を特定できない返信。記録はするが承諾には使わない。
+            SENDER_IDENTITY.UNMATCHED
           : SENDER_IDENTITY.VERIFIED_OUTREACH_TARGET;
 
       const stored = await deps.inbound.persist(tx, event, {

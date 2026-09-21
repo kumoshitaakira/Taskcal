@@ -110,16 +110,18 @@ export function createPgOutreachRepository(): OutreachRepository {
       return row ? toSnapshot(row) : ("NOT_FOUND" as const);
     },
 
-    async findByEndpoint(handle: TxHandle, endpoint: ContactEndpointRef) {
+    async findByRepliedMessage(handle: TxHandle, messageId: string) {
       const tx = handle as Tx;
-      // 版まで一致した場合だけ返す。版が違えば「この打診の宛先本人」とは言えない（A15）。
+      // 送信したMessageは打診に属する。ここから引けば、同じ相手への過去の打診と
+      // 現在の打診を取り違えない（RFC-011 §3）。送信（OUTBOUND）だけを対象にする。
       const { rows } = await tx.query<OutreachRow>(
-        `select ${COLUMNS} from outreach
-          where endpoint_provider = $1 and endpoint_connection_id = $2
-            and endpoint_key = $3 and endpoint_version = $4
-          order by created_at desc
-          limit 1`,
-        [endpoint.provider, endpoint.connectionId, endpoint.endpointKey, endpoint.endpointVersion],
+        `select ${COLUMNS.split(",")
+          .map((column) => `o.${column.trim()}`)
+          .join(", ")}
+           from outreach_message m
+           join outreach o on o.outreach_id = m.outreach_id
+          where m.message_id = $1 and m.direction = 'OUTBOUND'`,
+        [messageId],
       );
       const row = rows[0];
       return row ? toSnapshot(row) : ("NOT_FOUND" as const);

@@ -12,6 +12,7 @@
  */
 
 import type { AdoptionFact, CaseState, Handoff, StopCause } from "./case-state";
+import type { ErrorCode } from "./errors";
 import type { Commitment, CommitmentStatus } from "./commitment";
 import type { ContactEndpointRef, InboundEvent, PersistedInboundEvent } from "./messaging-gateway";
 import type { PersistedReplyInterpretation } from "./model-output";
@@ -148,11 +149,14 @@ export interface OutreachRepository {
   create(tx: TxHandle, input: CreateOutreachInput): Promise<OutreachSnapshot>;
   listByCase(tx: TxHandle, caseId: string): Promise<readonly OutreachSnapshot[]>;
   findById(tx: TxHandle, outreachId: string): Promise<OutreachSnapshot | "NOT_FOUND">;
-  /** 受信イベントの宛先から打診を逆引きする。版まで一致した場合だけ本人とみなす（A15）。 */
-  findByEndpoint(
-    tx: TxHandle,
-    endpoint: ContactEndpointRef,
-  ): Promise<OutreachSnapshot | "NOT_FOUND">;
+  /**
+   * 返信対象の送信Messageから打診を引く（RFC-011 §3）。
+   *
+   * **宛先からの逆引きは用意しない。** 同じ相手へ過去の案件でも打診していると、
+   * どの打診への返信か決められない。対象を特定できない返信は本人と確認できない
+   * ものとして扱う。
+   */
+  findByRepliedMessage(tx: TxHandle, messageId: string): Promise<OutreachSnapshot | "NOT_FOUND">;
   /** `isAllowedOutreachTransition` を通したうえで、期待版と一致する場合だけ更新する。 */
   applyTransition(
     tx: TxHandle,
@@ -205,6 +209,17 @@ export interface InboundEventRepository {
   findById(tx: TxHandle, inboundEventId: string): Promise<PersistedInboundEvent | "NOT_FOUND">;
   /** D04：この打診に、まだ解釈を適用していない受信があるか。 */
   hasUnprocessed(tx: TxHandle, outreachId: string): Promise<boolean>;
+  /**
+   * これ以上自動では進められない受信を、取り出し対象から外す。
+   *
+   * 「適用していない」（受信順が進んでいない）と「自動では進められない」は別。
+   * 前者のまま取り出し続けると、同じ受信を選び直して後続の返信を処理できない。
+   */
+  markBlocked(tx: TxHandle, input: { inboundEventId: string; reason: ErrorCode }): Promise<void>;
+  /** 理由が解消した保留を戻す。戻した件数を返す。 */
+  clearBlocked(tx: TxHandle, input: { reason: ErrorCode }): Promise<number>;
+  /** 解釈できる最も古い受信。受信順の昇順（RFC-011 §4）。 */
+  findNextInterpretable(tx: TxHandle): Promise<string | "NONE">;
 }
 
 /** 解釈を案件へ適用したか。古い結果は保存するが適用しない（A12）。 */
@@ -220,12 +235,18 @@ export type InterpretationApplication =
   (typeof INTERPRETATION_APPLICATION)[keyof typeof INTERPRETATION_APPLICATION];
 
 export interface ReplyInterpretationRepository {
-  /** `receivedSeq` と案件版を必ず持つ。A12 の判定材料になる（RFC-011 §4）。 */
+  /**
+   * `receivedSeq` と案件版を必ず持つ。A12 の判定材料になる（RFC-011 §4）。
+   *
+   * **保存された解釈のIDを返す。** 同じ受信を再処理すると同じ `requestId` になり、
+   * 行は既にある。呼出し元が今回作ったIDをそのまま承諾から参照すると、存在しない
+   * 行を指して外部キー違反になる。承諾は**実際に保存された解釈**を参照する。
+   */
   save(
     tx: TxHandle,
     record: PersistedReplyInterpretation,
     applied: InterpretationApplication,
-  ): Promise<void>;
+  ): Promise<{ readonly interpretationId: string }>;
   /**
    * A12：この打診に対して、より新しい受信を既に適用していないか。
    * `ADVANCED` のときだけ解釈を適用してよい。

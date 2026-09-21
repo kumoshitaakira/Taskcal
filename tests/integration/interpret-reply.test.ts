@@ -94,6 +94,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
   const endpointKey = `staff:${randomUUID()}`;
   let caseId: string;
   let outreachId: string;
+  let offerMessageId: string;
   const now = "2026-09-28T09:00:00+09:00";
 
   const clearCaseData = (tx: Parameters<Parameters<typeof withTransaction>[0]>[0]) =>
@@ -108,6 +109,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
       occurredAt: at,
       receivedAt: at,
       from: { provider: "mock", connectionId: CONNECTION, endpointKey, endpointVersion: 1 },
+      inReplyToMessageId: offerMessageId,
       body,
       channelVerified: false,
     };
@@ -217,6 +219,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
   beforeEach(async () => {
     caseId = randomUUID();
     outreachId = randomUUID();
+    offerMessageId = randomUUID();
     await withTransaction(async (tx) => {
       await clearCaseData(tx);
       await tx.query(
@@ -244,6 +247,11 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
             state, anonymous_staff_ref)
          values ($1, $2, $3, 'mock', $4, $5, 1, $6, $7, 'AWAITING_REPLY', 'staff-1')`,
         [outreachId, caseId, staffId, CONNECTION, endpointKey, OFFER_START, OFFER_END],
+      );
+      await tx.query(
+        `insert into outreach_message (message_id, case_id, outreach_id, direction, kind, body)
+         values ($1, $2, $3, 'OUTBOUND', 'INITIAL_OFFER', '打診')`,
+        [offerMessageId, caseId, outreachId],
       );
     });
   });
@@ -588,6 +596,54 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
       ]),
     );
     expect(events.rows.map((r) => r.kind)).toContain("INTERPRETATION_UNAVAILABLE");
+  });
+
+  it("15分の位置に乗らない時刻を承諾にしない（長さだけを見ない）", async () => {
+    const id = await reply("18時7分から19時7分で");
+    const result = await makeInterpret(
+      createFakeModelGateway({
+        // 長さは60分で15分で割り切れるが、開始も終了も15分の位置ではない。
+        fallback: accepting([
+          { startAt: "2026-09-28T18:07:00+09:00", endAt: "2026-09-28T19:07:00+09:00" },
+        ]),
+      }),
+    )({ inboundEventId: id });
+
+    expect(result).toMatchObject({ applied: "REJECTED_BY_CHECK" });
+    expect(await commitments()).toHaveLength(0);
+  });
+
+  it("古い結果を棄却した後に同じ返信を再処理しても、承諾を作れる", async () => {
+    const id = await reply("大丈夫です");
+    // 1回目：適用の直前に案件版が動き、DISCARDED_STALE で保存される。
+    await interpretWithHook(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+      async () => {
+        await withTransaction((tx) =>
+          tx.query("update absence_case set version = version + 1 where case_id = $1", [caseId]),
+        );
+      },
+    )({ inboundEventId: id });
+    expect(await commitments()).toHaveLength(0);
+
+    // 2回目：requestId が同じなので解釈行は既にある。今回作ったIDで承諾を作ると
+    // 存在しない解釈を指して外部キー違反になる。
+    const again = await makeInterpret(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+    )({ inboundEventId: id });
+
+    expect(again).toMatchObject({ ok: true, applied: "APPLIED" });
+    const rows = await commitments();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("ACTIVE");
+
+    // 解釈の行は増えず、適用結果だけが更新されている。
+    const saved = await withTransaction((tx) =>
+      tx.query<{ applied: string }>("select applied from reply_interpretation where case_id = $1", [
+        caseId,
+      ]),
+    );
+    expect(saved.rows.map((r) => r.applied)).toEqual(["APPLIED"]);
   });
 
   it("同じ受信の再試行は同じ requestId を使う（再送で作り直さない）", async () => {

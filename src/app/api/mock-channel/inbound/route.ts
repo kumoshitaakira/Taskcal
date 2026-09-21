@@ -28,7 +28,10 @@ const bodySchema = z.strictObject({
     endpointKey: z.string().min(1).max(128),
     endpointVersion: z.number().int().positive(),
   }),
-  body: z.string().max(MAX_REPLY_CHARS).optional(),
+  /** 返信対象の送信Message（RFC-011 §3）。無い返信は本人と確認できない扱いになる。 */
+  inReplyToMessageId: z.uuid().optional(),
+  // 空本文を受け取らない。解釈できない受信を作るだけで、保留の記録が増える。
+  body: z.string().min(1).max(MAX_REPLY_CHARS).optional(),
 });
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -61,6 +64,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       occurredAt: parsed.data.occurredAt ?? now,
       receivedAt: now,
       from: parsed.data.from,
+      inReplyToMessageId: parsed.data.inReplyToMessageId,
       body: parsed.data.body,
       // 模擬環境なので署名検証は行っていない。本人確認でもない。
       channelVerified: false,

@@ -26,8 +26,17 @@ export async function submitReplyAction(formData: FormData): Promise<void> {
   const endpointVersion = Number(formData.get("endpointVersion") ?? 0);
   // イベントIDはフォームが描画時に作る。二重送信が同じ受信イベントになる（A15）。
   const eventId = String(formData.get("eventId") ?? "");
+  const inReplyToMessageId = String(formData.get("inReplyToMessageId") ?? "");
 
-  if (!body || !provider || !connectionId || !endpointKey || !endpointVersion || !eventId) {
+  if (
+    !body ||
+    !provider ||
+    !connectionId ||
+    !endpointKey ||
+    !endpointVersion ||
+    !eventId ||
+    !inReplyToMessageId
+  ) {
     back(NOTICE.INPUT_MISSING);
   }
   if (body.length > MAX_REPLY_CHARS) back(NOTICE.REPLY_TOO_LONG);
@@ -41,6 +50,7 @@ export async function submitReplyAction(formData: FormData): Promise<void> {
     occurredAt: now,
     receivedAt: now,
     from: { provider, connectionId, endpointKey, endpointVersion },
+    inReplyToMessageId,
     body,
     // 模擬環境なので署名検証は行っていない。本人確認でもない。
     channelVerified: false,

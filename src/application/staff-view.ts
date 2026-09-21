@@ -11,6 +11,8 @@ import { withTransaction } from "../adapters/db/transaction";
 
 export interface InboxItemView {
   readonly inboxItemId: string;
+  /** 返信対象の不変参照（RFC-011 §3）。どの打診への返信かをこれで決める。 */
+  readonly messageId: string;
   readonly body: string;
   readonly receivedAt: string;
   readonly outreachId?: string;
@@ -42,6 +44,7 @@ export async function getStaffViews(): Promise<readonly StaffView[]> {
     for (const row of staff.rows) {
       const inbox = await tx.query<{
         inbox_item_id: string;
+        message_id: string;
         body: string;
         created_at: Date;
         outreach_id: string | null;
@@ -50,7 +53,7 @@ export async function getStaffViews(): Promise<readonly StaffView[]> {
         endpoint_key: string | null;
         endpoint_version: number | null;
       }>(
-        `select i.inbox_item_id, i.body, i.created_at, i.outreach_id,
+        `select i.inbox_item_id, i.message_id, i.body, i.created_at, i.outreach_id,
                 o.endpoint_provider, o.endpoint_connection_id,
                 o.endpoint_key, o.endpoint_version
            from mock_inbox_item i
@@ -75,6 +78,7 @@ export async function getStaffViews(): Promise<readonly StaffView[]> {
         name: row.display_name,
         inbox: inbox.rows.map((item) => ({
           inboxItemId: item.inbox_item_id,
+          messageId: item.message_id,
           body: item.body,
           receivedAt: item.created_at.toISOString(),
           outreachId: item.outreach_id ?? undefined,
