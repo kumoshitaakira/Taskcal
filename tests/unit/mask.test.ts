@@ -45,6 +45,29 @@ describe("送信前のマスク（RFC-004 §5 / ADR-008）", () => {
     }
   });
 
+  /**
+   * 過剰マスクの回帰検査。
+   *
+   * 電話番号・URLの順に、同じ「後続の日本語まで取り込む」欠陥を2回作った。
+   * ルールを足したら必ずここへ勤務条件つきの例を足すこと。
+   */
+  it("どのルールも、直後に続く勤務条件を巻き込まない", () => {
+    const cases: [string, string][] = [
+      // [入力, マスク後に必ず残っていてほしい部分]
+      ["詳細はhttps://example.com。18時から22時まで入れます", "18時から22時まで入れます"],
+      ["https://example.com、19時からなら行けます", "19時からなら行けます"],
+      ["（https://example.com）を見て", "を見て"],
+      ["https://x.test/a です。19時から", "です。19時から"],
+      ["080-1234-5678 です。19時から行けます", "です。19時から行けます"],
+      ["taro@example.com。18時から", "。18時から"],
+      ["LINE ID: taro_123。19時から", "。19時から"],
+      ["@taro_123 19時から行けます", "19時から行けます"],
+    ];
+    for (const [input, mustKeep] of cases) {
+      expect(maskContactInfo(input).text, input).toContain(mustKeep);
+    }
+  });
+
   it("決定的に動く（同じ入力からは同じ出力）", () => {
     const text = "080-1234-5678 と taro@example.com";
     expect(maskContactInfo(text).text).toBe(maskContactInfo(text).text);

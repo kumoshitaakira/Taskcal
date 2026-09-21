@@ -53,6 +53,29 @@ export interface SendPayloadForHash {
   readonly body: string;
 }
 
+/**
+ * 送信しなかった理由。
+ *
+ * **いずれも外部作用は起きていない。** 失敗（`DeliveryState.FAILED`）とは別で、
+ * 再試行の判断が変わる。
+ */
+export const SEND_REFUSAL = {
+  /** 打診時に固定した宛先版と、現在の宛先が一致しない（A15）。 */
+  ENDPOINT_CHANGED: "ENDPOINT_CHANGED",
+  /** 送信直前の時点で連絡許可が無い（RFC-011 §6）。 */
+  NOT_PERMITTED: "NOT_PERMITTED",
+  /** 同じ operationId で内容が異なる（D07）。 */
+  CONFLICT: "CONFLICT",
+} as const;
+
+export type SendRefusal = (typeof SEND_REFUSAL)[keyof typeof SEND_REFUSAL];
+
+export interface SendRefused {
+  readonly refused: SendRefusal;
+  /** 表示用の短い理由。原文や秘密値を入れない。 */
+  readonly detail?: string;
+}
+
 export interface SendResult {
   /**
    * 保存されていた操作の参照。**`requestHash` を含めて返す。**
@@ -66,9 +89,9 @@ export interface SendResult {
    * 新規送信か、同じ operationId・同じ内容による再生か。
    * 区別できないと、打診数・確認数・通知数の指標が水増しされる（RFC-011 §7）。
    *
-   * `CONFLICT` は同じキーで内容が異なる要求。**送信していない。**
+   * 内容が異なる要求は `SendRefused`（`CONFLICT`）で返す。ここには現れない。
    */
-  readonly match: "NEW" | "REPLAY" | "CONFLICT";
+  readonly match: "NEW" | "REPLAY";
   /** 送信先が返した識別子。照会に使う。 */
   readonly providerMessageId?: string;
   readonly detail?: string;
@@ -126,11 +149,19 @@ export interface MessagingGateway {
   /**
    * 送信する。
    *
+   * **宛先の検査は、この操作の内部で外部作用の直前に行う。**
+   * `verifyEndpoint` を先に呼んで `MATCHES` を得ても、その後に宛先の版や連絡許可が
+   * 変わり得る。検査と送信を別の操作にすると、その間が競合窓になり、旧宛先へ
+   * 送ってしまう（A15、RFC-011 §6）。`send` は `command.to.endpointVersion` を
+   * 現在の宛先と照合し、連絡許可も確認してから送る。
+   *
+   * 不一致・不許可・内容不一致は `SendRefused` を返す。**いずれも送信していない。**
+   * 配送の失敗（`DeliveryState.FAILED`）とは区別する。
+   *
    * 同じ `operationId` で `requestHash` が一致すれば、再送せず保存済み結果を
-   * `REPLAY` として返す。一致しなければ `CONFLICT` を返し、**送信しない**。
-   * モデル呼出し側（`src/adapters/orca`）と同じ規則。
+   * `REPLAY` として返す。モデル呼出し側（`src/adapters/orca`）と同じ規則。
    */
-  send(command: SendCommand): Promise<SendResult>;
+  send(command: SendCommand): Promise<SendResult | SendRefused>;
   /**
    * 送信結果の照会。ACCEPTED は受付であり到達の保証ではない。
    *
@@ -146,8 +177,11 @@ export interface MessagingGateway {
     expectedRequestHash?: RequestHash;
   }): Promise<SendResult | "LOOKUP_UNAVAILABLE" | "CONFLICT">;
   /**
-   * 宛先が現在も同じ相手を指すかを検査する。MATCHES 以外は送信しない。
-   * 送信直前の連絡許可は別途検査する（RFC-011 §6）。
+   * 宛先が現在も同じ相手を指すかを検査する。
+   *
+   * **これは送信の前提条件ではなく、画面表示・診断のための照会。**
+   * ここで `MATCHES` を得ても、送信までの間に変わり得る。送信の安全は `send`
+   * 自身の再検査で担保する（上記）。この結果を根拠に `send` の検査を省かない。
    */
   verifyEndpoint(ref: ContactEndpointRef): Promise<EndpointCheck>;
 }

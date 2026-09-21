@@ -46,7 +46,15 @@ const SIMPLE_RULES: {
     token: "[メールアドレス]",
   },
   // URL。宛先や外部サービスのIDが含まれ得る。
-  { kind: "url", pattern: /https?:\/\/\S+/g, token: "[URL]" },
+  //
+  // **日本語の句読点・括弧でも終端させる。** `\S+` だと、URLの直後に空白を置かず
+  // 日本語が続く返信（`詳細はhttps://example.com。18時から22時まで入れます`）で、
+  // 後続の勤務条件まで取り込んで消してしまう。過剰マスクは検知漏れより悪い。
+  {
+    kind: "url",
+    pattern: /https?:\/\/[^\s、。，．；：！？「」『』（）〔〕【】〈〉《》…・\u3000]+/g,
+    token: "[URL]",
+  },
   // LINE ID 等のアカウント表記。前置きのある形と、独立した @英数字 の両方。
   {
     kind: "accountId",
@@ -94,9 +102,12 @@ export function maskContactInfo(text: string): MaskResult {
 
   let result = text;
   for (const rule of SIMPLE_RULES) {
-    result = result.replace(rule.pattern, () => {
+    result = result.replace(rule.pattern, (match) => {
+      // 文末の記号までURLへ取り込まない。`https://x.test/a です。` の `。` など。
+      const trimmed = rule.kind === "url" ? match.replace(/[.,;:!?)\]]+$/, "") : match;
+      const tail = match.slice(trimmed.length);
       summary[rule.kind] += 1;
-      return rule.token;
+      return rule.token + tail;
     });
   }
   result = result.replace(PHONE_CANDIDATE, (candidate) => {
