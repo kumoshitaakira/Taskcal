@@ -53,9 +53,10 @@ npm run worker                 # 別ターミナルで常駐worker（送信と�
 
 画面：`/`（導線）、`/manager`（店長）、`/staff`（スタッフ役）、`/api/health`（起動状態のJSON）。
 
-`npm run seed:dev` が入れるのは**架空データで、CSVの取込みではありません**。正規化・安定IDの
-往復・月内完全性の検査（担当B）は未実装で、`authoritative_schedule_ref.source_revision` にも
-CSVの内容hashではなくseedの目印が入ります。取込み済みと読まないでください。
+`npm run seed:dev` が入れるのは**架空データで、CSVの取込みではありません**。担当Bの
+`parseMonthlyCsv`（正規化・安定ID・月内完全性）は入っていますが、アプリのDB・画面へは
+まだ繋がっていません（`ScheduleGateway` 本体が未実装）。`authoritative_schedule_ref.source_revision`
+にもCSVの内容hashではなくseedの目印が入ります。取込み済みと読まないでください。
 
 初期状態へ戻す（データを消す）：
 
@@ -156,7 +157,7 @@ Day 2で承諾（Commitment）・選定結果・打診の遷移・永続化の�
 
 | 未達 | 理由 |
 |---|---|
-| CSVを読んで画面表示、並べ替え後も同じ勤務IDを維持（A06） | 担当BのCSV実装が未merge。現在の勤務表は `npm run seed:dev` の架空データ |
+| CSVを読んで画面表示（A06のID往復はBのCLIと単体テストで確認済み） | 担当Bの `parseMonthlyCsv` は入ったが、`ScheduleGateway` 本体と画面・DBへの接続は未実装。画面が読む勤務表は `npm run seed:dev` が入れた架空データで、**CSVから往復したものではない** |
 | 適格性の検査（可能時間・月次上限・勤務の重複） | 担当B。打診の候補は**名簿だけ**で選んでいる。正式採用の直前の再検査は `NOT_IMPLEMENTED` を投げる |
 | 候補選定・勤務計画の決定（A16・A17） | 担当B |
 | 返信解釈の実行、実推論1回のモデル・費用状態の保存 | OrcaRouterの接続情報と金額予算が未取得。**模擬結果は返しません** |

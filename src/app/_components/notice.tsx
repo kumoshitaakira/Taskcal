@@ -73,7 +73,7 @@ const BAD: readonly NoticeCode[] = [
  * **`value in TEXT` にしない。** `in` は prototype chain を見るため、`toString` や
  * `__proto__` が「既知のコード」として通る。`/manager?n=toString` で緑の成功バッジと
  * `[object Object]` が出たり、描画が落ちたりする。URLから任意の表示を作らせない
- * （ADR-023）ための照合なので、自身のキーだけを見る。
+ * （ADR-024）ための照合なので、自身のキーだけを見る。
  */
 const KNOWN: ReadonlySet<string> = new Set(Object.values(NOTICE));
 

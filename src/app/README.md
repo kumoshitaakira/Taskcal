@@ -4,7 +4,7 @@
 
 ## 状態変更の入口は Server Action
 
-[ADR-023](../../docs/adr/ADR-023-server-action-entry.md)。
+[ADR-024](../../docs/adr/ADR-024-server-action-entry.md)。
 
 サーバーコンポーネントが描画時に操作IDを作り、`<input type="hidden" name="operationId">`
 へ埋める。二重クリック・再読込・戻る操作は同じフォームを再送するため、すべて同じ操作IDに
