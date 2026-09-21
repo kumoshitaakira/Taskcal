@@ -11,6 +11,7 @@
     "start": "next start",
     "worker": "tsx src/worker/main.ts",
     "migrate": "tsx scripts/migrate.ts",
+    "seed:dev": "tsx scripts/seed-dev.ts",
     "check:orca": "tsx scripts/check-orca.ts",
     "check:consistency": "tsx scripts/check-consistency.ts",
     "typecheck": "tsc --noEmit",

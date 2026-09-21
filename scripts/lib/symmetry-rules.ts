@@ -162,6 +162,20 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["tx: TxHandle"],
   },
   {
+    label: "営業日を date 型のまま受け取らない（RFC-009 §5：表示と月境界は店舗timezone）",
+    members: [
+      { name: "const COLUMNS", file: "src/adapters/db/case-repository.ts" },
+      {
+        name: "export function createPgScheduleReadRepository",
+        file: "src/adapters/db/schedule-repository.ts",
+      },
+      { name: "export function createAbsenceCase", file: "src/application/create-absence-case.ts" },
+    ],
+    // node-pg は date 列をローカル深夜の Date にする。JST では toISOString() が
+    // 前日になり、営業日が1日ずれる。SQL側で文字列にして受け取る。
+    mustContain: ["to_char("],
+  },
+  {
     label: "送信は未送信（SendRefused）と配送失敗を区別する（A15 / RFC-011 §6）",
     members: [{ name: "async send", file: "src/adapters/channel/mock-inbox.ts" }],
     // 3つの拒否理由をすべて扱う。いずれも外部作用が起きていないので、
