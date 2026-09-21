@@ -8,7 +8,11 @@
 
 import "server-only";
 import type { AdoptionFact, CaseState } from "../contracts/case-state";
-import type { CommitmentStatus } from "../contracts/commitment";
+import {
+  isSelectableCommitment,
+  type CommitmentBlockReason,
+  type CommitmentStatus,
+} from "../contracts/commitment";
 import type {
   DeliveryState,
   OutreachMessageKind,
@@ -27,6 +31,12 @@ export interface OutreachView {
   /** 未送信の理由。配送失敗と区別する。 */
   readonly refusal?: string;
   readonly commitmentStatus?: CommitmentStatus;
+  /**
+   * D04：この承諾を選定へ出せるか。**status だけで決めない。**
+   * 未処理の新しい返信・置き換え・期限も見る（A05）。
+   */
+  readonly selectable: boolean;
+  readonly blockReason?: CommitmentBlockReason;
   readonly lastReceivedSeq?: number;
   readonly appliedSeq: number;
   readonly offeredStartAt: string;
@@ -178,7 +188,10 @@ export async function getManagerView(now: string): Promise<ManagerView> {
           requiredEndAt: activeRow.required_end_at.toISOString(),
           deadlineAt: activeRow.deadline_at.toISOString(),
           absentStaffName: activeRow.absent_staff_name,
-          outreaches: await loadOutreaches(tx, activeRow.case_id),
+          outreaches: await loadOutreaches(tx, activeRow.case_id, {
+            deadlineAt: activeRow.deadline_at.toISOString(),
+            now,
+          }),
           outbox: await loadOutbox(tx, activeRow.case_id),
           scheduleUpdates: await loadScheduleUpdates(tx, activeRow.case_id),
           unmatchedInbound: await countUnmatched(tx, activeRow.case_id),
@@ -203,7 +216,11 @@ export async function getManagerView(now: string): Promise<ManagerView> {
 
 type Tx = Parameters<Parameters<typeof withTransaction>[0]>[0];
 
-async function loadOutreaches(tx: Tx, caseId: string): Promise<readonly OutreachView[]> {
+async function loadOutreaches(
+  tx: Tx,
+  caseId: string,
+  at: { deadlineAt: string; now: string },
+): Promise<readonly OutreachView[]> {
   const { rows } = await tx.query<{
     outreach_id: string;
     staff_name: string;
@@ -241,18 +258,34 @@ async function loadOutreaches(tx: Tx, caseId: string): Promise<readonly Outreach
     [caseId],
   );
 
-  return rows.map((row) => ({
-    outreachId: row.outreach_id,
-    staffName: row.staff_name,
-    state: row.state,
-    delivery: row.delivery ?? undefined,
-    refusal: row.refusal ?? undefined,
-    commitmentStatus: row.commitment_status ?? undefined,
-    lastReceivedSeq: row.last_received_seq ? Number(row.last_received_seq) : undefined,
-    appliedSeq: Number(row.last_applied_seq),
-    offeredStartAt: row.offered_start_at.toISOString(),
-    offeredEndAt: row.offered_end_at.toISOString(),
-  }));
+  return rows.map((row) => {
+    const lastReceivedSeq = row.last_received_seq ? Number(row.last_received_seq) : undefined;
+    const appliedSeq = Number(row.last_applied_seq);
+    // D04：承諾が無ければ選定できない。あっても status だけでは決めない。
+    const selectability = row.commitment_status
+      ? isSelectableCommitment({
+          status: row.commitment_status,
+          hasUnprocessedReply: (lastReceivedSeq ?? 0) > appliedSeq,
+          deadlineAt: at.deadlineAt,
+          now: at.now,
+        })
+      : ({ selectable: false, reason: "NOT_ACTIVE" } as const);
+
+    return {
+      outreachId: row.outreach_id,
+      staffName: row.staff_name,
+      state: row.state,
+      delivery: row.delivery ?? undefined,
+      refusal: row.refusal ?? undefined,
+      commitmentStatus: row.commitment_status ?? undefined,
+      selectable: selectability.selectable,
+      blockReason: selectability.selectable ? undefined : selectability.reason,
+      lastReceivedSeq,
+      appliedSeq,
+      offeredStartAt: row.offered_start_at.toISOString(),
+      offeredEndAt: row.offered_end_at.toISOString(),
+    };
+  });
 }
 
 async function loadOutbox(tx: Tx, caseId: string): Promise<readonly OutboxCountView[]> {

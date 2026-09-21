@@ -12,7 +12,7 @@
  */
 
 import type { AdoptionFact, CaseState } from "@/contracts/case-state";
-import type { CommitmentStatus } from "@/contracts/commitment";
+import type { CommitmentBlockReason, CommitmentStatus } from "@/contracts/commitment";
 import type { DeliveryState, OutreachState } from "@/contracts/outreach-state";
 import type { ScheduleUpdateState } from "@/contracts/schedule-update";
 import type { CaseView } from "@/application/case-view";
@@ -146,9 +146,38 @@ export function DeliveryTag({ state, refusal }: { state?: DeliveryState; refusal
   return <span className={DELIVERY_CLASS[state]}>{DELIVERY_LABEL[state]}</span>;
 }
 
-export function CommitmentTag({ status }: { status?: CommitmentStatus }) {
+const BLOCK_LABEL: Record<CommitmentBlockReason, string> = {
+  NOT_ACTIVE: "選定不可",
+  SUPERSEDED: "選定不可（置き換え済み）",
+  UNPROCESSED_REPLY: "選定不可（未処理の返信）",
+  DEADLINE_PASSED: "選定不可（期限切れ）",
+};
+
+/**
+ * 承諾の状態と、選定へ出せるかを**別々に**出す。
+ * `ACTIVE` でも未処理の返信があれば選定できない（D04 / A05）。status だけを見せると、
+ * 選定できない承諾を選定可と読ませてしまう。
+ */
+export function CommitmentTag({
+  status,
+  selectable,
+  blockReason,
+}: {
+  status?: CommitmentStatus;
+  selectable?: boolean;
+  blockReason?: CommitmentBlockReason;
+}) {
   if (!status) return <span className="tag">承諾なし</span>;
-  return <span className={COMMITMENT_CLASS[status]}>{COMMITMENT_LABEL[status]}</span>;
+  return (
+    <span className="tags">
+      <span className={COMMITMENT_CLASS[status]}>{COMMITMENT_LABEL[status]}</span>
+      {selectable ? (
+        <span className="tag tag-ok">選定可</span>
+      ) : blockReason ? (
+        <span className="tag tag-warn">{BLOCK_LABEL[blockReason]}</span>
+      ) : null}
+    </span>
+  );
 }
 
 export function ScheduleUpdateTag({ state }: { state: ScheduleUpdateState }) {
@@ -268,7 +297,11 @@ export function CasePanel({ view, timeZone }: { view: CaseView; timeZone: string
                   <DeliveryTag state={outreach.delivery} refusal={outreach.refusal} />
                 </td>
                 <td>
-                  <CommitmentTag status={outreach.commitmentStatus} />
+                  <CommitmentTag
+                    status={outreach.commitmentStatus}
+                    selectable={outreach.selectable}
+                    blockReason={outreach.blockReason}
+                  />
                 </td>
                 <td>
                   {outreach.lastReceivedSeq ?? "—"}

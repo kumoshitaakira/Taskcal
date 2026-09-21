@@ -99,6 +99,7 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   { name: "resolveOutreachAfterSend", from: ["src/application/send-outbox.ts"] },
   { name: "resolveOutreachAfterInbound", from: ["src/application/receive-inbound-event.ts"] },
   { name: "computeRequestHash", from: ["src/application/start-outreach.ts"] },
+  { name: "isSelectableCommitment", from: ["src/application/case-view.ts"] },
 ];
 
 /** 文書として走査する範囲。 */
