@@ -1,9 +1,9 @@
 /**
  * 常駐worker。担当A（ADR-003：webとworkerは別プロセス・単一DB・同じリリース単位）。
  *
- * 2026-09-21時点の状態：
- *   **ジョブ処理は未実装。** 現在はDB接続とheartbeatの保存だけを行う。
- *   期限処理、outbox送信、受信イベントの処理はDay 2以降に追加する。
+ * 2026-09-22時点の状態：
+ *   通知待ち（outbox）の送信だけを処理する。**期限処理・返信解釈の起動は未実装。**
+ *   返信解釈は画面からの投入で動く（OrcaRouterが未設定なら実行しない）。
  *
  * 設計（RFC-003 §2）：
  *   - 案件状態から1ステップだけ処理し、対象がなければ待機する。
@@ -21,6 +21,8 @@ loadDotenv({ path: ".env", quiet: true });
 
 const WORKER_NAME = "main";
 const TICK_MS = 2_000;
+/** 1ループで処理する通知待ちの上限。無制限にすると停止要求へ反応できない。 */
+const DRAIN_LIMIT = 20;
 
 async function main(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
@@ -45,15 +47,32 @@ async function main(): Promise<void> {
   // 接続できなければ起動しない。黙って空回りさせない。
   await pool.query("select 1");
   process.stdout.write(`worker: 起動 instance=${instanceId}\n`);
-  process.stdout.write(`worker: ジョブ処理は未実装です（heartbeatのみ）。\n`);
+  process.stdout.write("worker: 通知待ちの送信を処理します（期限処理・返信解釈は未実装）。\n");
+
+  const { buildAppServices } = await import("@/application/deps");
+  const services = buildAppServices();
 
   while (running) {
     loopCount += 1;
     await beat(pool, { instanceId, startedAt, loopCount });
 
-    // ここで案件から1ステップ処理する（未実装）。
-    // 対象がなければ待機してループへ戻る。
-    await sleep(TICK_MS, () => running);
+    // 送信できるものがある間は続けて処理し、無くなったら待機する。
+    // 1ループで1件だけにすると、8人への打診に16秒かかる。
+    let drained = 0;
+    while (running && drained < DRAIN_LIMIT) {
+      const outcome = await services.sendOutbox().catch((error: unknown) => {
+        // 1件の失敗でworkerを止めない。次のループで拾い直す。
+        process.stderr.write(
+          `worker: 送信で例外 ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return { handled: false } as const;
+      });
+      if (!outcome.handled) break;
+      drained += 1;
+      process.stdout.write(`worker: 送信 ${outcome.outboxId} -> ${outcome.status}\n`);
+    }
+
+    if (drained === 0) await sleep(TICK_MS, () => running);
   }
 
   await pool.end();

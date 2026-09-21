@@ -16,12 +16,7 @@ import type { Commitment, CommitmentStatus } from "./commitment";
 import type { ContactEndpointRef, InboundEvent, PersistedInboundEvent } from "./messaging-gateway";
 import type { PersistedReplyInterpretation } from "./model-output";
 import type { OperationId, OperationMatch, OperationRef } from "./operation";
-import type {
-  DeliveryState,
-  OutreachMessageKind,
-  OutreachState,
-  SenderIdentity,
-} from "./outreach-state";
+import type { OutreachMessageKind, OutreachState, SenderIdentity } from "./outreach-state";
 import type { ConnectionId, ScheduleId, ShiftAssignmentId } from "./schedule-gateway";
 
 /**
@@ -353,7 +348,7 @@ export interface OutboxRepository {
       leaseToken: string;
       status: OutboxStatus;
       refusal?: string;
-      delivery?: DeliveryState;
+      /** 送信したメッセージ。配送状態そのものは message_delivery が持つ。 */
       messageId?: string;
       retryAfterMs?: number;
     },
