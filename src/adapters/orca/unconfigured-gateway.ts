@@ -13,12 +13,20 @@
 
 import { ERROR_CODES, TaskcalError } from "@/contracts/errors";
 import { modelReplyOutputSchema } from "@/contracts/model-output";
-import type { ModelCallStore } from "./budget";
+import type { BudgetGuard, ModelCallStore } from "./budget";
 import type { InterpretReplyRequest, InterpretReplyResponse, ModelGateway } from "./model-gateway";
 import { InvalidModelOutputError, UnknownOutcomeError } from "./orca-client";
 
 export class UnconfiguredModelGateway implements ModelGateway {
-  constructor(private readonly callStore?: ModelCallStore) {}
+  constructor(
+    private readonly callStore?: ModelCallStore,
+    /**
+     * 再生時の精算に使う。接続情報が無くても、**すでに発生した費用の精算は
+     * 行える**。未精算の予約が残ると、条件を満たしているのに後続の呼出しを
+     * 上限で止めてしまう（D12に反する止まり方）。
+     */
+    private readonly budget?: BudgetGuard,
+  ) {}
 
   isConfigured(): boolean {
     return false;
@@ -42,9 +50,15 @@ export class UnconfiguredModelGateway implements ModelGateway {
       );
     }
 
-    // 以降は OrcaRouterClient の再生経路と同じ判断にする。
-    // 精算は行わない。予算の設定が無い状態で台帳を動かさないため、
-    // 未精算の予約は設定復元後の再実行で解消する。
+    // 保存後・精算前に停止していた可能性がある。OrcaRouterClient の再生経路と
+    // 同じく、保存済みusageで精算をやり直す（settle は requestId で冪等）。
+    await this.budget?.settle({
+      requestId: request.requestId,
+      actualMicroUsd: stored.usage.costMicroUsd,
+      costKind: stored.usage.costKind,
+    });
+
+    // 以降の判断も OrcaRouterClient の再生経路と同じにする。
     if (stored.outcome === "SCHEMA_INVALID") {
       throw new InvalidModelOutputError(
         stored.usage,
@@ -65,6 +79,10 @@ export class UnconfiguredModelGateway implements ModelGateway {
         "保存済みの呼出し結果がschemaに一致しません。人の対応へ回します。",
       );
     }
-    return { output: replayed.data, usage: stored.usage };
+    return {
+      output: replayed.data,
+      usage: stored.usage,
+      maskedReplyText: stored.maskedReplyText,
+    };
   }
 }

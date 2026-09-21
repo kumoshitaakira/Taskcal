@@ -15,6 +15,13 @@ describe("送信前のマスク（RFC-004 §5 / ADR-008）", () => {
     expect(r.summary.phone).toBe(2);
   });
 
+  it("表記ゆれのある連絡先も拾う", () => {
+    expect(maskContactInfo("03-1234-5678").text).toBe("[電話番号]");
+    expect(maskContactInfo("taro＠example.com").text).toBe("[メールアドレス]");
+    expect(maskContactInfo("ライン taro_123").text).toBe("[アカウントID]");
+    expect(maskContactInfo("@taro_123").text).toBe("[アカウントID]");
+  });
+
   it("勤務条件の時刻・日付を壊さない（過剰なマスクは解釈を壊す）", () => {
     for (const text of [
       "18:00から22:00まで大丈夫です",
@@ -23,6 +30,14 @@ describe("送信前のマスク（RFC-004 §5 / ADR-008）", () => {
       "0930から入れます",
       "0時から4時まで",
       "2026-09-21 の18-22時",
+      // NNNN-NNNN の範囲表記。桁数で絞らないと電話番号として消える。
+      "0900-1730 なら大丈夫です",
+      "1700-2200 で入れます",
+      "1月2日 0900-1730",
+      "9:00-17:30 で",
+      // 電話番号ではない数字列。
+      "従業員番号 0012345",
+      "〒060-0001",
     ]) {
       const r = maskContactInfo(text);
       expect(r.masked, text).toBe(false);

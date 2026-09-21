@@ -222,4 +222,10 @@ export interface StoredModelCall {
   readonly output?: unknown;
   /** 使用量。費用の確度を含む。再起動後もここから費用を説明できる。 */
   readonly usage: UsageRecord;
+  /**
+   * モデルへ渡した本文（マスク後）。
+   * `evidenceSpans` の座標系はこの文字列。保存しないと、再起動後に根拠を
+   * 突き合わせられない（RFC-004 §3）。
+   */
+  readonly maskedReplyText: string;
 }

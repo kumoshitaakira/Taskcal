@@ -28,7 +28,10 @@ export type ModelCallStep = (typeof MODEL_CALL_STEP)[keyof typeof MODEL_CALL_STE
 export const VALIDATION_RESULT = {
   VALID: "VALID",
   SCHEMA_INVALID: "SCHEMA_INVALID",
-  /** 呼出しが成立せず、検査に到達していない。 */
+  /**
+   * まだ検査していない。
+   * 呼出しが成立しなかった場合と、検査の前に記録を作った場合の両方を含む。
+   */
   NOT_EVALUATED: "NOT_EVALUATED",
 } as const;
 
@@ -80,6 +83,11 @@ export type RoutingSource = (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE]
 /** 呼出しの終了状態。UNKNOWN を失敗にも成功にも畳まない。 */
 export const CALL_OUTCOME = {
   SUCCEEDED: "SUCCEEDED",
+  /**
+   * 確定した失敗。**MVPでは使わない。**
+   * HTTPエラーでも課金の有無が分からないため UNKNOWN へ寄せる（RFC-004 §7）。
+   * 課金されていないと確認できる経路ができるまで、この値を使わない。
+   */
   FAILED: "FAILED",
   /** タイムアウト・応答喪失など。課金の有無も不明。 */
   UNKNOWN: "UNKNOWN",
@@ -96,7 +104,8 @@ export type CallOutcome = (typeof CALL_OUTCOME)[keyof typeof CALL_OUTCOME];
 export interface UsageRecord {
   /** RFC-004 §8 の `request_id`。呼出し元が永続化した安定ID。再試行で変えない。 */
   readonly requestId: string;
-  readonly caseId?: string;
+  /** RFC-004 §8 の `case_id`。run_id と同格で必須。 */
+  readonly caseId: string;
   /**
    * RFC-004 §8 の `run_id`。デモ・評価の実行単位。
    * `run_spend_limit` をどの残額に対して検査するかを決める（RFC-004 §7）。
@@ -143,7 +152,7 @@ export interface UsageRecord {
  */
 export function unknownChargeUsage(base: {
   requestId: string;
-  caseId?: string;
+  caseId: string;
   runId: string;
   step: ModelCallStep;
   requestedModel?: string;

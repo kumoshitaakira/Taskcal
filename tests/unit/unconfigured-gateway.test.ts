@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelCallStore, StoredModelCall } from "@/adapters/orca/budget";
+import { BudgetGuard, type BudgetLedger } from "@/adapters/orca/budget";
 import { UnconfiguredModelGateway } from "@/adapters/orca/unconfigured-gateway";
 import type { InterpretReplyRequest } from "@/adapters/orca/model-gateway";
 import type { UsageRecord } from "@/adapters/orca/usage";
@@ -12,6 +13,8 @@ const request: InterpretReplyRequest = {
   requestHash: REQUEST_HASH,
   caseId: "case-1",
   runId: "run-1",
+  step: "INTERPRET_REPLY",
+  attempt: 0,
   anonymousStaffRef: "staff-A",
   offer: {
     date: "2026-09-21",
@@ -27,6 +30,7 @@ const request: InterpretReplyRequest = {
 
 const usage: UsageRecord = {
   requestId: "req-1",
+  caseId: "case-1",
   runId: "run-1",
   step: "INTERPRET_REPLY",
   outcome: "SUCCEEDED",
@@ -61,7 +65,39 @@ function storeOf(stored: StoredModelCall | "NO_RESULT"): ModelCallStore {
   };
 }
 
+function budgetRecording(settled: { requestId: string; costKind: string }[]) {
+  const ledger: BudgetLedger = {
+    async tryReserve() {
+      throw new Error("再生経路では予約しない");
+    },
+    async settle(input) {
+      settled.push(input);
+    },
+  };
+  return new BudgetGuard({}, ledger);
+}
+
 describe("UnconfiguredModelGateway", () => {
+  it("再生時に精算をやり直す（未精算の予約で後続を誤って止めない）", async () => {
+    const settled: { requestId: string; costKind: string }[] = [];
+    const gateway = new UnconfiguredModelGateway(
+      storeOf({
+        requestId: "req-1",
+        requestHash: REQUEST_HASH,
+        outcome: "VALID",
+        output: VALID_OUTPUT,
+        usage,
+        maskedReplyText: "19時からなら行けます",
+      }),
+      budgetRecording(settled),
+    );
+
+    await gateway.interpretReply(request);
+    expect(settled).toEqual([
+      { requestId: "req-1", actualMicroUsd: undefined, costKind: "ESTIMATED" },
+    ]);
+  });
+
   it("保存済み結果が無ければ新規呼出しとして止める", async () => {
     const gateway = new UnconfiguredModelGateway(storeOf("NO_RESULT"));
     await expect(gateway.interpretReply(request)).rejects.toMatchObject({
@@ -84,6 +120,7 @@ describe("UnconfiguredModelGateway", () => {
         outcome: "VALID",
         output: VALID_OUTPUT,
         usage,
+        maskedReplyText: "19時からなら行けます",
       }),
     );
     const result = await gateway.interpretReply(request);
@@ -98,6 +135,7 @@ describe("UnconfiguredModelGateway", () => {
         outcome: "VALID",
         output: VALID_OUTPUT,
         usage,
+        maskedReplyText: "19時からなら行けます",
       }),
     );
     await expect(gateway.interpretReply(request)).rejects.toMatchObject({
@@ -112,6 +150,7 @@ describe("UnconfiguredModelGateway", () => {
         requestHash: REQUEST_HASH,
         outcome: "SCHEMA_INVALID",
         usage,
+        maskedReplyText: "19時からなら行けます",
       }),
     );
     await expect(invalid.interpretReply(request)).rejects.toMatchObject({
@@ -124,6 +163,7 @@ describe("UnconfiguredModelGateway", () => {
         requestHash: REQUEST_HASH,
         outcome: "UNKNOWN",
         usage,
+        maskedReplyText: "19時からなら行けます",
       }),
     );
     await expect(unknown.interpretReply(request)).rejects.toMatchObject({

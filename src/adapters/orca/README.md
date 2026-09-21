@@ -21,6 +21,18 @@ OrcaRouter経由の推論。担当A（RFC-012 §3.1）。
   結果が確認できなければ `RECONCILE_REQUIRED` として人の対応へ回す。再送しない。
 - モデルへは、元打診に加えて**現在の承諾と確定状態**を渡す（Q09）。訂正・撤回は
   既存の回答を指すため、これが無いと解釈できない。氏名・連絡先は渡さない。
+- 送信前に連絡先をマスクする（`mask.ts`、RFC-004 §5）。**過剰マスクは検知漏れより
+  悪い。** 勤務時間帯の範囲表記（`1700-2200`）を電話番号として消すと、解釈そのものが
+  成立しない。電話番号は数字の合計桁数（国内10〜11桁）で絞る。
+- `evidenceSpans` の座標系は**マスク後の本文**。原文へそのまま当てない。
+  `InterpretReplyResponse.maskedReplyText` と `StoredModelCall.maskedReplyText` を
+  組で扱い、永続化の直前に `validateEvidenceSpans` で本文長と突き合わせる。
+- `isConfigured() === false` でも `interpretReply` は成功し得る（保存済み結果の再生）。
+  「false なら呼んでも無駄」と判断して縮退しない。
+- RFC-004 §6の修復・昇格（最大1回）は未実装。実装するときは `step` と `attempt` を
+  含めて `requestId` を採番する。同じIDでは `ALREADY_RESERVED` になる。
+- `cost_kind` が `MEASURED` になる経路はまだ無い。単価が未確認のため、実測トークンが
+  取れても `ESTIMATED` 止まり。
 - 実使用モデル・トークン・費用は、実測／推定／取得不能を区別して記録する（`usage.ts`）。
 - タイムアウト・応答喪失は `UnknownOutcomeError`。費用0にも確定失敗にもしない。
   課金不明は `UNKNOWN_CHARGE` とし、**予約を残す**（RFC-004 §7）。

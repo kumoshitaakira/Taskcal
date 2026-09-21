@@ -26,7 +26,7 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
   // 未設定でも callStore は渡す。新規呼出しは止めるが、保存済み結果の再生は
   // 外部呼出しを要さないため許す（設定復元まで復旧を止めない）。
   if (!env.ORCA_BASE_URL || !env.ORCA_API_KEY) {
-    return new UnconfiguredModelGateway(deps.callStore);
+    return new UnconfiguredModelGateway(deps.callStore, replayOnlyBudget(deps));
   }
   if (
     env.ORCA_CASE_SPEND_LIMIT_MICRO_USD === undefined ||
@@ -36,7 +36,7 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
   ) {
     // 接続できても、金額上限または単価が無ければ有料呼出しを開始しない（RFC-004 §7）。
     // 単価が無ければ保守的な見積りを作れず、予約が実費を下回り得る。
-    return new UnconfiguredModelGateway(deps.callStore);
+    return new UnconfiguredModelGateway(deps.callStore, replayOnlyBudget(deps));
   }
 
   return new OrcaRouterClient({
@@ -60,6 +60,16 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
       outputMicroUsdPerKiloToken: env.ORCA_OUTPUT_MICRO_USD_PER_KTOK,
     },
   });
+}
+
+/**
+ * 再生時の精算だけに使う BudgetGuard。
+ *
+ * 上限は未設定でよい。`reserve` は呼ばないため検査に到達しない。
+ * すでに発生した費用の精算は、接続情報や上限の設定が無くても行える。
+ */
+function replayOnlyBudget(deps: ModelGatewayDeps): BudgetGuard {
+  return new BudgetGuard({}, deps.ledger);
 }
 
 export * from "./budget";

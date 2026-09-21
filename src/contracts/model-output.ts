@@ -135,6 +135,25 @@ export interface ReplyFixtureInput {
 export type ModelReplyOutput = z.infer<typeof modelReplyOutputSchema>;
 
 /**
+ * 根拠の位置が、対象本文に収まっているか検査する（RFC-004 §3）。
+ *
+ * `evidenceSpans` は**モデルへ渡した本文**（マスク後）のインデックス。原文へ
+ * そのまま当てない。schema側では `end >= start` しか見られないため、本文長との
+ * 突き合わせはここで行う。解釈を永続化する直前に必ず通す。
+ */
+export function validateEvidenceSpans(
+  interpretation: ReplyInterpretation,
+  maskedReplyText: string,
+): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
+  for (const span of interpretation.evidenceSpans) {
+    if (span.end > maskedReplyText.length) {
+      return { ok: false, reason: "根拠の位置が本文の範囲を超えています。" };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * 永続化する解釈（RFC-011 §4）。
  *
  * モデル出力そのものには `staffId` を持たせない（D03）。採用時の追跡に必要な
@@ -152,6 +171,11 @@ export interface PersistedReplyInterpretation {
   /** この解釈を生んだモデル呼出し（RFC-004 §8 の `request_id`）。 */
   readonly requestId: string;
   readonly output: ModelReplyOutput;
+  /**
+   * モデルへ渡した本文（マスク後）。`output` の `evidenceSpans` はこの座標系。
+   * 原文を保存する場合も、根拠の突き合わせはこちらで行う。
+   */
+  readonly maskedReplyText: string;
 }
 
 /** schema版。プロンプトと併せて版管理する（RFC-004 §末尾）。 */

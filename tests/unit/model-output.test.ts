@@ -3,6 +3,7 @@ import {
   MODEL_OUTPUT_SCHEMA_VERSION,
   modelReplyOutputJsonSchema,
   modelReplyOutputSchema,
+  validateEvidenceSpans,
 } from "@/contracts/model-output";
 
 describe("モデル出力の契約（RFC-011 §3 / ADR-004）", () => {
@@ -59,6 +60,47 @@ describe("モデル出力の契約（RFC-011 §3 / ADR-004）", () => {
         unresolvedConditions: [],
         evidenceSpans: [],
       },
+      proposedAction: "NO_ACTION",
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("根拠の位置の検査（RFC-004 §3）", () => {
+  const base = {
+    extractionRuleVersion: "v1",
+    intent: "ACCEPT" as const,
+    offeredRanges: [],
+    unresolvedConditions: [],
+  };
+
+  it("本文の範囲内なら通す", () => {
+    const r = validateEvidenceSpans(
+      { ...base, evidenceSpans: [{ start: 0, end: 5 }] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("本文の範囲を超える根拠を拒否する", () => {
+    const r = validateEvidenceSpans(
+      { ...base, evidenceSpans: [{ start: 0, end: 11 }] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("端（end === 本文長）は通す", () => {
+    const r = validateEvidenceSpans(
+      { ...base, evidenceSpans: [{ start: 0, end: 10 }] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("逆転した範囲はschemaで弾く", () => {
+    const parsed = modelReplyOutputSchema.safeParse({
+      interpretation: { ...base, evidenceSpans: [{ start: 5, end: 2 }] },
       proposedAction: "NO_ACTION",
     });
     expect(parsed.success).toBe(false);

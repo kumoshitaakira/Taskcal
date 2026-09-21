@@ -142,13 +142,13 @@ async function checkDatabase(configured: boolean): Promise<RuntimeStatus["databa
   try {
     comparison = compareMigrations(await loadMigrationFiles(), applied);
   } catch (error) {
+    // 原因はサーバー側のログにだけ残す。HTTPで返る値には、サーバー上の絶対パスを
+    // 含み得るエラー文を出さない（ADR-008：不要な情報をUIへ出さない）。
+    console.error("[runtime-status] migrationファイルを読めません", error);
     return {
       status: "UNAVAILABLE",
       appliedMigrations: applied.length,
       latestMigration: applied.at(-1)?.id ?? null,
-      // HTTPで返る値なので、サーバー上の絶対パスを含み得るエラー文をそのまま
-      // 出さない（ADR-008：不要な情報をUIへ出さない）。詳しい原因はサーバーの
-      // ログで確認する。
       detail: "migrationファイルを読めません（番号の重複・欠落を確認してください）",
     };
   }

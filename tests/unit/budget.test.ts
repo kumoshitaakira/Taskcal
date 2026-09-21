@@ -11,8 +11,10 @@ import { COST_KIND, MICRO_USD_PER_USD, type CostKind, type MicroUsd } from "@/ad
 import { ERROR_CODES } from "@/contracts/errors";
 
 interface LedgerState {
-  caseSpend: MicroUsd;
-  runSpend: MicroUsd;
+  /** 案件ごとの消費。全体を1つに丸めない。 */
+  caseSpend: Map<string, MicroUsd>;
+  /** runごとの消費。run が変われば残額は独立する（RFC-004 §7）。 */
+  runSpend: Map<string, MicroUsd>;
   calls: number;
   reserved: Map<string, { micro: MicroUsd; hash: string }>;
   settled: { requestId: string; actualMicroUsd?: MicroUsd; costKind: CostKind }[];
@@ -32,18 +34,20 @@ function ledgerOf(state: LedgerState): BudgetLedger & { seenLimits: RequiredBudg
           : RESERVATION_RESULT.HASH_MISMATCH;
       }
       if (state.calls + 1 > limits.caseCallLimit) return RESERVATION_RESULT.EXCEEDED_CALLS;
-      if (state.caseSpend + reservation.estimatedMicroUsd > limits.caseSpendLimitMicroUsd) {
+      const caseSpent = state.caseSpend.get(reservation.caseId) ?? 0;
+      if (caseSpent + reservation.estimatedMicroUsd > limits.caseSpendLimitMicroUsd) {
         return RESERVATION_RESULT.EXCEEDED_CASE_SPEND;
       }
-      if (state.runSpend + reservation.estimatedMicroUsd > limits.runSpendLimitMicroUsd) {
+      const runSpent = state.runSpend.get(reservation.runId) ?? 0;
+      if (runSpent + reservation.estimatedMicroUsd > limits.runSpendLimitMicroUsd) {
         return RESERVATION_RESULT.EXCEEDED_RUN_SPEND;
       }
       state.reserved.set(reservation.requestId, {
         micro: reservation.estimatedMicroUsd,
         hash: reservation.requestHash,
       });
-      state.caseSpend += reservation.estimatedMicroUsd;
-      state.runSpend += reservation.estimatedMicroUsd;
+      state.caseSpend.set(reservation.caseId, caseSpent + reservation.estimatedMicroUsd);
+      state.runSpend.set(reservation.runId, runSpent + reservation.estimatedMicroUsd);
       state.calls += 1;
       return RESERVATION_RESULT.RESERVED;
     },
@@ -55,8 +59,8 @@ function ledgerOf(state: LedgerState): BudgetLedger & { seenLimits: RequiredBudg
 
 function emptyState(overrides: Partial<LedgerState> = {}): LedgerState {
   return {
-    caseSpend: 0,
-    runSpend: 0,
+    caseSpend: new Map(),
+    runSpend: new Map(),
     calls: 0,
     reserved: new Map(),
     settled: [],
@@ -108,7 +112,13 @@ describe("BudgetGuard（RFC-004 §7 / ADR-007 / Q10）", () => {
   it("案件の金額上限（case_spend_limit）を超える予約を拒否する", async () => {
     const guard = new BudgetGuard(
       { caseSpendLimitMicroUsd: 6_000, runSpendLimitMicroUsd: MICRO_USD_PER_USD },
-      ledgerOf(emptyState({ caseSpend: 3_000, runSpend: 3_000, calls: 1 })),
+      ledgerOf(
+        emptyState({
+          caseSpend: new Map([["c1", 3_000]]),
+          runSpend: new Map([["run-1", 3_000]]),
+          calls: 1,
+        }),
+      ),
     );
     await expect(guard.reserve(reservation)).rejects.toMatchObject({
       code: ERROR_CODES.BUDGET_EXCEEDED,
@@ -118,7 +128,13 @@ describe("BudgetGuard（RFC-004 §7 / ADR-007 / Q10）", () => {
   it("実行全体の金額上限（run_spend_limit）を超える予約を拒否する", async () => {
     const guard = new BudgetGuard(
       { caseSpendLimitMicroUsd: MICRO_USD_PER_USD, runSpendLimitMicroUsd: 6_000 },
-      ledgerOf(emptyState({ caseSpend: 3_000, runSpend: 3_000, calls: 1 })),
+      ledgerOf(
+        emptyState({
+          caseSpend: new Map([["c1", 3_000]]),
+          runSpend: new Map([["run-1", 3_000]]),
+          calls: 1,
+        }),
+      ),
     );
     await expect(guard.reserve(reservation)).rejects.toMatchObject({
       code: ERROR_CODES.BUDGET_EXCEEDED,
@@ -159,7 +175,7 @@ describe("BudgetGuard（RFC-004 §7 / ADR-007 / Q10）", () => {
     // 2回目は ALREADY_RESERVED を返す。これは「呼出してよい」ではない。
     expect(await guard.reserve(reservation)).toBe(RESERVATION_RESULT.ALREADY_RESERVED);
     expect(state.calls).toBe(1);
-    expect(state.caseSpend).toBe(ESTIMATE);
+    expect(state.caseSpend.get("c1")).toBe(ESTIMATE);
   });
 
   it("同じ requestId で内容が異なれば拒否する（D07）", async () => {
@@ -190,7 +206,7 @@ describe("BudgetGuard（RFC-004 §7 / ADR-007 / Q10）", () => {
     ]);
 
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
-    expect(state.caseSpend).toBe(10_000);
+    expect(state.caseSpend.get("c1")).toBe(10_000);
   });
 
   it("課金不明でも精算で予約を取り消さない（0円と扱わない）", async () => {
@@ -203,6 +219,6 @@ describe("BudgetGuard（RFC-004 §7 / ADR-007 / Q10）", () => {
     await guard.settle({ requestId: reservation.requestId, costKind: COST_KIND.UNKNOWN_CHARGE });
 
     expect(state.settled).toEqual([{ requestId: "req-1", costKind: COST_KIND.UNKNOWN_CHARGE }]);
-    expect(state.caseSpend).toBe(ESTIMATE);
+    expect(state.caseSpend.get("c1")).toBe(ESTIMATE);
   });
 });

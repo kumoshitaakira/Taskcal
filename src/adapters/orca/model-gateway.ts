@@ -6,7 +6,7 @@
  */
 
 import type { ModelReplyOutput } from "@/contracts/model-output";
-import type { UsageRecord } from "./usage";
+import type { ModelCallStep, UsageRecord } from "./usage";
 
 export interface InterpretReplyRequest {
   /**
@@ -20,6 +20,20 @@ export interface InterpretReplyRequest {
   readonly requestId: string;
   /** 要求内容のハッシュ。同じIDで内容が異なる要求を検出する（D07）。 */
   readonly requestHash: string;
+  /**
+   * どの処理での呼出しか（RFC-004 §6・§8 の `step`）。
+   * 修復・昇格（`REPAIR`）は別の呼出しとして数える。
+   */
+  readonly step: ModelCallStep;
+  /**
+   * 同じ step の何回目か。0起点。
+   *
+   * RFC-004 §6は「schema不正・根拠不一致で最大1回修復／昇格」を認めている。
+   * 修復は**別の `requestId`** で呼ぶ（同じIDでは `ALREADY_RESERVED` になる）。
+   * 呼出し元は step と attempt を含めて `requestId` を採番し、元の呼出しとの
+   * 紐づけを保つこと。
+   */
+  readonly attempt: number;
   readonly caseId: string;
   /**
    * 実行単位（RFC-004 §8 の `run_id`）。呼出し元が永続化する。
@@ -67,10 +81,26 @@ export interface InterpretReplyRequest {
 export interface InterpretReplyResponse {
   readonly output: ModelReplyOutput;
   readonly usage: UsageRecord;
+  /**
+   * **モデルへ実際に渡した本文**（マスク後）。
+   *
+   * `output.interpretation.evidenceSpans` はこの文字列のインデックスであって、
+   * 原文の位置ではない。マスクで文字数が変わるため、原文へそのまま当てると
+   * 別の箇所を指す。根拠を保存・表示するときは必ずこの本文と組で扱う
+   * （RFC-004 §3の突き合わせもこの本文に対して行う）。
+   */
+  readonly maskedReplyText: string;
 }
 
 export interface ModelGateway {
-  /** 接続設定があるか。無ければ実呼出しを行わない。 */
+  /**
+   * 接続設定があるか。
+   *
+   * **false でも `interpretReply` が成功し得る。** 保存済み結果の再生は外部
+   * 呼出しを要さないため許している（`UnconfiguredModelGateway`）。
+   * 「false なら呼んでも無駄」と判断して縮退しないこと。新規呼出しが必要な
+   * 場合だけ `NOT_CONFIGURED` で失敗する。
+   */
   isConfigured(): boolean;
   interpretReply(request: InterpretReplyRequest): Promise<InterpretReplyResponse>;
 }

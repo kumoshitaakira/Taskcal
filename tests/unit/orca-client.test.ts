@@ -23,6 +23,7 @@ const REQUEST_HASH = "a".repeat(64);
 function usageOf(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
     requestId: "req-1",
+    caseId: "case-1",
     runId: "run-1",
     step: "INTERPRET_REPLY",
     validationResult: "VALID",
@@ -43,6 +44,8 @@ function usageOf(overrides: Partial<UsageRecord> = {}): UsageRecord {
 const request: InterpretReplyRequest = {
   requestId: "req-1",
   requestHash: REQUEST_HASH,
+  step: "INTERPRET_REPLY",
+  attempt: 0,
   caseId: "case-1",
   runId: "run-1",
   anonymousStaffRef: "staff-A",
@@ -131,6 +134,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       outcome: "VALID",
       output: VALID_OUTPUT,
       usage: usageOf(),
+      maskedReplyText: "19時からなら行けます",
     });
 
     const result = await client.interpretReply(request);
@@ -162,6 +166,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       outcome: "VALID",
       output: VALID_OUTPUT,
       usage: usageOf(),
+      maskedReplyText: "19時からなら行けます",
     });
 
     await expect(client.interpretReply(request)).rejects.toMatchObject({
@@ -246,6 +251,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       requestHash: REQUEST_HASH,
       outcome: "SCHEMA_INVALID",
       usage: usageOf(),
+      maskedReplyText: "19時からなら行けます",
     });
 
     await expect(client.interpretReply(request)).rejects.toMatchObject({
@@ -265,6 +271,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       outcome: "VALID",
       output: VALID_OUTPUT,
       usage: usageOf({ costMicroUsd: 105, costKind: "ESTIMATED" }),
+      maskedReplyText: "19時からなら行けます",
     });
 
     await client.interpretReply(request);
@@ -303,6 +310,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       requestHash: REQUEST_HASH,
       outcome: "UNKNOWN",
       usage: usageOf({ outcome: "UNKNOWN", costKind: "UNKNOWN_CHARGE" }),
+      maskedReplyText: "19時からなら行けます",
     });
 
     await expect(client.interpretReply(request)).rejects.toMatchObject({

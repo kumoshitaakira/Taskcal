@@ -34,32 +34,55 @@ export interface MaskResult {
  * 置換後の文字列は種別が分かる形にする。モデルが「連絡先が書かれていた」ことを
  * 解釈に使えるようにしつつ、値そのものは渡さないため。
  */
-const RULES: {
+const SIMPLE_RULES: {
   readonly kind: keyof MaskSummary;
   readonly pattern: RegExp;
   readonly token: string;
 }[] = [
-  // メールアドレス。
+  // メールアドレス。全角＠も対象にする。
   {
     kind: "email",
-    pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+    pattern: /[A-Za-z0-9._%+-]+[@＠][A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
     token: "[メールアドレス]",
   },
   // URL。宛先や外部サービスのIDが含まれ得る。
   { kind: "url", pattern: /https?:\/\/\S+/g, token: "[URL]" },
-  // LINE ID 等のアカウント表記。
+  // LINE ID 等のアカウント表記。前置きのある形と、独立した @英数字 の両方。
   {
     kind: "accountId",
-    pattern: /(?:LINE|line)\s*(?:ID|id)\s*[:：]?\s*[A-Za-z0-9._-]{2,}/g,
+    pattern: /(?:LINE|line|ライン)\s*(?:ID|id|ＩＤ)?\s*[:：]?\s*[A-Za-z0-9._-]{2,}/g,
     token: "[アカウントID]",
   },
-  // 電話番号。日本の一般的な表記（区切りあり・なし、国番号つき）を対象にする。
   {
-    kind: "phone",
-    pattern: /(?:\+81[-\s]?|0)\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}/g,
-    token: "[電話番号]",
+    kind: "accountId",
+    pattern: /(?<![A-Za-z0-9._-])@[A-Za-z0-9._-]{2,}/g,
+    token: "[アカウントID]",
   },
 ];
+
+/**
+ * 電話番号らしき並び。
+ *
+ * **桁数で絞る。** 単純な「数字と区切り」の並びを拾うと、勤務時間帯の範囲表記
+ * （`0900-1730`、`1700-2200`）や郵便番号・従業員番号まで消してしまう。
+ * 勤務条件が消えると解釈そのものが成立しないため、過剰マスクは検知漏れより悪い。
+ *
+ * 採用する条件：
+ *   - 国内番号は先頭が 0 で、数字の合計が 10 桁または 11 桁
+ *   - 国際表記は +81 に続く数字が 9 桁または 10 桁
+ *   - 前後が数字・コロン・「時」でない（時刻の一部を切り出さない）
+ */
+const PHONE_CANDIDATE =
+  /(?<![\d:時])(\+81[-\s(]?\d[\d\-\s().]{7,15}\d|0\d[\d\-\s().]{7,15}\d)(?![\d:時])/g;
+
+function isPhoneNumber(candidate: string): boolean {
+  const digits = candidate.replace(/\D/g, "");
+  if (candidate.startsWith("+81")) {
+    // 81 を除いた残りが加入者番号。
+    return digits.length - 2 >= 9 && digits.length - 2 <= 10;
+  }
+  return digits.length === 10 || digits.length === 11;
+}
 
 export function maskContactInfo(text: string): MaskResult {
   const summary: { -readonly [K in keyof MaskSummary]: number } = {
@@ -70,12 +93,17 @@ export function maskContactInfo(text: string): MaskResult {
   };
 
   let result = text;
-  for (const rule of RULES) {
+  for (const rule of SIMPLE_RULES) {
     result = result.replace(rule.pattern, () => {
       summary[rule.kind] += 1;
       return rule.token;
     });
   }
+  result = result.replace(PHONE_CANDIDATE, (candidate) => {
+    if (!isPhoneNumber(candidate)) return candidate;
+    summary.phone += 1;
+    return "[電話番号]";
+  });
 
   const masked = Object.values(summary).some((n) => n > 0);
   return { text: result, summary, masked };

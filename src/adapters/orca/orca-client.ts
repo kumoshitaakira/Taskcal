@@ -147,7 +147,11 @@ export class OrcaRouterClient implements ModelGateway {
           "保存済みの呼出し結果がschemaに一致しません。再送せず人の対応へ回します。",
         );
       }
-      return { output: replayed.data, usage: stored.usage };
+      return {
+        output: replayed.data,
+        usage: stored.usage,
+        maskedReplyText: stored.maskedReplyText,
+      };
     }
 
     const startedAt = new Date().toISOString();
@@ -172,6 +176,7 @@ export class OrcaRouterClient implements ModelGateway {
       throw await this.unknownCharge(
         requestId,
         request,
+        masked.text,
         routingSource,
         estimatedMicroUsd,
         startedAt,
@@ -187,6 +192,7 @@ export class OrcaRouterClient implements ModelGateway {
       throw await this.unknownCharge(
         requestId,
         request,
+        masked.text,
         routingSource,
         estimatedMicroUsd,
         startedAt,
@@ -202,6 +208,7 @@ export class OrcaRouterClient implements ModelGateway {
       throw await this.unknownCharge(
         requestId,
         request,
+        masked.text,
         routingSource,
         estimatedMicroUsd,
         startedAt,
@@ -216,6 +223,7 @@ export class OrcaRouterClient implements ModelGateway {
       reservedMicroUsd: estimatedMicroUsd,
       requestId,
       runId: request.runId,
+      step: request.step,
       caseId: request.caseId,
       payload,
       routingSource,
@@ -239,6 +247,7 @@ export class OrcaRouterClient implements ModelGateway {
         requestHash: request.requestHash,
         outcome: "SCHEMA_INVALID",
         usage: invalidUsage,
+        maskedReplyText: masked.text,
       });
       // 呼出しは成立して課金されている。予約を残さず精算する（ADR-007：
       // schema修復・昇格も総回数に含む）。
@@ -266,6 +275,7 @@ export class OrcaRouterClient implements ModelGateway {
       outcome: "VALID",
       output: parsed.data,
       usage: validUsage,
+      maskedReplyText: masked.text,
     });
     // 予約を実費（または推定）で精算する。予約のまま残さない（RFC-004 §7）。
     await this.options.budget.settle({
@@ -274,7 +284,7 @@ export class OrcaRouterClient implements ModelGateway {
       costKind: validUsage.costKind,
     });
 
-    return { output: parsed.data, usage: validUsage };
+    return { output: parsed.data, usage: validUsage, maskedReplyText: masked.text };
   }
 
   /**
@@ -284,6 +294,7 @@ export class OrcaRouterClient implements ModelGateway {
   private async unknownCharge(
     requestId: string,
     request: InterpretReplyRequest,
+    maskedReplyText: string,
     routingSource: (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE],
     reservedMicroUsd: MicroUsd,
     startedAt: string,
@@ -293,7 +304,7 @@ export class OrcaRouterClient implements ModelGateway {
       requestId,
       caseId: request.caseId,
       runId: request.runId,
-      step: MODEL_CALL_STEP.INTERPRET_REPLY,
+      step: request.step,
       requestedModel: this.options.model,
       promptVersion: request.promptVersion,
       rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
@@ -311,6 +322,7 @@ export class OrcaRouterClient implements ModelGateway {
       requestHash: request.requestHash,
       outcome: "UNKNOWN",
       usage,
+      maskedReplyText,
     });
     // 課金不明として精算する。予約は取り消さず残す（RFC-004 §7）。
     await this.options.budget.settle({
@@ -376,6 +388,7 @@ export class OrcaRouterClient implements ModelGateway {
     reservedMicroUsd: MicroUsd;
     requestId: string;
     runId: string;
+    step: (typeof MODEL_CALL_STEP)[keyof typeof MODEL_CALL_STEP];
     caseId: string;
     payload: unknown;
     routingSource: (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE];
@@ -395,7 +408,7 @@ export class OrcaRouterClient implements ModelGateway {
       requestId: input.requestId,
       caseId: input.caseId,
       runId: input.runId,
-      step: MODEL_CALL_STEP.INTERPRET_REPLY,
+      step: input.step,
       outcome: CALL_OUTCOME.SUCCEEDED,
       requestedModel: this.options.model,
       resolvedModel,
