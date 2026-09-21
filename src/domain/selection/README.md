@@ -23,3 +23,16 @@
 効かない。実際の順位は「人数 → 承諾が揃った順 → 安定ID順」になる（RFC-009 §6）。
 
 関連する受入ケース：A16、A11。
+
+## 担当Aが依存する口
+
+`src/contracts/selection.ts` に interface を置いてある（contracts は共同所有）。
+
+- `SelectionPlanner.plan(input)`：純粋関数。実行可能な計画だけを返す。承諾時間を
+  自動で短縮しない（ADR-005）。`fullyCovered` と実行可能性を同じbooleanに詰めない。
+- `EligibilityChecker.listEligible` / `recheck`：適格性。`recheck` は正式採用の直前に
+  もう一度通す（D08）。月内入力が COMPLETE でなければ成立させない（Q06 / A09）。
+
+現在Aが使っているのは `src/application/roster-eligibility.ts` で、**名簿だけ**を見ている
+（同店舗・同職種・在籍中・欠勤者本人を除く・人数上限）。可能時間・月次上限・勤務の重複は
+未検査で、`recheck` は `NOT_IMPLEMENTED` を投げる。正式採用はここが入るまで進めない。
