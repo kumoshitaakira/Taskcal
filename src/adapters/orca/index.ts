@@ -23,8 +23,10 @@ export interface ModelGatewayDeps {
 export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
   const env = getServerEnv();
 
+  // 未設定でも callStore は渡す。新規呼出しは止めるが、保存済み結果の再生は
+  // 外部呼出しを要さないため許す（設定復元まで復旧を止めない）。
   if (!env.ORCA_BASE_URL || !env.ORCA_API_KEY) {
-    return new UnconfiguredModelGateway();
+    return new UnconfiguredModelGateway(deps.callStore);
   }
   if (
     env.ORCA_CASE_SPEND_LIMIT_MICRO_USD === undefined ||
@@ -34,7 +36,7 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
   ) {
     // 接続できても、金額上限または単価が無ければ有料呼出しを開始しない（RFC-004 §7）。
     // 単価が無ければ保守的な見積りを作れず、予約が実費を下回り得る。
-    return new UnconfiguredModelGateway();
+    return new UnconfiguredModelGateway(deps.callStore);
   }
 
   return new OrcaRouterClient({

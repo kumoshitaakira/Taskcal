@@ -37,7 +37,7 @@ export interface BudgetLimits {
   readonly caseCallLimit?: number;
   /** `case_spend_limit`：1案件あたりの金額（USD整数micro）。 */
   readonly caseSpendLimitMicroUsd?: MicroUsd;
-  /** `run_spend_limit`：実行全体の金額（USD整数micro）。 */
+  /** `run_spend_limit`：1つのrunの金額（USD整数micro）。run_id ごとに数える。 */
   readonly runSpendLimitMicroUsd?: MicroUsd;
 }
 
@@ -50,6 +50,12 @@ export interface RequiredBudgetLimits {
 
 export interface Reservation {
   readonly caseId: string;
+  /**
+   * 実行単位（RFC-004 §8 の `run_id`）。呼出し元が永続化する。
+   * `run_spend_limit` はこのrunの残額に対して検査する。無いと全履歴を一つのrunと
+   * して累積し、後続のrunを誤って止める（RFC-004 §7）。
+   */
+  readonly runId: string;
   /** RFC-004 §8 の `request_id`。呼出し元が永続化した安定ID。再試行で変えない。 */
   readonly requestId: string;
   /**
@@ -180,7 +186,7 @@ const EXCEEDED_MESSAGE: Record<
 > = {
   EXCEEDED_CALLS: "案件の呼出し回数上限（case_call_limit）に達しました。",
   EXCEEDED_CASE_SPEND: "案件の金額上限（case_spend_limit）に達しました。",
-  EXCEEDED_RUN_SPEND: "実行全体の金額上限（run_spend_limit）に達しました。",
+  EXCEEDED_RUN_SPEND: "このrunの金額上限（run_spend_limit）に達しました。",
 };
 
 /**

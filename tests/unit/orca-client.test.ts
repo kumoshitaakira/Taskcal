@@ -23,6 +23,9 @@ const REQUEST_HASH = "a".repeat(64);
 function usageOf(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
     requestId: "req-1",
+    runId: "run-1",
+    step: "INTERPRET_REPLY",
+    validationResult: "VALID",
     outcome: "SUCCEEDED",
     modelMeasurement: "UNKNOWN",
     routingSource: "ROUTER",
@@ -41,6 +44,7 @@ const request: InterpretReplyRequest = {
   requestId: "req-1",
   requestHash: REQUEST_HASH,
   caseId: "case-1",
+  runId: "run-1",
   anonymousStaffRef: "staff-A",
   offer: {
     date: "2026-09-21",
@@ -305,6 +309,32 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       code: ERROR_CODES.RECONCILE_REQUIRED,
     });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("返信内の連絡先をマスクしてから送る（RFC-004 §5）", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: JSON.stringify(VALID_OUTPUT) } }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    await client.interpretReply({
+      ...request,
+      replyText: "19時からなら行けます。080-1234-5678 か taro@example.com へ",
+    });
+
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("080-1234-5678");
+    expect(serialized).not.toContain("taro@example.com");
+    // 勤務条件は残す。
+    expect(serialized).toContain("19時からなら行けます");
   });
 
   it("入力長の上限を超える返信は、予約前に拒否する（RFC-004 §7）", async () => {

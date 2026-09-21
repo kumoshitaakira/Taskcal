@@ -12,6 +12,28 @@
  *     課金不明は UNKNOWN_CHARGE とし、予約を残す（RFC-004 §7）。
  */
 
+/** モデルを呼んだ処理（RFC-004 §6・§8）。 */
+export const MODEL_CALL_STEP = {
+  /** 短い自然文の条件抽出。 */
+  INTERPRET_REPLY: "INTERPRET_REPLY",
+  /** schema不正・根拠不一致からの修復／昇格。 */
+  REPAIR: "REPAIR",
+  /** 次行動の選択。 */
+  SELECT_ACTION: "SELECT_ACTION",
+} as const;
+
+export type ModelCallStep = (typeof MODEL_CALL_STEP)[keyof typeof MODEL_CALL_STEP];
+
+/** schema検査の結果（RFC-004 §8 の `validation_result`）。 */
+export const VALIDATION_RESULT = {
+  VALID: "VALID",
+  SCHEMA_INVALID: "SCHEMA_INVALID",
+  /** 呼出しが成立せず、検査に到達していない。 */
+  NOT_EVALUATED: "NOT_EVALUATED",
+} as const;
+
+export type ValidationResult = (typeof VALIDATION_RESULT)[keyof typeof VALIDATION_RESULT];
+
 /** USDの整数micro単位（1 USD = 1_000_000）。小数を持たない。 */
 export type MicroUsd = number;
 
@@ -75,6 +97,14 @@ export interface UsageRecord {
   /** RFC-004 §8 の `request_id`。呼出し元が永続化した安定ID。再試行で変えない。 */
   readonly requestId: string;
   readonly caseId?: string;
+  /**
+   * RFC-004 §8 の `run_id`。デモ・評価の実行単位。
+   * `run_spend_limit` をどの残額に対して検査するかを決める（RFC-004 §7）。
+   * 全履歴を一つのrunとして累積すると、後続のrunを誤って止める。
+   */
+  readonly runId: string;
+  /** RFC-004 §8 の `step`。案件内のどの処理でモデルを呼んだか。 */
+  readonly step: ModelCallStep;
   readonly outcome: CallOutcome;
   /** RFC-004 §8 の `requested_model`。Router規則に任せた場合は undefined。 */
   readonly requestedModel?: string;
@@ -95,6 +125,13 @@ export interface UsageRecord {
   readonly costMicroUsd?: MicroUsd;
   readonly costKind: CostKind;
   readonly latencyMs?: number;
+  /** RFC-004 §8 の `validation_result`。schema検査の結果。 */
+  readonly validationResult: ValidationResult;
+  /**
+   * RFC-004 §8 の `action_key`。この呼出しが提案した次行動。
+   * 検査を通らなかった場合は undefined。
+   */
+  readonly actionKey?: string;
   readonly startedAt: string;
   readonly finishedAt: string;
 }
@@ -107,6 +144,8 @@ export interface UsageRecord {
 export function unknownChargeUsage(base: {
   requestId: string;
   caseId?: string;
+  runId: string;
+  step: ModelCallStep;
   requestedModel?: string;
   promptVersion: string;
   rulesVersion: string;
@@ -125,6 +164,8 @@ export function unknownChargeUsage(base: {
     costMicroUsd: reservedMicroUsd,
     costKind: COST_KIND.UNKNOWN_CHARGE,
     latencyMs: Date.parse(rest.finishedAt) - Date.parse(rest.startedAt),
+    // 呼出しが成立していないため、検査に到達していない。
+    validationResult: VALIDATION_RESULT.NOT_EVALUATED,
   };
 }
 

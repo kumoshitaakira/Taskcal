@@ -78,7 +78,14 @@ export const replyInterpretationSchema = z.object({
    * 根拠として引用した原文の位置。原文そのものを不要に複製しない（AGENTS.md）。
    */
   evidenceSpans: z
-    .array(z.object({ start: z.number().int().min(0), end: z.number().int().min(0) }))
+    .array(
+      z
+        .object({ start: z.number().int().min(0), end: z.number().int().min(0) })
+        // 逆転した範囲を根拠として受け取らない。採用解釈の追跡ができなくなる。
+        .refine((span) => span.end >= span.start, {
+          message: "end は start 以上である必要があります。",
+        }),
+    )
     .max(5),
 });
 
@@ -126,6 +133,26 @@ export interface ReplyFixtureInput {
 }
 
 export type ModelReplyOutput = z.infer<typeof modelReplyOutputSchema>;
+
+/**
+ * 永続化する解釈（RFC-011 §4）。
+ *
+ * モデル出力そのものには `staffId` を持たせない（D03）。採用時の追跡に必要な
+ * 紐づけは、この型で持つ。これが無いとA12（遅れて返った結果で新しい承諾を
+ * 過去の状態へ戻さない）をコード側で判定できない。
+ */
+export interface PersistedReplyInterpretation {
+  readonly interpretationId: string;
+  /** 解釈の対象になった不変のMessage。 */
+  readonly messageId: string;
+  /** 案件内の受信順。モデル処理の完了順ではない。 */
+  readonly receivedSeq: number;
+  /** 解釈した時点の案件版。古い結果を新しい状態へ適用しないため。 */
+  readonly caseVersion: number;
+  /** この解釈を生んだモデル呼出し（RFC-004 §8 の `request_id`）。 */
+  readonly requestId: string;
+  readonly output: ModelReplyOutput;
+}
 
 /** schema版。プロンプトと併せて版管理する（RFC-004 §末尾）。 */
 export const MODEL_OUTPUT_SCHEMA_VERSION = "reply-interpretation/0.1.0-draft";

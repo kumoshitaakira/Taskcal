@@ -21,6 +21,11 @@ export interface InterpretReplyRequest {
   /** 要求内容のハッシュ。同じIDで内容が異なる要求を検出する（D07）。 */
   readonly requestHash: string;
   readonly caseId: string;
+  /**
+   * 実行単位（RFC-004 §8 の `run_id`）。呼出し元が永続化する。
+   * `run_spend_limit` の残額をこの単位で数える。
+   */
+  readonly runId: string;
   /** 案件内の匿名ID。実名・連絡先を渡さない（ADR-008）。 */
   readonly anonymousStaffRef: string;
   /** 打診で提示した条件。 */
@@ -48,7 +53,13 @@ export interface InterpretReplyRequest {
    * 判定するのはコードだが、モデルが intent を誤らないために文脈として渡す。
    */
   readonly afterCommit: boolean;
-  /** 返信本文。引用されたデータとして扱い、system指示と同じ権限を与えない。 */
+  /**
+   * 返信本文。引用されたデータとして扱い、system指示と同じ権限を与えない。
+   *
+   * adapterが送信前に連絡先等をマスクする（RFC-004 §5、`mask.ts`）。
+   * ただしパターン検知で完全な匿名化は保証されない。氏名・電話番号・
+   * LINE user ID・他人の返信全文を、そもそもここへ入れないこと。
+   */
   readonly replyText: string;
   readonly promptVersion: string;
 }

@@ -18,6 +18,7 @@ import {
 } from "@/contracts/model-output";
 import type { InterpretReplyRequest, InterpretReplyResponse, ModelGateway } from "./model-gateway";
 import { RESERVATION_RESULT, type BudgetGuard, type ModelCallStore } from "./budget";
+import { maskContactInfo } from "./mask";
 import {
   assertWithinInputBounds,
   costFromTokens,
@@ -25,7 +26,15 @@ import {
   type EstimateBounds,
   type WorstCasePrices,
 } from "./estimate";
-import { CALL_OUTCOME, COST_KIND, MEASUREMENT, ROUTING_SOURCE, unknownChargeUsage } from "./usage";
+import {
+  CALL_OUTCOME,
+  COST_KIND,
+  MEASUREMENT,
+  MODEL_CALL_STEP,
+  ROUTING_SOURCE,
+  VALIDATION_RESULT,
+  unknownChargeUsage,
+} from "./usage";
 import type { MicroUsd, UsageRecord } from "./usage";
 
 export interface OrcaClientOptions {
@@ -67,8 +76,12 @@ export class OrcaRouterClient implements ModelGateway {
     // 呼出さない（RFC-004 §7）。
     assertWithinInputBounds(request.replyText.length, this.options.bounds);
 
+    // 送信前に連絡先等をマスクする（RFC-004 §5）。決定的に動くので、同じ要求から
+    // 同じ本文になる。完全な匿名化の保証ではない。
+    const masked = maskContactInfo(request.replyText);
+
     // この要求に固有の保守的な見積りを作る。固定額を使わない。
-    const body = this.buildBody(request);
+    const body = this.buildBody(request, masked.text);
     const serializedBody = JSON.stringify(body);
     const estimatedMicroUsd = estimateCallCost({
       promptText: serializedBody,
@@ -80,6 +93,7 @@ export class OrcaRouterClient implements ModelGateway {
     // 同じ requestId で内容が違えば OPERATION_CONFLICT で止まる（D07）。
     const reservation = await this.options.budget.reserve({
       caseId: request.caseId,
+      runId: request.runId,
       requestId,
       requestHash: request.requestHash,
       estimatedMicroUsd,
@@ -201,6 +215,7 @@ export class OrcaRouterClient implements ModelGateway {
     const usage = this.extractUsage({
       reservedMicroUsd: estimatedMicroUsd,
       requestId,
+      runId: request.runId,
       caseId: request.caseId,
       payload,
       routingSource,
@@ -211,6 +226,10 @@ export class OrcaRouterClient implements ModelGateway {
 
     const parsed = modelReplyOutputSchema.safeParse(extractJsonContent(payload));
     if (!parsed.success) {
+      const invalidUsage = {
+        ...usage,
+        validationResult: VALIDATION_RESULT.SCHEMA_INVALID,
+      };
       // 呼出しは成立して課金されている。実測した使用量を捨てない（ADR-007：
       // schema修復・昇格も総回数に含む）。
       // 判明した検証失敗として永続化する。保存しないと、再起動後の再試行で
@@ -219,20 +238,26 @@ export class OrcaRouterClient implements ModelGateway {
         requestId,
         requestHash: request.requestHash,
         outcome: "SCHEMA_INVALID",
-        usage,
+        usage: invalidUsage,
       });
       // 呼出しは成立して課金されている。予約を残さず精算する（ADR-007：
       // schema修復・昇格も総回数に含む）。
       await this.options.budget.settle({
         requestId,
-        actualMicroUsd: usage.costMicroUsd,
-        costKind: usage.costKind,
+        actualMicroUsd: invalidUsage.costMicroUsd,
+        costKind: invalidUsage.costKind,
       });
       throw new InvalidModelOutputError(
-        usage,
+        invalidUsage,
         "モデル出力がschemaに一致しません。承諾として扱いません。",
       );
     }
+
+    const validUsage = {
+      ...usage,
+      validationResult: VALIDATION_RESULT.VALID,
+      actionKey: parsed.data.proposedAction,
+    };
 
     // 再試行が再送にならないよう、結果を保存してから返す。
     await this.options.callStore.saveResult({
@@ -240,16 +265,16 @@ export class OrcaRouterClient implements ModelGateway {
       requestHash: request.requestHash,
       outcome: "VALID",
       output: parsed.data,
-      usage,
+      usage: validUsage,
     });
     // 予約を実費（または推定）で精算する。予約のまま残さない（RFC-004 §7）。
     await this.options.budget.settle({
       requestId,
-      actualMicroUsd: usage.costMicroUsd,
-      costKind: usage.costKind,
+      actualMicroUsd: validUsage.costMicroUsd,
+      costKind: validUsage.costKind,
     });
 
-    return { output: parsed.data, usage };
+    return { output: parsed.data, usage: validUsage };
   }
 
   /**
@@ -267,6 +292,8 @@ export class OrcaRouterClient implements ModelGateway {
     const usage = unknownChargeUsage({
       requestId,
       caseId: request.caseId,
+      runId: request.runId,
+      step: MODEL_CALL_STEP.INTERPRET_REPLY,
       requestedModel: this.options.model,
       promptVersion: request.promptVersion,
       rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
@@ -295,7 +322,7 @@ export class OrcaRouterClient implements ModelGateway {
     return new UnknownOutcomeError(usage, detail);
   }
 
-  private buildBody(request: InterpretReplyRequest): Record<string, unknown> {
+  private buildBody(request: InterpretReplyRequest, maskedReply: string): Record<string, unknown> {
     // 検査に使うschemaをそのまま渡す。手書きの形式説明を別に書くと、
     // 検査側と食い違ったときにモデル出力が拒否され続け、費用だけ消費する。
     const jsonSchema = modelReplyOutputJsonSchema();
@@ -338,7 +365,7 @@ export class OrcaRouterClient implements ModelGateway {
             // Q09：判定は返信単体ではなく、元打診・現在の承諾・確定前後を併せて行う。
             current_commitment: request.currentCommitment ?? null,
             after_commit: request.afterCommit,
-            reply: request.replyText,
+            reply: maskedReply,
           }),
         },
       ],
@@ -348,6 +375,7 @@ export class OrcaRouterClient implements ModelGateway {
   private extractUsage(input: {
     reservedMicroUsd: MicroUsd;
     requestId: string;
+    runId: string;
     caseId: string;
     payload: unknown;
     routingSource: (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE];
@@ -366,6 +394,8 @@ export class OrcaRouterClient implements ModelGateway {
     return {
       requestId: input.requestId,
       caseId: input.caseId,
+      runId: input.runId,
+      step: MODEL_CALL_STEP.INTERPRET_REPLY,
       outcome: CALL_OUTCOME.SUCCEEDED,
       requestedModel: this.options.model,
       resolvedModel,
@@ -389,6 +419,8 @@ export class OrcaRouterClient implements ModelGateway {
           : input.reservedMicroUsd,
       costKind: COST_KIND.ESTIMATED,
       latencyMs: Date.parse(input.finishedAt) - Date.parse(input.startedAt),
+      // schemaの検査はこの後に行う。結果は呼出し側で確定させる。
+      validationResult: VALIDATION_RESULT.NOT_EVALUATED,
       startedAt: input.startedAt,
       finishedAt: input.finishedAt,
     };

@@ -68,6 +68,7 @@ function emptyState(overrides: Partial<LedgerState> = {}): LedgerState {
 const ESTIMATE: MicroUsd = 5_000;
 const reservation: Reservation = {
   caseId: "c1",
+  runId: "run-1",
   requestId: "req-1",
   requestHash: "a".repeat(64),
   estimatedMicroUsd: ESTIMATE,

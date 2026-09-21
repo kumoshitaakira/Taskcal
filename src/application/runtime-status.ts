@@ -146,7 +146,10 @@ async function checkDatabase(configured: boolean): Promise<RuntimeStatus["databa
       status: "UNAVAILABLE",
       appliedMigrations: applied.length,
       latestMigration: applied.at(-1)?.id ?? null,
-      detail: error instanceof Error ? error.message : "migrationファイルを読めません",
+      // HTTPで返る値なので、サーバー上の絶対パスを含み得るエラー文をそのまま
+      // 出さない（ADR-008：不要な情報をUIへ出さない）。詳しい原因はサーバーの
+      // ログで確認する。
+      detail: "migrationファイルを読めません（番号の重複・欠落を確認してください）",
     };
   }
 

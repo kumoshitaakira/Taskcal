@@ -10,7 +10,7 @@
  *   - receiveEvent が常に Message を返すとは仮定しない。
  */
 
-import type { OperationRef } from "./operation";
+import type { OperationId, OperationRef, RequestHash } from "./operation";
 import type { DeliveryState, OutreachMessageKind } from "./outreach-state";
 
 /** 宛先。endpointKey が指す宛先は不変にするか、使用版を固定する（RFC-011 §6）。 */
@@ -141,9 +141,9 @@ export interface MessagingGateway {
    * `"CONFLICT"` を返す。
    */
   getSendResult(ref: {
-    operationId: string;
+    operationId: OperationId;
     connectionId: string;
-    expectedRequestHash?: string;
+    expectedRequestHash?: RequestHash;
   }): Promise<SendResult | "LOOKUP_UNAVAILABLE" | "CONFLICT">;
   /**
    * 宛先が現在も同じ相手を指すかを検査する。MATCHES 以外は送信しない。

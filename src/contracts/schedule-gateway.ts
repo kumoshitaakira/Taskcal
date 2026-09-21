@@ -9,7 +9,7 @@
  *   - 「版を読める」と「期待版を指定した更新ができる」を別の能力として扱う。
  */
 
-import type { OperationId, OperationRef } from "./operation";
+import type { OperationId, OperationRef, RequestHash } from "./operation";
 import type { UpdateResultKind } from "./schedule-update";
 
 /**
@@ -173,7 +173,13 @@ export interface ScheduleGateway {
   getUpdateResult(ref: {
     operationId: OperationId;
     connectionId: string;
-  }): Promise<UpdateResult | "LOOKUP_UNAVAILABLE">;
+    /**
+     * 期待する内容のハッシュ。渡した場合、adapter側でも照合して不一致なら
+     * `"CONFLICT"` を返す。IDを誤って再利用したときに、内容の違う古い結果を
+     * 今の操作へ結び付けないため（MessagingGateway.getSendResult と同じ）。
+     */
+    expectedRequestHash?: RequestHash;
+  }): Promise<UpdateResult | "LOOKUP_UNAVAILABLE" | "CONFLICT">;
   readBack(ref: { artifactRef: string }): Promise<ReadBackResult>;
 }
 

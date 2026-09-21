@@ -14,6 +14,8 @@ describe("使用量の記録（RFC-004 §7・§8 / ADR-007）", () => {
     const usage = unknownChargeUsage({
       requestId: "req-1",
       caseId: "c1",
+      runId: "run-1",
+      step: "INTERPRET_REPLY",
       promptVersion: "p1",
       rulesVersion: "s1",
       routingSource: ROUTING_SOURCE.ROUTER,
