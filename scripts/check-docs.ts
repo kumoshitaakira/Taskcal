@@ -9,6 +9,7 @@
  *   1. env schema と `.env.example` の項目が一致すること（両方向）
  *   2. 文書が参照する環境変数名が、実在すること
  *   3. 既定値を持つ定数の値が、それを説明する文書に現れること
+ *   4. 廃止した説明が文書に残っていないこと
  *
  * 使い方: npm run check:docs
  */
@@ -50,6 +51,34 @@ const DOCUMENTED_DEFAULTS: {
     source: "src/config/mvp-policy.ts",
     documentedIn: ["docs/OPEN-QUESTIONS.md"],
   },
+];
+
+/**
+ * 廃止した説明。文書に残っていたら失敗させる。
+ *
+ * 数値や名前の一致だけでは、方式を変えたときの説明の陳腐化を検出できない。
+ * 実際に「1文字=2トークン」という古い上限の説明が決定記録に残り、それを信じて
+ * 再実装すると予約不足を作り直すところだった。
+ */
+const RETIRED_WORDING: { readonly pattern: RegExp; readonly why: string }[] = [
+  {
+    pattern: /1文字\s*=\s*2トークン|1文字あたり2トークン/,
+    why: "トークン上限はUTF-8のbyte長基準へ変更済み（estimateInputTokens）",
+  },
+  {
+    pattern: /ORCA_ESTIMATED_MICRO_USD_PER_CALL/,
+    why: "固定額の見積りは廃止し、単価と上限から要求ごとに算出する",
+  },
+];
+
+/** 文書として走査する範囲。 */
+const DOCS_TO_SCAN = [
+  ".env.example",
+  "README.md",
+  "docs/OPEN-QUESTIONS.md",
+  "src/adapters/orca/README.md",
+  "src/config/README.md",
+  "src/contracts/README.md",
 ];
 
 /** 環境変数名を参照する文書。 */
@@ -143,8 +172,20 @@ async function checkDocumentedDefaults(): Promise<void> {
   }
 }
 
+async function checkRetiredWording(): Promise<void> {
+  for (const doc of DOCS_TO_SCAN) {
+    const text = await read(doc);
+    for (const { pattern, why } of RETIRED_WORDING) {
+      if (pattern.test(text)) {
+        problems.push(`${doc} に廃止した説明が残っています（${why}）`);
+      }
+    }
+  }
+}
+
 async function main(): Promise<void> {
   await checkEnvExampleMatchesSchema();
+  await checkRetiredWording();
   await checkDocsReferenceRealEnvNames();
   await checkDocumentedDefaults();
 

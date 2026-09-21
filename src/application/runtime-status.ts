@@ -12,7 +12,7 @@ import {
   compareMigrations,
   loadMigrationFiles,
 } from "@/adapters/db/migration-files";
-import { serverEnvSchema } from "@/config/env-schema";
+import { databaseUrlSchema, orcaEnvSchema } from "@/config/env-schema";
 
 export type ComponentStatus =
   | "OK"
@@ -53,28 +53,26 @@ const WORKER_STALE_MS = 30_000;
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const checkedAt = new Date().toISOString();
-  // 環境変数は項目ごとに見る。Orcaの設定が不正でも、DBの点検は独立して行う。
-  const parsed = serverEnvSchema.safeParse(process.env);
-  const env = parsed.success ? parsed.data : undefined;
-  const invalidKeys = parsed.success
-    ? []
-    : [...new Set(parsed.error.issues.map((i) => String(i.path[0])))];
-
-  const databaseConfigured =
-    typeof process.env.DATABASE_URL === "string" &&
-    process.env.DATABASE_URL.trim() !== "" &&
-    !invalidKeys.includes("DATABASE_URL");
+  // 環境変数は**対象ごとに別々のschemaで**解析する。全体schemaを一度だけ通すと、
+  // 片方の不正がもう片方の判定を巻き込む。DBが不正でもOrcaの設定は正しく報告し、
+  // その逆も同じにする。
+  const databaseConfigured = databaseUrlSchema.safeParse(process.env.DATABASE_URL).success;
 
   const database = await checkDatabase(databaseConfigured);
   const worker = database.status === "OK" ? await checkWorker() : UNAVAILABLE_WORKER;
 
-  const orcaInvalidKeys = invalidKeys.filter((k) => k.startsWith("ORCA_"));
-  const orcaConfigured = Boolean(env?.ORCA_BASE_URL && env?.ORCA_API_KEY);
+  const orcaParsed = orcaEnvSchema.safeParse(process.env);
+  const orcaEnv = orcaParsed.success ? orcaParsed.data : undefined;
+  const orcaInvalidKeys = orcaParsed.success
+    ? []
+    : [...new Set(orcaParsed.error.issues.map((i) => String(i.path[0])))];
+
+  const orcaConfigured = Boolean(orcaEnv?.ORCA_BASE_URL && orcaEnv?.ORCA_API_KEY);
   const budgetConfigured = Boolean(
-    env?.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
-    env?.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&
-    env?.ORCA_INPUT_MICRO_USD_PER_KTOK !== undefined &&
-    env?.ORCA_OUTPUT_MICRO_USD_PER_KTOK !== undefined,
+    orcaEnv?.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
+    orcaEnv?.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&
+    orcaEnv?.ORCA_INPUT_MICRO_USD_PER_KTOK !== undefined &&
+    orcaEnv?.ORCA_OUTPUT_MICRO_USD_PER_KTOK !== undefined,
   );
 
   return {

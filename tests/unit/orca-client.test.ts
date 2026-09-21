@@ -320,6 +320,34 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     expect(settled).toHaveLength(0);
   });
 
+  it("不正なトークン数を実測値として受け取らない（予約額とUNKNOWNを保持する）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: "test-model",
+              // 負数・小数はRouterの応答でも起こり得る。実測として受理しない。
+              usage: { prompt_tokens: -5, completion_tokens: 1.5 },
+              choices: [{ message: { content: JSON.stringify(VALID_OUTPUT) } }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    const { client, settled } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const result = await client.interpretReply(request);
+
+    expect(result.usage.inputTokens).toBeUndefined();
+    expect(result.usage.outputTokens).toBeUndefined();
+    expect(result.usage.tokenMeasurement).toBe("UNKNOWN");
+    // 負の費用を台帳へ入れない。予約額を保持する。
+    expect(result.usage.costMicroUsd).toBeGreaterThan(0);
+    expect(settled[0]?.actualMicroUsd).toBeGreaterThan(0);
+  });
+
   it("Q09: 現在の承諾と確定状態をモデルへ渡す", async () => {
     let body: Record<string, unknown> = {};
     const fetchSpy = vi.fn(async (_url: string, init: RequestInit) => {

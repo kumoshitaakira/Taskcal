@@ -358,9 +358,10 @@ export class OrcaRouterClient implements ModelGateway {
     const record = (input.payload ?? {}) as Record<string, unknown>;
     const resolvedModel = typeof record.model === "string" ? record.model : undefined;
     const usage = (record.usage ?? {}) as Record<string, unknown>;
-    const inputTokens = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
-    const outputTokens =
-      typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined;
+    // 非負の安全な整数だけを実測値として受け取る。負数・小数・範囲外をそのまま
+    // 通すと、costFromTokens が不正な費用を出し、台帳と後続の予算判定を壊す。
+    const inputTokens = asTokenCount(usage.prompt_tokens);
+    const outputTokens = asTokenCount(usage.completion_tokens);
 
     return {
       requestId: input.requestId,
@@ -421,6 +422,11 @@ export class InvalidModelOutputError extends Error {
     super(message);
     this.name = "InvalidModelOutputError";
   }
+}
+
+/** 応答のトークン数。非負の安全な整数でなければ「取得できなかった」として扱う。 */
+function asTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function extractJsonContent(payload: unknown): unknown {

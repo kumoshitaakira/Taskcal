@@ -55,6 +55,18 @@ describe("費用見積り（RFC-004 §7）", () => {
     expect(worstActual).toBeLessThanOrEqual(estimated);
   });
 
+  it("トークン数が非負の整数でなければ費用を作らない", () => {
+    for (const bad of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+      expect(() => costFromTokens({ inputTokens: bad, outputTokens: 10, prices })).toThrowError(
+        expect.objectContaining({ code: ERROR_CODES.INVALID_INPUT }),
+      );
+      expect(() => costFromTokens({ inputTokens: 10, outputTokens: bad, prices })).toThrowError(
+        expect.objectContaining({ code: ERROR_CODES.INVALID_INPUT }),
+      );
+    }
+    expect(costFromTokens({ inputTokens: 0, outputTokens: 0, prices })).toBe(0);
+  });
+
   it("入力長の上限を超えたら拒否する", () => {
     expect(() => assertWithinInputBounds(1_001, bounds)).toThrowError(
       expect.objectContaining({ code: ERROR_CODES.OUT_OF_SCOPE }),

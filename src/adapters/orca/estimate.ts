@@ -93,6 +93,16 @@ export function costFromTokens(input: {
   outputTokens: number;
   prices: WorstCasePrices;
 }): MicroUsd {
+  // 呼出し側でも検証するが、ここでも守る。負や小数が入ると台帳と後続の予算判定が
+  // 壊れるため、不正な入力で費用を作らない。
+  for (const tokens of [input.inputTokens, input.outputTokens]) {
+    if (!Number.isSafeInteger(tokens) || tokens < 0) {
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "トークン数が非負の整数ではありません。実測値として扱えません。",
+      );
+    }
+  }
   return (
     Math.ceil((input.inputTokens * input.prices.inputMicroUsdPerKiloToken) / 1000) +
     Math.ceil((input.outputTokens * input.prices.outputMicroUsdPerKiloToken) / 1000)
