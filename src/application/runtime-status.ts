@@ -92,11 +92,13 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       ...(orcaInvalidKeys.length > 0 ? { invalidKeys: orcaInvalidKeys } : {}),
     },
     notImplemented: [
-      "CSV取込・正規化・安定ID（担当B）",
-      "時間区間・候補選定・月次上限（担当B）",
-      "欠勤登録・同時打診・返信解釈（Day 2）",
-      "正式採用・読戻し・結果照合（Day 2〜3）",
-      "OrcaRouter実接続（接続情報と金額予算の確定後）",
+      "CSV取込・正規化・安定ID（担当B）。現在の勤務表は npm run seed:dev が入れた架空データ",
+      "適格性の検査（可能時間・月次上限・勤務の重複）。打診の候補は名簿だけで選んでいる（担当B）",
+      "候補選定・勤務計画の決定（担当B）",
+      "返信解釈（OrcaRouterの接続情報と金額予算が未取得のため実推論を行っていない）",
+      "正式採用・CSV生成・読戻し・結果照合",
+      "期限の検知、案件の停止・再開、要対応からの復旧",
+      "worker の fence token（通知待ちの lease はアイテム単位のみ）",
     ],
   };
 }
