@@ -116,7 +116,7 @@ export function createPgInboundEventRepository(): InboundEventRepository {
            (inbound_event_id, case_id, outreach_id, received_seq, provider, connection_id,
             provider_event_id, occurred_at, received_at, from_provider, from_connection_id,
             from_endpoint_key, from_endpoint_version, body, channel_verified, sender_identity,
-            message_id, in_reply_to_message_id)
+            message_id, in_reply_to_message_ref)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
         [
           inboundEventId,

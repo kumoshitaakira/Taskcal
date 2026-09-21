@@ -33,6 +33,10 @@ export function createPgReplyInterpretationRepository(): ReplyInterpretationRepo
       //
       // 適用結果（applied）だけは更新する。解釈の内容（output）は書き換えない——
       // 版付きの解釈は不変で、applied は「案件へ適用したか」という別の軸。
+      //
+      // **`APPLIED` を降格させない。** 同じ返信を並行処理すると、先行が承諾を作った
+      // 後に後行が受信順検査で STALE になる。そこで上書きすると、承諾は残るのに
+      // その根拠の解釈が「棄却済み」になる。適用した事実は後から取り消さない（D09）。
       const { rows } = await tx.query<{ interpretation_id: string }>(
         `insert into reply_interpretation
            (interpretation_id, case_id, message_id, inbound_event_id, received_seq,
@@ -40,6 +44,7 @@ export function createPgReplyInterpretationRepository(): ReplyInterpretationRepo
          select $1, m.case_id, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
            from outreach_message m where m.message_id = $2
          on conflict (message_id, request_id) do update set applied = excluded.applied
+           where reply_interpretation.applied <> 'APPLIED'
          returning interpretation_id`,
         [
           record.interpretationId,
@@ -53,9 +58,17 @@ export function createPgReplyInterpretationRepository(): ReplyInterpretationRepo
           applied,
         ],
       );
-      const stored = rows[0]?.interpretation_id;
+      if (rows[0]) return { interpretationId: rows[0].interpretation_id };
+
+      // 0行になる場合が2つある。降格を止めた（既に APPLIED）か、対象Messageが無いか。
+      // 前者は既存の行を返す。後者は承諾の根拠を残せないので黙って続けない。
+      const existing = await tx.query<{ interpretation_id: string }>(
+        `select interpretation_id from reply_interpretation
+          where message_id = $1 and request_id = $2`,
+        [record.messageId, record.requestId],
+      );
+      const stored = existing.rows[0]?.interpretation_id;
       if (!stored) {
-        // 対象Messageが無い。承諾の根拠を残せないので、黙って続けない。
         throw new TaskcalError(ERROR_CODES.INVALID_INPUT, "解釈の対象Messageが見つかりません。");
       }
       return { interpretationId: stored };

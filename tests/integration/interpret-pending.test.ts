@@ -287,6 +287,57 @@ describe.skipIf(!connectionString)("未処理の返信の取り出し（DATABASE
     expect(commitments.rows[0]?.n).toBe(1);
   });
 
+  it("Gatewayの例外も保留にする（後続の返信を止めない）", async () => {
+    // タイムアウト（結果不明）と契約違反の出力は例外で返る。素通りすると保留が
+    // 付かず、同じ受信を選び続けて2人目の返信が処理できない。
+    const { UnknownOutcomeError, InvalidModelOutputError } =
+      await import("@/adapters/orca/orca-client");
+    const usage = {
+      requestId: "r",
+      caseId,
+      runId: "run-pending",
+      step: "INTERPRET_REPLY",
+      outcome: "UNKNOWN",
+      modelMeasurement: "UNKNOWN",
+      routingSource: "UNKNOWN",
+      promptVersion: "p",
+      rulesVersion: "r",
+      tokenMeasurement: "UNKNOWN",
+      costKind: "UNKNOWN_CHARGE",
+      validationResult: "NOT_EVALUATED",
+      startedAt: "2026-09-29T00:00:00.000Z",
+      finishedAt: "2026-09-29T00:00:01.000Z",
+    } as const;
+
+    await receive(event(0, "大丈夫です"));
+    await receive(event(1, "大丈夫です"));
+
+    const unknown = makePending(
+      createFakeModelGateway({ fallback: new UnknownOutcomeError(usage, "応答が無い") }),
+    );
+    const first = await unknown();
+    // 結果不明は確定失敗にしない。意味を保ったまま保留にする。
+    expect(first).toMatchObject({ handled: true, blocked: "RECONCILE_REQUIRED" });
+
+    const invalid = makePending(
+      createFakeModelGateway({ fallback: new InvalidModelOutputError(usage, "契約に合わない") }),
+    );
+    const second = await invalid();
+    expect(second).toMatchObject({ handled: true, blocked: "INVALID_INPUT" });
+    expect((second as { inboundEventId: string }).inboundEventId).not.toBe(
+      (first as { inboundEventId: string }).inboundEventId,
+    );
+
+    expect(await invalid()).toEqual({ handled: false, reason: "NONE" });
+  });
+
+  it("想定していない例外も、確定失敗と断定せず保留にする", async () => {
+    await receive(event(0, "大丈夫です"));
+    const broken = makePending(createFakeModelGateway({ fallback: new Error("想定外") }));
+    expect(await broken()).toMatchObject({ handled: true, blocked: "RECONCILE_REQUIRED" });
+    expect(await broken()).toEqual({ handled: false, reason: "NONE" });
+  });
+
   it("予算超過の保留は、設定が戻っても自動では戻さない（止めた理由が別）", async () => {
     await receive(event(0, "大丈夫です"));
     const exceeded = makePending(

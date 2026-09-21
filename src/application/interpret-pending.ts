@@ -14,7 +14,7 @@
 import "server-only";
 import { withTransaction } from "../adapters/db/transaction";
 import type { ModelGateway } from "../adapters/orca/model-gateway";
-import { ERROR_CODES, type ErrorCode } from "../contracts/errors";
+import { ERROR_CODES, TaskcalError, type ErrorCode } from "../contracts/errors";
 import type { InboundEventRepository, InterpretationApplication } from "../contracts/repository";
 import type { interpretReply } from "./interpret-reply";
 
@@ -64,7 +64,20 @@ export function interpretPending(deps: InterpretPendingDeps) {
     const next = await withTransaction((tx) => deps.inbound.findNextInterpretable(tx));
     if (next === "NONE") return { handled: false, reason: "NONE" };
 
-    const result = await deps.interpret({ inboundEventId: next });
+    // 例外も保留へ変換する。**素通りさせない。**
+    // Gatewayのタイムアウト（結果不明）や契約違反の出力は例外で返る。抜けると
+    // 保留が付かず、同じ受信を選び続けて後続のスタッフの返信が処理できない。
+    let result: Awaited<ReturnType<typeof deps.interpret>>;
+    try {
+      result = await deps.interpret({ inboundEventId: next });
+    } catch (error) {
+      // 意味のある失敗（TaskcalError）はその意味のまま保留にする。
+      // それ以外は何が起きたか分からないので、確定失敗と断定せず人の対応へ回す。
+      const reason = error instanceof TaskcalError ? error.code : ERROR_CODES.RECONCILE_REQUIRED;
+      await withTransaction((tx) => deps.inbound.markBlocked(tx, { inboundEventId: next, reason }));
+      return { handled: true, inboundEventId: next, blocked: reason };
+    }
+
     if (result.ok) {
       return { handled: true, inboundEventId: next, applied: result.applied };
     }

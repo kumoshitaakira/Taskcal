@@ -43,7 +43,8 @@ ADR-021 に従い B の確認を得ること。
 | `0007` | `commitment` / `selection_result` / `selection_item` / `schedule_update` | 選定可能な版は一つ（D04）、二重採用の禁止（D05） |
 | `0008` | `budget_reservation` / `model_call` | 予約と精算の対（RFC-004 §7）、結果不明を費用0にしない |
 | `0009` | `inbound_event.message_id` | 受信とMessageの対応 |
-| `0010` | `inbound_event.interpretation_block` / `in_reply_to_message_id` | 解釈できない受信を取り出しから外す、返信対象の不変参照（RFC-011 §3） |
+| `0010` | `inbound_event.interpretation_block` / 返信対象の参照 | 解釈できない受信を取り出しから外す、返信対象の参照（RFC-011 §3） |
+| `0011` | `inbound_event.in_reply_to_message_ref` | 返信対象の参照を**未検証の外部入力**として持つ。外部キーを付けると、存在しないIDを送られただけで受信を保存できない（ADR-008） |
 
 `0002` の `create extension btree_gist` は、拡張を作れない環境では失敗する。その場合に
 重複禁止の制約を落とすなら、落とした事実を README の「現時点で動かないもの」へ記録する

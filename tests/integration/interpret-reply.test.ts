@@ -646,6 +646,33 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
     expect(saved.rows.map((r) => r.applied)).toEqual(["APPLIED"]);
   });
 
+  it("適用済みの解釈を、後続の試行が棄却へ降格させない", async () => {
+    const id = await reply("大丈夫です");
+    // 1回目：適用され、承諾ができる。
+    await makeInterpret(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+    )({ inboundEventId: id });
+    expect(await commitments()).toHaveLength(1);
+
+    // 2回目：受信順が進まないので STALE になる。ここで applied を上書きすると、
+    // 承諾は残るのにその根拠が「棄却済み」になる。
+    const again = await makeInterpret(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+    )({ inboundEventId: id });
+    expect(again).toMatchObject({ applied: "DISCARDED_STALE" });
+
+    const saved = await withTransaction((tx) =>
+      tx.query<{ applied: string }>(
+        `select ri.applied from reply_interpretation ri
+           join commitment c on c.accepted_interpretation_id = ri.interpretation_id
+          where ri.case_id = $1`,
+        [caseId],
+      ),
+    );
+    // 承諾が参照する解釈は APPLIED のまま。
+    expect(saved.rows.map((r) => r.applied)).toEqual(["APPLIED"]);
+  });
+
   it("同じ受信の再試行は同じ requestId を使う（再送で作り直さない）", async () => {
     const id = await reply("大丈夫です");
     const gateway = createFakeModelGateway({

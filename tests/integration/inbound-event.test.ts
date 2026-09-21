@@ -311,6 +311,19 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
     });
   });
 
+  it("存在しない返信先IDでも受信を残す（外部入力を信用しない）", async () => {
+    const result = await receive(event({ inReplyToMessageId: randomUUID() }));
+    expect(result).toMatchObject({ ok: true, senderIdentity: "UNMATCHED" });
+
+    const stored = await withTransaction((tx) =>
+      tx.query<{ n: number }>(
+        "select count(*)::int as n from inbound_event where connection_id = $1",
+        [CONNECTION],
+      ),
+    );
+    expect(stored.rows[0]?.n).toBe(1);
+  });
+
   it("返信対象を持たない受信は、本人と確認できないものとして扱う", async () => {
     const result = await receive(event({ inReplyToMessageId: undefined }));
     expect(result).toMatchObject({ ok: true, senderIdentity: "UNMATCHED" });

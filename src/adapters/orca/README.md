@@ -48,6 +48,9 @@ OrcaRouter経由の推論。担当A（RFC-012 §3.1）。
   取れても `ESTIMATED` 止まり。
 - 実使用モデル・トークン・費用は、実測／推定／取得不能を区別して記録する（`usage.ts`）。
 - タイムアウト・応答喪失は `UnknownOutcomeError`。費用0にも確定失敗にもしない。
+  `InvalidModelOutputError` と併せて `TaskcalError` を継承する。呼出し元が
+  `instanceof TaskcalError` で意味のある失敗を拾い、案件を止めずに保留へ回せるようにする
+  （素の Error だと呼出し元を素通りし、同じ受信を選び続けて後続の返信が止まる）。
   課金不明は `UNKNOWN_CHARGE` とし、**予約を残す**（RFC-004 §7）。
 - **どの終了経路でも `settle` を呼ぶ。** 成功・schema不一致・結果不明のいずれでも
   予約を予約のまま残さない。schema不一致でも呼出しは成立して課金されている。
