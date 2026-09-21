@@ -151,10 +151,13 @@ fixtureは例文だけにしない。元打診、既存の承諾、確定前か�
 いない**。予算予約（`src/adapters/orca/budget.ts`）と使用量記録（`usage.ts`）の枠だけを
 実装し、次の条件のいずれかで呼出しを開始しない（ADR-007）。
 
-- 接続情報、`case_spend_limit`、`run_spend_limit`、1呼出しの見積りのいずれかが未設定：
-  `createModelGateway`が`UnconfiguredModelGateway`を返す。
-- 1呼出しの費用見積りが0以下または整数でない：見積り0を許すと金額上限の比較が常に成立し、
+- 接続情報、`case_spend_limit`、`run_spend_limit`、候補モデルの単価
+  （`ORCA_INPUT_MICRO_USD_PER_KTOK` / `ORCA_OUTPUT_MICRO_USD_PER_KTOK`）のいずれかが
+  未設定：`createModelGateway`が`UnconfiguredModelGateway`を返す。単価が無ければ
+  保守的な見積りを作れず、予約が実費を下回り得る。
+- 算出した見積りが0以下または整数でない：見積り0を許すと金額上限の比較が常に成立し、
   予算が無効になる。
+- 返信本文が入力長の上限を超える：見積りを超える費用になり得るため、予約前に拒否する。
 
 金額は**USDの整数micro単位**で扱う（RFC-004 §7の採用済み決定）。円換算は表示時に換算日時と
 レートを添えて行い、内部では円を持たない。Q10で未決なのは**上限値**であって、通貨・表現では

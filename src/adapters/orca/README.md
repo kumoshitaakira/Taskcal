@@ -8,9 +8,11 @@ OrcaRouter経由の推論。担当A（RFC-012 §3.1）。
 - 実呼出しはサーバーからのみ行う。キーをブラウザ・モバイルクライアントへ渡さない（AGENTS.md）。
 - 金額は**USDの整数micro単位**で記録する（RFC-004 §7）。円換算は表示時に、換算日時と
   レートを添えて行う。内部で円を持たない。
-- `case_spend_limit` / `run_spend_limit` / 1呼出しの見積りが未設定なら有料呼出しを
+- `case_spend_limit` / `run_spend_limit` / 候補モデルの単価が未設定なら有料呼出しを
   開始しない（RFC-004 §7、ADR-007、Q10）。`case_call_limit` が未設定の場合は
-  ADR-007の初期値10を既定にする。
+  Q10で暫定確定した24を既定にする（`DEFAULT_CASE_CALL_LIMIT`）。ADR-007の10call／案件は
+  順次打診を前提にした値のため置き換えた。24は**検証前の上限候補**であり、十分な回数だ
+  という保証ではない。
 - 予約は `request_id` で冪等にし、`request_hash` を台帳へ保存して再予約時に照合する。
   同じIDで内容が異なる要求は `OPERATION_CONFLICT` で拒否する（D07）。
   `request_id` は**呼出し元が永続化**し、adapter側で採番しない。
