@@ -120,7 +120,13 @@ export function buildAppServices() {
       ids: idGenerator,
     }),
     sendOutbox: sendOutbox({ outbox, outreaches, messaging }),
-    settleReporting: settleReporting({ cases, outbox }),
+    settleReporting: settleReporting({
+      cases,
+      outbox,
+      scheduleUpdates,
+      selections,
+      schedules,
+    }),
     adoptPlan: adoptPlan({
       cases,
       commitments,

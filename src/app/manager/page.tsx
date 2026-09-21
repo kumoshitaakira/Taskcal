@@ -70,9 +70,10 @@ export default async function ManagerPage({
   const outreachOperationId = view.activeCase
     ? `outreach:${view.activeCase.caseId}`
     : `outreach:${randomUUID()}`;
-  // 正式採用は描画ごとに新しいキーにする。二重クリック・再読込は同じキーだが、
-  // 一度断られた後の再試行は別の操作にする——未実装で断った結果を、実装が入った後も
-  // 同じ拒否として返し続けないため（`src/application/adopt-plan.ts`）。
+  // 正式採用のキーは**描画ごと**に作る。同じ描画内の二重クリックだけが同じキーで、
+  // 再読込・戻る操作は別の操作になる（打診の `outreach:{caseId}` とは違う）。
+  // 内容から決めてしまうと、未実装で一度断った結果を実装が入った後も返し続けるため。
+  // 進行中の更新は作り直さず `findOpenByCase` で再開する（`adopt-plan.ts`）。
   const adoptOperationId = `adopt:${view.activeCase?.caseId ?? "none"}:${randomUUID()}`;
   // 進行中の更新は作り直さず再開する（RFC-010 §7）。停止済みの案件では出さない（D10）。
   const resuming =

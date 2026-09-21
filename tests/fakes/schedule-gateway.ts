@@ -29,8 +29,11 @@ export interface FakeScheduleGatewayOptions {
   readonly applyKind?: UpdateResultKind;
   /** `applyUpdate` で例外を投げる。成否不明の経路（A03）。 */
   readonly applyThrows?: Error;
-  /** `getUpdateResult` の結果。結果不明からの再開に使う。 */
-  readonly lookup?: UpdateResult | "LOOKUP_UNAVAILABLE" | "CONFLICT";
+  /**
+   * `getUpdateResult` の結果。結果不明からの再開に使う。
+   * 種別を渡すと `applyUpdate` と同じ形の結果を組み立てて返す。
+   */
+  readonly lookup?: UpdateResultKind | "LOOKUP_UNAVAILABLE" | "CONFLICT";
   /** 読戻しを意図的にずらす（A07）。既定は要求どおりに返す。 */
   readonly readBackOverride?: (
     expected: readonly LoadedAssignment[],
@@ -56,10 +59,27 @@ export function createFakeScheduleGateway(
   options: FakeScheduleGatewayOptions,
 ): FakeScheduleGateway {
   const calls = { applyUpdate: 0, getUpdateResult: 0, readBack: 0 };
+  const LOOKUP_FAILURES = ["LOOKUP_UNAVAILABLE", "CONFLICT"] as const;
   let lastCommand: ApplyUpdateCommand | undefined;
   const capabilities = { ...DEFAULT_CAPABILITIES, ...options.capabilities };
   const newRevision = `${options.sourceRevision}+1`;
   const artifactRef = "var/test/worksheet.csv";
+
+  /** 種別に応じた結果。成果物ができる種別だけが参照と新しい版を持つ。 */
+  function resultOf(kind: UpdateResultKind, command: ApplyUpdateCommand): UpdateResult {
+    const produced = kind === "PREPARED" || kind === "APPLIED";
+    return {
+      operation: command.operation,
+      kind,
+      artifactRef: produced ? artifactRef : undefined,
+      newSourceRevision: produced ? newRevision : undefined,
+      revisionCheckEnforced: capabilities.canConditionalUpdate,
+      mappings: command.additions.map((addition) => ({
+        commitmentId: addition.commitmentId,
+        shiftAssignmentId: addition.shiftAssignmentId,
+      })),
+    };
+  }
 
   /** 要求どおりに反映された結果の勤務。読戻しの期待値でもある。 */
   function expectedAssignments(command: ApplyUpdateCommand): readonly LoadedAssignment[] {
@@ -105,23 +125,21 @@ export function createFakeScheduleGateway(
       calls.applyUpdate += 1;
       lastCommand = command;
       if (options.applyThrows) return Promise.reject(options.applyThrows);
-      const kind = options.applyKind ?? "PREPARED";
-      return Promise.resolve({
-        operation: command.operation,
-        kind,
-        artifactRef: kind === "PREPARED" || kind === "APPLIED" ? artifactRef : undefined,
-        newSourceRevision: kind === "PREPARED" || kind === "APPLIED" ? newRevision : undefined,
-        revisionCheckEnforced: capabilities.canConditionalUpdate,
-        mappings: command.additions.map((addition) => ({
-          commitmentId: addition.commitmentId,
-          shiftAssignmentId: addition.shiftAssignmentId,
-        })),
-      });
+      return Promise.resolve(resultOf(options.applyKind ?? "PREPARED", command));
     },
 
-    getUpdateResult() {
+    getUpdateResult(ref) {
       calls.getUpdateResult += 1;
-      return Promise.resolve(options.lookup ?? "LOOKUP_UNAVAILABLE");
+      const lookup = options.lookup ?? "LOOKUP_UNAVAILABLE";
+      if ((LOOKUP_FAILURES as readonly string[]).includes(lookup)) {
+        return Promise.resolve(lookup as "LOOKUP_UNAVAILABLE" | "CONFLICT");
+      }
+      if (!lastCommand) return Promise.resolve("LOOKUP_UNAVAILABLE" as const);
+      // 照会は、実行済みの操作の結果を返す。要求した内容から組み立てる。
+      return Promise.resolve({
+        ...resultOf(lookup as UpdateResultKind, lastCommand),
+        operation: { operationId: ref.operationId, requestHash: lastCommand.operation.requestHash },
+      });
     },
 
     readBack(): Promise<ReadBackResult> {

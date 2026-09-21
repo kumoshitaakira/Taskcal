@@ -506,6 +506,14 @@ export interface ScheduleUpdateRepository {
       artifactRef?: string;
       newSourceRevision?: SourceRevision;
       revisionCheckEnforced?: boolean;
+      /**
+       * 案件版を動かしたときは、**必ずここへ新しい値を渡す**（D08）。
+       *
+       * 直前再検査はこの版と案件行を照合する。照合待ちへ入れるなど、この進行自身が
+       * 案件版を進めた場合に更新し忘れると、次に再開したとき「別の変更が入った」と
+       * 誤判定し、採用できたはずの計画を未採用と断定してしまう（A03）。
+       */
+      caseVersion?: number;
       /** `ADOPTED` のときだけ必須。DBの制約が対で入ることを要求する。 */
       adoptedAt?: string;
     },

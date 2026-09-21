@@ -135,7 +135,8 @@ export function createPgScheduleUpdateRepository(): ScheduleUpdateRepository {
                   artifact_ref = coalesce($4, artifact_ref),
                   new_source_revision = coalesce($5, new_source_revision),
                   revision_check_enforced = coalesce($6, revision_check_enforced),
-                  adopted_at = $7
+                  case_version = coalesce($7, case_version),
+                  adopted_at = $8
             where schedule_update_id = $1`,
           [
             input.scheduleUpdateId,
@@ -144,6 +145,7 @@ export function createPgScheduleUpdateRepository(): ScheduleUpdateRepository {
             input.artifactRef ?? null,
             input.newSourceRevision ?? null,
             input.revisionCheckEnforced ?? null,
+            input.caseVersion ?? null,
             input.adoptedAt ?? null,
           ],
         );

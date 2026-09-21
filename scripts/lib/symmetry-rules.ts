@@ -239,7 +239,11 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
   },
   {
     label: "採用結果の照合は勤務ID・担当者・役割・区間・件数を見る（RFC-010 §4 手順4 / A07）",
-    members: [{ name: "function matchesExpected", file: "src/application/adopt-plan.ts" }],
+    // 正式採用の進行と、落ちた後の復旧（settle-reporting）が**同じ関数**を使う。
+    // 別々に書くと、片方だけが件数を見る、といった食い違いができる。
+    members: [
+      { name: "export function matchesExpected", file: "src/application/adoption-check.ts" },
+    ],
     // IDごとの一致だけでは、余分な代替勤務が生えていても気付けない。
     mustContain: ["staffId", "roleCode", "sameInstant", "length", "ABSENT"],
   },

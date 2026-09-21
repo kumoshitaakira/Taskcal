@@ -18,7 +18,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { buildAppServices } from "@/application/deps";
-import { ERROR_CODES, type ErrorCode } from "@/contracts/errors";
+import { ERROR_CODES, TaskcalError, type ErrorCode } from "@/contracts/errors";
 import { NOTICE, type NoticeCode } from "../_components/notice";
 
 function back(path: string, code: NoticeCode, count?: number): never {
@@ -134,7 +134,19 @@ export async function adoptPlanAction(formData: FormData): Promise<void> {
   if (!operationId || !caseId) back("/manager", NOTICE.INPUT_MISSING);
 
   const services = buildAppServices();
-  const result = await services.adoptPlan({ operationId, caseId });
+  // 想定外の例外を素通りさせない。Next のエラー画面になると、店長には「停止」
+  // 「拒否」「結果不明」のどれでもない未定義の状態に見え、その場で復帰できない。
+  // redirect は例外で実現されているので、ここで握り潰さないよう外へ出す。
+  let result;
+  try {
+    result = await services.adoptPlan({ operationId, caseId });
+  } catch (error) {
+    if (error instanceof TaskcalError) {
+      revalidatePath("/manager");
+      back("/manager", adoptNoticeOf(error.code));
+    }
+    throw error;
+  }
 
   revalidatePath("/manager");
   revalidatePath("/staff");

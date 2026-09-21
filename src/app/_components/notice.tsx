@@ -81,6 +81,21 @@ const TEXT: Record<NoticeCode, (count?: number) => string> = {
   FAILED: () => "処理に失敗しました。ログを確認してください。",
 };
 
+/**
+ * 結果不明・要対応。**成功でも失敗でもない。**
+ *
+ * 「失敗」と書くと未確定と読まれ（ADR-022）、「実行しました」と書くと成功と読まれる。
+ * どちらも誤りなので、3つ目のトーンを持つ。`case-panel.tsx` が状態タグで `tag-warn` を
+ * 使っているのと同じ語彙にそろえる。
+ */
+const WARN: readonly NoticeCode[] = [
+  NOTICE.ADOPT_ATTENTION,
+  NOTICE.ADOPT_RECONCILE,
+  NOTICE.ADOPT_NOT_FEASIBLE,
+  NOTICE.CASE_RECONCILE,
+  NOTICE.OUTREACH_NONE,
+];
+
 const BAD: readonly NoticeCode[] = [
   NOTICE.ADOPT_REJECTED,
   NOTICE.ADOPT_NOT_IMPLEMENTED,
@@ -116,13 +131,14 @@ export function Notice({ code, count }: { code?: string; count?: string }) {
   if (!code || !isNoticeCode(code)) return null;
   // 数値以外は表示しない。URLから任意の文字列を出せないようにする。
   const parsed = count && /^\d{1,4}$/.test(count) ? Number(count) : undefined;
-  const tone = BAD.includes(code) ? "tag-bad" : "tag-ok";
+  const [tone, label] = BAD.includes(code)
+    ? (["tag-bad", "できませんでした"] as const)
+    : WARN.includes(code)
+      ? (["tag-warn", "確認してください"] as const)
+      : (["tag-ok", "実行しました"] as const);
   return (
     <div className="notice">
-      <span className={`tag ${tone}`}>
-        {BAD.includes(code) ? "できませんでした" : "実行しました"}
-      </span>{" "}
-      {TEXT[code](parsed)}
+      <span className={`tag ${tone}`}>{label}</span> {TEXT[code](parsed)}
     </div>
   );
 }

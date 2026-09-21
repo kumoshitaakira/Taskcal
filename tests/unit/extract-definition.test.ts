@@ -127,6 +127,22 @@ describe("定義の切り出し（check:consistency の対称性検査）", () =
     expect(extractDefinition(src, "foo")).toContain("CONFLICT");
   });
 
+  it("複数行のunion戻り値型で本体が切れない", () => {
+    // `| { ... }` は1行で開いて閉じるので、素朴に見ると定義の終わりに見える。
+    // ここで切ると本体が丸ごと落ち、対称性検査は「語が無い」と誤って落ちるか、
+    // 語を消しても気付かない側へ倒れる。
+    const src = [
+      "export function f(): Promise<",
+      "  | { readonly ok: true; readonly n: number }",
+      "  | { readonly ok: false }",
+      "> {",
+      "  return MARKER();",
+      "}",
+    ].join("\n");
+    const out = extractDefinition(src, "export function f");
+    expect(out).toContain("MARKER()");
+  });
+
   it("名前が無ければ undefined を返す", () => {
     expect(extractDefinition("interface X {}", "notThere")).toBeUndefined();
   });

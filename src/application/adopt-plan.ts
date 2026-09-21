@@ -23,9 +23,10 @@
  *   - D09：読戻し・通知が失敗しても確定済みの勤務と採用事実を消さない。
  *
  * 操作IDは二つ使う。用途が違うため一つに畳まない。
- *   - `command.operationId`（`ADOPT_PLAN`）：画面の操作の冪等キー。二重クリック・
- *     再読込を同じ操作にする。**描画ごとに作る**（`adopt:{caseId}:{uuid}`）——内容から
- *     決めてしまうと、未実装で一度断った案件を、実装が入った後も同じ拒否で返し続ける。
+ *   - `command.operationId`（`ADOPT_PLAN`）：画面の操作の冪等キー。**描画ごとに作る**
+ *     （`adopt:{caseId}:{uuid}`）ので、同じ操作になるのは**同じ描画内の二重クリックだけ**。
+ *     再読込は別の操作になる。内容から決めてしまうと、未実装で一度断った案件を、
+ *     実装が入った後も同じ拒否で返し続ける。再読込後の続きは `findOpenByCase` が拾う。
  *   - `applyOperationId(selectionId)`（`APPLY_UPDATE`）：**外部作用**の冪等キー。
  *     不変の選定結果から決まるので、プロセスが落ちて再開しても同じ値になり、
  *     `getUpdateResult` で同じ操作の結果を照会できる（RFC-010 §7）。
@@ -37,6 +38,7 @@ import type { ScheduleReadRepository } from "../adapters/db/schedule-repository"
 import {
   ADOPTION_FACT,
   HANDOFF_REASON,
+  isAllowedCaseTransition,
   resolveCaseReconcile,
   resolvePreparingStop,
   type CaseState,
@@ -66,7 +68,6 @@ import type {
 } from "../contracts/repository";
 import type {
   ApplyUpdatePayloadForHash,
-  LoadedAssignment,
   PlannedAbsence,
   PlannedAssignment,
   ScheduleGateway,
@@ -86,6 +87,7 @@ import type {
   SelectionPlanner,
   SelectionResult,
 } from "../contracts/selection";
+import { matchesExpected, plannedAbsences, plannedAdditions } from "./adoption-check";
 import {
   buildCaseClosedBody,
   buildConfirmationBody,
@@ -95,7 +97,7 @@ import {
 import { sendOperationId } from "./start-outreach";
 
 export interface AdoptPlanCommand {
-  /** 画面が描画時に作った安定キー。二重クリック・再読込は同じ値になる。 */
+  /** 画面が描画時に作ったキー。同じ描画内の二重クリックだけが同じ値になる。 */
   readonly operationId: string;
   readonly caseId: string;
 }
@@ -198,11 +200,6 @@ function isRefusedBeforeEffect(error: unknown): error is TaskcalError {
   );
 }
 
-/** 半開区間の比較。ISO文字列の表記揺れを吸収するため時刻として比べる。 */
-function sameInstant(a: string, b: string): boolean {
-  return Date.parse(a) === Date.parse(b);
-}
-
 /** 停止理由から引き継ぎ理由へ。店長停止は `CANCELLED` なのでここへ来ない。 */
 function handoffReasonOf(cause: StopCause) {
   switch (cause) {
@@ -213,7 +210,35 @@ function handoffReasonOf(cause: StopCause) {
     case "CANDIDATES_EXHAUSTED":
       return HANDOFF_REASON.CANDIDATES_EXHAUSTED;
     case "MANAGER_STOP":
-      return HANDOFF_REASON.DEADLINE_REACHED;
+      // 店長停止は `resolvePreparingStop` が `CANCELLED` へ落とすので、引き継ぎ理由へ
+      // 写す経路は無い。黙って期限到達へ写すと、キャンセルを引き継ぎとして誤記録する。
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "店長停止は引き継ぎではなくキャンセルです。",
+      );
+  }
+}
+
+/**
+ * 採用取引を巻き戻すための合図。
+ *
+ * **取引の中で確定結果を書けない。** 手順6の途中で前提が崩れたら取引ごと巻き戻す
+ * 必要があり（D06／A08）、その同じ取引で「拒否した」と書いても一緒に消える。
+ * 巻き戻した**後**に別取引で確定させるため、理由をここへ載せて外まで運ぶ。
+ *
+ * 素の `Error` にしない。想定外の例外（バグ・接続断）と、こちらが意図して巻き戻した
+ * ものを取り違えると、未採用と断定してよいかの判断が変わる。
+ */
+class AdoptRollback extends Error {
+  readonly code: ErrorCode;
+  /** 他の実行がすでに採用済み。未採用として上書きしてはいけない（A04）。 */
+  readonly alreadyAdopted: boolean;
+
+  constructor(code: ErrorCode, message: string, alreadyAdopted = false) {
+    super(message);
+    this.name = "AdoptRollback";
+    this.code = code;
+    this.alreadyAdopted = alreadyAdopted;
   }
 }
 
@@ -242,8 +267,12 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     snapshot: CaseSnapshot,
     to: CaseState,
     extra: { adoptionFact?: (typeof ADOPTION_FACT)[keyof typeof ADOPTION_FACT]; handoff?: Handoff },
-  ): Promise<"UPDATED" | "VERSION_CONFLICT"> {
-    if (to === snapshot.state) return "UPDATED";
+  ): Promise<
+    | { readonly moved: true; readonly version: number }
+    | { readonly moved: false; readonly reason: "VERSION_CONFLICT" | "NOT_ALLOWED" }
+  > {
+    if (to === snapshot.state) return { moved: true, version: snapshot.version };
+
     if (snapshot.state === "PREPARING" && to === "ATTENTION") {
       const first = await deps.cases.applyTransition(tx, {
         caseId: snapshot.caseId,
@@ -251,21 +280,34 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         to: "RECONCILE_REQUIRED",
         adoptionFact: extra.adoptionFact,
       });
-      if (first === "VERSION_CONFLICT") return first;
-      return deps.cases.applyTransition(tx, {
+      if (first === "VERSION_CONFLICT") return { moved: false, reason: "VERSION_CONFLICT" };
+      const second = await deps.cases.applyTransition(tx, {
         caseId: snapshot.caseId,
         expectedVersion: snapshot.version + 1,
         to: "ATTENTION",
         adoptionFact: extra.adoptionFact,
+        handoff: extra.handoff,
       });
+      return second === "UPDATED"
+        ? { moved: true, version: snapshot.version + 2 }
+        : { moved: false, reason: "VERSION_CONFLICT" };
     }
-    return deps.cases.applyTransition(tx, {
+
+    // 遷移表に無い行き先は**書こうとしない**。`applyTransition` は例外を投げるので、
+    // ここで弾かないと「拒否を記録しようとして落ちる」経路になる（並行採用のとき）。
+    if (!isAllowedCaseTransition(snapshot.state, to)) {
+      return { moved: false, reason: "NOT_ALLOWED" };
+    }
+    const moved = await deps.cases.applyTransition(tx, {
       caseId: snapshot.caseId,
       expectedVersion: snapshot.version,
       to,
       adoptionFact: extra.adoptionFact,
       handoff: extra.handoff,
     });
+    return moved === "UPDATED"
+      ? { moved: true, version: snapshot.version + 1 }
+      : { moved: false, reason: "VERSION_CONFLICT" };
   }
 
   /** 通知待ちを積む。宛先は打診時に固定した版をそのまま使う（A15）。 */
@@ -299,9 +341,21 @@ export function adoptPlan(deps: AdoptPlanDeps) {
 
     for (const outreach of outreaches) {
       const chosen = selectedByOutreach.get(outreach.outreachId);
+      const notSelectedHere = notSelected.has(outreach.outreachId);
+      // **打診が届いたと確認できていない相手へ「募集終了」を送らない。**
+      // 初回打診が送信待ちのまま残っていると、同じ受信箱に「打診」と「終了しました」が
+      // 続けて入る。届いたと確認できるまで動かさない方針（A11）と向きをそろえる。
+      if (!chosen && !notSelectedHere && outreach.state === "PENDING_SEND") {
+        await deps.cases.recordEvent(tx, {
+          caseId: input.snapshot.caseId,
+          kind: "CASE_CLOSED_SKIPPED",
+          detail: { outreachId: outreach.outreachId, reason: "NOT_DELIVERED" },
+        });
+        continue;
+      }
       const kind = chosen
         ? "CONFIRMATION"
-        : notSelected.has(outreach.outreachId)
+        : notSelectedHere
           ? "NOT_SELECTED"
           : // Q07：返信が無かった相手も待たせない。募集が終わったことを伝える。
             "CASE_CLOSED";
@@ -345,263 +399,291 @@ export function adoptPlan(deps: AdoptPlanDeps) {
    * 状態を決めると、更新は採用済みなのに案件は調整中、といった食い違いができる（ADR-022）。
    */
   async function adopt(input: {
-    update: ScheduleUpdateSnapshot;
+    /** 成果物と新しい版が確定していること。手順4を通していない更新を渡さない。 */
+    update: ScheduleUpdateSnapshot & { artifactRef: string; newSourceRevision: string };
     selection: SelectionResult;
     operationId: string;
-  }): Promise<{ readonly ok: true; readonly adopted: number } | Failure> {
+  }): Promise<
+    | { readonly ok: true; readonly adopted: number }
+    | Failure
+    | { readonly ok: false; readonly rolledBack: AdoptRollback }
+  > {
     const now = deps.clock.now();
-    return withTransaction(async (tx) => {
-      // ADR-006 のロック順：store → case → staff。案件行を取って直列化する。
-      const snapshot = await deps.cases.lockForUpdate(tx, input.update.caseId);
-      if (snapshot === "NOT_FOUND") {
-        return refuse(
-          deps.operations,
-          tx,
-          input.operationId,
-          ERROR_CODES.INVALID_INPUT,
-          "案件が見つかりません。",
-        );
-      }
+    try {
+      return await withTransaction(async (tx) => {
+        // ADR-006 のロック順：store → case → staff。案件行を取って直列化する。
+        const snapshot = await deps.cases.lockForUpdate(tx, input.update.caseId);
+        if (snapshot === "NOT_FOUND") {
+          return refuse(
+            deps.operations,
+            tx,
+            input.operationId,
+            ERROR_CODES.INVALID_INPUT,
+            "案件が見つかりません。",
+          );
+        }
 
-      /** 前提が崩れた。成果物は未採用として保持し、勤務照会に混ぜない（RFC-010 §4）。 */
-      const rejected = async (code: ErrorCode, detail: string): Promise<Failure> => {
-        const finding = RECONCILE_FINDING.CONFIRMED_NOT_ADOPTED;
-        await deps.scheduleUpdates.advance(tx, {
-          scheduleUpdateId: input.update.scheduleUpdateId,
-          to: resolveReconcile(finding),
-        });
-        // Q13／ADR-022：`PREPARING` 中の停止は行き先が変わる。期限検知だけで
-        // 引き継がず、並行する正式採用の結果（ここでは未採用と確定）を先に決める。
-        const to =
-          snapshot.stoppedAt && snapshot.state === "PREPARING"
-            ? resolvePreparingStop({
-                adoptionFact: ADOPTION_FACT.NOT_ADOPTED,
-                cause: snapshot.stopCause ?? "MANAGER_STOP",
-              })
-            : resolveCaseReconcile({
-                finding,
-                lookupStillPossible: deps.gateway.capabilities.supportsResultLookup,
-              });
-        await moveCase(tx, snapshot, to, {
-          adoptionFact: ADOPTION_FACT.NOT_ADOPTED,
-          handoff:
-            to === "HANDED_OFF"
-              ? {
-                  reason: handoffReasonOf(snapshot.stopCause ?? "MANAGER_STOP"),
+        /** 前提が崩れた。成果物は未採用として保持し、勤務照会に混ぜない（RFC-010 §4）。 */
+        const rejected = async (code: ErrorCode, detail: string): Promise<Failure> => {
+          const finding = RECONCILE_FINDING.CONFIRMED_NOT_ADOPTED;
+          // Q13／ADR-022：`PREPARING` 中の停止は行き先が変わる。期限検知だけで
+          // 引き継がず、並行する正式採用の結果（ここでは未採用と確定）を先に決める。
+          const to =
+            snapshot.stoppedAt && snapshot.state === "PREPARING"
+              ? resolvePreparingStop({
                   adoptionFact: ADOPTION_FACT.NOT_ADOPTED,
-                  handedOffAt: now,
-                }
-              : undefined,
-        });
-        await deps.cases.recordEvent(tx, {
-          caseId: snapshot.caseId,
-          kind: "ADOPT_REJECTED",
-          detail: { code, scheduleUpdateId: input.update.scheduleUpdateId },
-        });
-        await refuse(deps.operations, tx, input.operationId, code, detail);
-        // 未採用として確定させた。呼出し元が「結果不明」と取り違えないよう明示する。
-        return fail(code, detail, "REJECTED");
-      };
+                  cause: snapshot.stopCause ?? "MANAGER_STOP",
+                })
+              : resolveCaseReconcile({
+                  finding,
+                  lookupStillPossible: deps.gateway.capabilities.supportsResultLookup,
+                });
+          const moved = await moveCase(tx, snapshot, to, {
+            adoptionFact: ADOPTION_FACT.NOT_ADOPTED,
+            handoff:
+              to === "HANDED_OFF"
+                ? {
+                    reason: handoffReasonOf(snapshot.stopCause ?? "MANAGER_STOP"),
+                    adoptionFact: ADOPTION_FACT.NOT_ADOPTED,
+                    handedOffAt: now,
+                  }
+                : undefined,
+          });
+          if (!moved.moved) {
+            // 並行する実行がすでに案件を動かしている（採用済みかもしれない）。
+            // **未採用として上書きしない。** 自分の拒否だけを記録して引き下がる。
+            await refuse(deps.operations, tx, input.operationId, code, detail);
+            return fail(code, detail);
+          }
+          const advanced = await deps.scheduleUpdates.advance(tx, {
+            scheduleUpdateId: input.update.scheduleUpdateId,
+            to: resolveReconcile(finding),
+            caseVersion: moved.version,
+          });
+          if (advanced !== "UPDATED") {
+            // 更新がすでに終端（採用済み・不採用）。ここで未採用と書き換えない。
+            await refuse(deps.operations, tx, input.operationId, code, detail);
+            return fail(code, detail);
+          }
+          await deps.cases.recordEvent(tx, {
+            caseId: snapshot.caseId,
+            kind: "ADOPT_REJECTED",
+            detail: { code, scheduleUpdateId: input.update.scheduleUpdateId },
+          });
+          await refuse(deps.operations, tx, input.operationId, code, detail);
+          // 未採用として確定させた。呼出し元が「結果不明」と取り違えないよう明示する。
+          return fail(code, detail, "REJECTED");
+        };
 
-      // --- 手順5：直前再検査（D08）。選定時に通ったことを再利用しない。 ---
-      if (snapshot.stoppedAt) {
-        // D10：停止後は正式採用を行わない。確定済みの事実は保持する。
-        return rejected(ERROR_CODES.CASE_STOPPED, "停止済みの案件です。正式採用は行いません。");
-      }
-      if (snapshot.version !== input.update.caseVersion) {
-        // 準備を始めた後に別の変更が入っている（A04・A05）。
-        return rejected(
-          ERROR_CODES.REVISION_CONFLICT,
-          "準備を始めてから案件が更新されています。選び直してください。",
-        );
-      }
-      if (Date.parse(now) >= Date.parse(snapshot.deadlineAt)) {
-        return rejected(ERROR_CODES.DEADLINE_EXCEEDED, "回答期限を過ぎています。");
-      }
-      if (input.selection.inputs.monthlyCompleteness !== "COMPLETE") {
-        // Q06／A09：欠けた日を0と推定しない。完全でなければ月次検査が成立しない。
-        return rejected(
-          ERROR_CODES.INVALID_INPUT,
-          "月内入力が完全ではありません。月次上限を検査できません。",
-        );
-      }
-
-      const ref = await deps.authoritative.get(tx, {
-        connectionId: snapshot.connectionId,
-        scheduleId: snapshot.scheduleId,
-      });
-      if (ref === "NOT_FOUND") {
-        return rejected(ERROR_CODES.INVALID_INPUT, "正式版参照がありません。");
-      }
-      if (ref.sourceRevision !== input.selection.inputs.sourceRevision) {
-        // A04：選定の入力版と現在の正式版が違う。別の採用が先に通っている。
-        return rejected(
-          ERROR_CODES.REVISION_CONFLICT,
-          "選定したときの勤務表と現在の正式版が異なります。",
-        );
-      }
-
-      const commitments = await deps.commitments.listByCase(tx, snapshot.caseId);
-      const byId = new Map(commitments.map((c) => [c.commitmentId, c] as const));
-      const supersededBy = new Map<string, string>();
-      for (const c of commitments) {
-        if (c.supersedes) supersededBy.set(c.supersedes, c.commitmentId);
-      }
-      // 承諾はID順に見る。ロック順を固定しないと、同時に走る2本が互いを待つ（ADR-006）。
-      const selectedIds = input.selection.selected
-        .map((s) => s.commitmentId)
-        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-      for (const commitmentId of selectedIds) {
-        const commitment = byId.get(commitmentId);
-        if (!commitment) {
-          return rejected(ERROR_CODES.INVALID_INPUT, "選定した承諾が見つかりません。");
+        // --- 手順5：直前再検査（D08）。選定時に通ったことを再利用しない。 ---
+        if (snapshot.stoppedAt) {
+          // D10：停止後は正式採用を行わない。確定済みの事実は保持する。
+          return rejected(ERROR_CODES.CASE_STOPPED, "停止済みの案件です。正式採用は行いません。");
         }
-        const chosen = input.selection.selected.find((s) => s.commitmentId === commitmentId);
-        if (!chosen || chosen.commitmentVersion !== commitment.version) {
-          // D04：status だけでなく版まで一致させる。訂正を見落とさない（A05）。
-          return rejected(ERROR_CODES.REVISION_CONFLICT, "承諾が選定時から変わっています。");
-        }
-        // D04：status 単独で判定しない。未処理の新しい返信・置換・期限も見る（A05）。
-        const selectable = isSelectableCommitment({
-          status: commitment.status,
-          supersededBy: supersededBy.get(commitmentId),
-          hasUnprocessedReply: await deps.inbound.hasUnprocessed(tx, commitment.outreachId),
-          deadlineAt: snapshot.deadlineAt,
-          now,
-        });
-        if (!selectable.selectable) {
+        if (snapshot.version !== input.update.caseVersion) {
+          // 準備を始めた後に別の変更が入っている（A04・A05）。
           return rejected(
             ERROR_CODES.REVISION_CONFLICT,
-            `承諾を選定できません（${selectable.reason}）。`,
+            "準備を始めてから案件が更新されています。選び直してください。",
           );
         }
-      }
+        if (Date.parse(now) >= Date.parse(snapshot.deadlineAt)) {
+          return rejected(ERROR_CODES.DEADLINE_EXCEEDED, "回答期限を過ぎています。");
+        }
+        if (input.selection.inputs.monthlyCompleteness !== "COMPLETE") {
+          // Q06／A09：欠けた日を0と推定しない。完全でなければ月次検査が成立しない。
+          return rejected(
+            ERROR_CODES.INVALID_INPUT,
+            "月内入力が完全ではありません。月次上限を検査できません。",
+          );
+        }
 
-      // D08：可能時間・月次上限・重複をもう一度検査する（担当B）。
-      const rechecked = deps.eligibility.recheck({
-        storeId: snapshot.storeId,
-        requirement: {
-          roleCode: snapshot.roleCode,
-          startAt: snapshot.requiredStartAt,
-          endAt: snapshot.requiredEndAt,
-        },
-        selected: input.selection.selected,
-        inputs: input.selection.inputs,
-      });
-      if (!rechecked.ok) {
-        return rejected(
-          ERROR_CODES.INVALID_INPUT,
-          `適格性の再検査で外れました（${rechecked.reason}）。`,
-        );
-      }
-
-      // --- 手順6：一括保存。ここから先の失敗は取引ごと巻き戻す（D06／A08）。 ---
-      for (const chosen of input.selection.selected) {
-        const commitment = byId.get(chosen.commitmentId) as Commitment;
-        const added = await deps.assignments.addAdditional(tx, {
-          shiftAssignmentId: chosen.plannedShiftAssignmentId,
+        const ref = await deps.authoritative.get(tx, {
+          connectionId: snapshot.connectionId,
           scheduleId: snapshot.scheduleId,
-          storeId: snapshot.storeId,
-          staffId: chosen.staffId,
-          roleCode: snapshot.roleCode,
-          startAt: chosen.startAt,
-          endAt: chosen.endAt,
-          sourceCaseId: snapshot.caseId,
-          sourceCommitmentId: commitment.commitmentId,
         });
-        if (added !== "INSERTED") {
-          // A08：一部だけを正式勤務にしない。取引ごと巻き戻す。
-          throw new TaskcalError(
-            ERROR_CODES.OPERATION_CONFLICT,
-            `代替勤務を追加できません（${added}）。全件を未採用のまま戻します。`,
+        if (ref === "NOT_FOUND") {
+          return rejected(ERROR_CODES.INVALID_INPUT, "正式版参照がありません。");
+        }
+        if (ref.sourceRevision !== input.selection.inputs.sourceRevision) {
+          // A04：選定の入力版と現在の正式版が違う。別の採用が先に通っている。
+          return rejected(
+            ERROR_CODES.REVISION_CONFLICT,
+            "選定したときの勤務表と現在の正式版が異なります。",
           );
         }
-      }
 
-      // 元勤務を欠勤にする。CANCELLED（勤務自体が無くなった）と混同しない。
-      const absent = await deps.assignments.markAbsent(tx, {
-        shiftAssignmentId: snapshot.absentShiftAssignmentId,
-      });
-      if (absent !== "UPDATED") {
-        throw new TaskcalError(
-          ERROR_CODES.OPERATION_CONFLICT,
-          "欠勤にする元勤務が予定済みではありません。全件を未採用のまま戻します。",
-        );
-      }
+        const commitments = await deps.commitments.listByCase(tx, snapshot.caseId);
+        const byId = new Map(commitments.map((c) => [c.commitmentId, c] as const));
+        const supersededBy = new Map<string, string>();
+        for (const c of commitments) {
+          if (c.supersedes) supersededBy.set(c.supersedes, c.commitmentId);
+        }
+        // 承諾はID順に見る。ロック順を固定しないと、同時に走る2本が互いを待つ（ADR-006）。
+        const selectedIds = input.selection.selected
+          .map((s) => s.commitmentId)
+          .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        for (const commitmentId of selectedIds) {
+          const commitment = byId.get(commitmentId);
+          if (!commitment) {
+            return rejected(ERROR_CODES.INVALID_INPUT, "選定した承諾が見つかりません。");
+          }
+          const chosen = input.selection.selected.find((s) => s.commitmentId === commitmentId);
+          if (!chosen || chosen.commitmentVersion !== commitment.version) {
+            // D04：status だけでなく版まで一致させる。訂正を見落とさない（A05）。
+            return rejected(ERROR_CODES.REVISION_CONFLICT, "承諾が選定時から変わっています。");
+          }
+          // D04：status 単独で判定しない。未処理の新しい返信・置換・期限も見る（A05）。
+          const selectable = isSelectableCommitment({
+            status: commitment.status,
+            supersededBy: supersededBy.get(commitmentId),
+            hasUnprocessedReply: await deps.inbound.hasUnprocessed(tx, commitment.outreachId),
+            deadlineAt: snapshot.deadlineAt,
+            now,
+          });
+          if (!selectable.selectable) {
+            return rejected(
+              ERROR_CODES.REVISION_CONFLICT,
+              `承諾を選定できません（${selectable.reason}）。`,
+            );
+          }
+        }
 
-      // A04：期待版付きで正式版参照を差し替える。読んでから書くまでの間に別の採用が
-      // 通っていれば、1行も更新されない。
-      const swapped = await deps.authoritative.swap(tx, {
-        connectionId: snapshot.connectionId,
-        scheduleId: snapshot.scheduleId,
-        expectedVersion: ref.version,
-        sourceRevision: input.update.newSourceRevision ?? ref.sourceRevision,
-        artifactRef: input.update.artifactRef ?? ref.artifactRef,
-        adoptedAt: now,
-        adoptedByScheduleUpdateId: input.update.scheduleUpdateId,
-      });
-      if (swapped === "REVISION_CONFLICT") {
-        throw new TaskcalError(
-          ERROR_CODES.REVISION_CONFLICT,
-          "正式版参照が別の採用で切り替わりました。全件を未採用のまま戻します。",
-        );
-      }
+        // D08：可能時間・月次上限・重複をもう一度検査する（担当B）。
+        const rechecked = deps.eligibility.recheck({
+          storeId: snapshot.storeId,
+          requirement: {
+            roleCode: snapshot.roleCode,
+            startAt: snapshot.requiredStartAt,
+            endAt: snapshot.requiredEndAt,
+          },
+          selected: input.selection.selected,
+          inputs: input.selection.inputs,
+        });
+        if (!rechecked.ok) {
+          return rejected(
+            ERROR_CODES.INVALID_INPUT,
+            `適格性の再検査で外れました（${rechecked.reason}）。`,
+          );
+        }
 
-      const finding: ReconcileFinding = RECONCILE_FINDING.CONFIRMED_ADOPTED;
-      const advanced = await deps.scheduleUpdates.advance(tx, {
-        scheduleUpdateId: input.update.scheduleUpdateId,
-        to: resolveReconcile(finding),
-        adoptedAt: now,
-      });
-      if (advanced !== "UPDATED") {
-        // D05／A04：この案件はすでに別の計画を採用している。別キーでも通さない。
-        throw new TaskcalError(
-          ERROR_CODES.OPERATION_CONFLICT,
-          `勤務表更新を採用済みにできません（${advanced}）。全件を未採用のまま戻します。`,
-        );
-      }
+        // --- 手順6：一括保存。ここから先の失敗は取引ごと巻き戻す（D06／A08）。 ---
+        for (const chosen of input.selection.selected) {
+          const commitment = byId.get(chosen.commitmentId) as Commitment;
+          const added = await deps.assignments.addAdditional(tx, {
+            shiftAssignmentId: chosen.plannedShiftAssignmentId,
+            scheduleId: snapshot.scheduleId,
+            storeId: snapshot.storeId,
+            staffId: chosen.staffId,
+            roleCode: snapshot.roleCode,
+            startAt: chosen.startAt,
+            endAt: chosen.endAt,
+            sourceCaseId: snapshot.caseId,
+            sourceCommitmentId: commitment.commitmentId,
+          });
+          if (added !== "INSERTED") {
+            // A08：一部だけを正式勤務にしない。取引ごと巻き戻す。
+            throw new AdoptRollback(
+              ERROR_CODES.OPERATION_CONFLICT,
+              `代替勤務を追加できません（${added}）。全件を未採用のまま戻します。`,
+            );
+          }
+        }
 
-      // ADR-022：採用事実は案件状態と別に記録する。状態から推定させない。
-      const moved = await moveCase(
-        tx,
-        snapshot,
-        resolveCaseReconcile({
-          finding,
-          lookupStillPossible: deps.gateway.capabilities.supportsResultLookup,
-        }),
-        { adoptionFact: ADOPTION_FACT.ADOPTED },
-      );
-      if (moved === "VERSION_CONFLICT") {
-        throw new TaskcalError(
-          ERROR_CODES.OPERATION_CONFLICT,
-          "案件が並行して更新されました。全件を未採用のまま戻します。",
-        );
-      }
+        // 元勤務を欠勤にする。CANCELLED（勤務自体が無くなった）と混同しない。
+        const absent = await deps.assignments.markAbsent(tx, {
+          shiftAssignmentId: snapshot.absentShiftAssignmentId,
+        });
+        if (absent !== "UPDATED") {
+          throw new AdoptRollback(
+            ERROR_CODES.OPERATION_CONFLICT,
+            "欠勤にする元勤務が予定済みではありません。全件を未採用のまま戻します。",
+          );
+        }
 
-      // Q07：確定通知・非選定通知・募集終了通知を同じ取引で積む。送信は取引の外。
-      await enqueueNotifications(tx, { snapshot, selection: input.selection });
+        // A04：期待版付きで正式版参照を差し替える。読んでから書くまでの間に別の採用が
+        // 通っていれば、1行も更新されない。
+        const swapped = await deps.authoritative.swap(tx, {
+          connectionId: snapshot.connectionId,
+          scheduleId: snapshot.scheduleId,
+          expectedVersion: ref.version,
+          // 旧版へ落とさない。成果物と新しい版は呼出し元が確定させている。
+          // `?? ref.*` で埋めると、勤務だけ増えて正式版参照は古いまま残る。
+          sourceRevision: input.update.newSourceRevision,
+          artifactRef: input.update.artifactRef,
+          adoptedAt: now,
+          adoptedByScheduleUpdateId: input.update.scheduleUpdateId,
+        });
+        if (swapped === "REVISION_CONFLICT") {
+          throw new AdoptRollback(
+            ERROR_CODES.REVISION_CONFLICT,
+            "正式版参照が別の採用で切り替わりました。全件を未採用のまま戻します。",
+          );
+        }
 
-      await deps.cases.recordEvent(tx, {
-        caseId: snapshot.caseId,
-        kind: "PLAN_ADOPTED",
-        detail: {
+        const finding: ReconcileFinding = RECONCILE_FINDING.CONFIRMED_ADOPTED;
+        const advanced = await deps.scheduleUpdates.advance(tx, {
           scheduleUpdateId: input.update.scheduleUpdateId,
-          selectionId: input.selection.selectionId,
-          adopted: input.selection.selected.length,
-        },
-      });
-      await deps.operations.complete(tx, {
-        operationId: input.operationId,
-        status: "SUCCEEDED",
-        result: {
-          outcome: "ADOPTED",
-          scheduleUpdateId: input.update.scheduleUpdateId,
-          adopted: input.selection.selected.length,
-        },
-      });
+          to: resolveReconcile(finding),
+          adoptedAt: now,
+        });
+        if (advanced !== "UPDATED") {
+          // D05／A04：この案件はすでに別の計画を採用している。別キーでも通さない。
+          throw new AdoptRollback(
+            ERROR_CODES.OPERATION_CONFLICT,
+            `勤務表更新を採用済みにできません（${advanced}）。全件を未採用のまま戻します。`,
+            // D05：この案件はすでに別の計画を採用している。未採用として上書きしない。
+            advanced === "ALREADY_ADOPTED",
+          );
+        }
 
-      return { ok: true as const, adopted: input.selection.selected.length };
-    });
+        // ADR-022：採用事実は案件状態と別に記録する。状態から推定させない。
+        const moved = await moveCase(
+          tx,
+          snapshot,
+          resolveCaseReconcile({
+            finding,
+            lookupStillPossible: deps.gateway.capabilities.supportsResultLookup,
+          }),
+          { adoptionFact: ADOPTION_FACT.ADOPTED },
+        );
+        if (!moved.moved) {
+          throw new AdoptRollback(
+            ERROR_CODES.OPERATION_CONFLICT,
+            `案件を確定済みへ進められません（${moved.reason}）。全件を未採用のまま戻します。`,
+          );
+        }
+
+        // Q07：確定通知・非選定通知・募集終了通知を同じ取引で積む。送信は取引の外。
+        await enqueueNotifications(tx, { snapshot, selection: input.selection });
+
+        await deps.cases.recordEvent(tx, {
+          caseId: snapshot.caseId,
+          kind: "PLAN_ADOPTED",
+          detail: {
+            scheduleUpdateId: input.update.scheduleUpdateId,
+            selectionId: input.selection.selectionId,
+            adopted: input.selection.selected.length,
+          },
+        });
+        await deps.operations.complete(tx, {
+          operationId: input.operationId,
+          status: "SUCCEEDED",
+          result: {
+            outcome: "ADOPTED",
+            scheduleUpdateId: input.update.scheduleUpdateId,
+            adopted: input.selection.selected.length,
+          },
+        });
+
+        return { ok: true as const, adopted: input.selection.selected.length };
+      });
+    } catch (error) {
+      // 取引は巻き戻った（勤務は1件も残っていない：A08）。確定結果はこの外で書く。
+      // 想定外の例外はそのまま投げる——巻き戻したことと、原因が分からないことは別。
+      if (error instanceof AdoptRollback) return { ok: false as const, rolledBack: error };
+      throw error;
+    }
   }
 
   /** 手順1-2・選定固定。 */
@@ -774,8 +856,8 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         return { kind: "NOT_FEASIBLE", result: { ok: true, ...stored, replayed: false } };
       }
 
-      const additions = sortedAdditions(selection, locked);
-      const absences = absencesOf(locked);
+      const additions = plannedAdditions(selection, locked);
+      const absences = plannedAbsences(locked);
       const payload: ApplyUpdatePayloadForHash = {
         connectionId: locked.connectionId,
         scheduleId: locked.scheduleId,
@@ -837,41 +919,6 @@ export function adoptPlan(deps: AdoptPlanDeps) {
 
       return { kind: "PREPARED", update, selection, requestHash, additions, absences };
     });
-  }
-
-  /** A06：`shiftAssignmentId` の昇順。CSVの行順のまま渡すと再試行が別内容になる。 */
-  function sortedAdditions(
-    selection: SelectionResult,
-    snapshot: CaseSnapshot,
-  ): readonly PlannedAssignment[] {
-    return selection.selected
-      .map((chosen) => ({
-        shiftAssignmentId: chosen.plannedShiftAssignmentId,
-        commitmentId: chosen.commitmentId,
-        staffId: chosen.staffId,
-        roleCode: snapshot.roleCode,
-        startAt: chosen.startAt,
-        endAt: chosen.endAt,
-        sourceCaseId: snapshot.caseId,
-      }))
-      .sort((a, b) =>
-        a.shiftAssignmentId < b.shiftAssignmentId
-          ? -1
-          : a.shiftAssignmentId > b.shiftAssignmentId
-            ? 1
-            : 0,
-      );
-  }
-
-  /** Q04：欠勤は元勤務の全時間。区間は元勤務と一致する。 */
-  function absencesOf(snapshot: CaseSnapshot): readonly PlannedAbsence[] {
-    return [
-      {
-        shiftAssignmentId: snapshot.absentShiftAssignmentId,
-        startAt: snapshot.requiredStartAt,
-        endAt: snapshot.requiredEndAt,
-      },
-    ];
   }
 
   /** 手順3：外部作用。**取引の外で行う。再実行しない。** */
@@ -967,14 +1014,13 @@ export function adoptPlan(deps: AdoptPlanDeps) {
   }): Promise<Failure> {
     const finding = RECONCILE_FINDING.STILL_UNKNOWN;
     await withTransaction(async (tx) => {
-      await deps.scheduleUpdates.advance(tx, {
-        scheduleUpdateId: input.update.scheduleUpdateId,
-        to: resolveReconcile(finding),
-        resultKind: "UNKNOWN",
-      });
       const snapshot = await deps.cases.lockForUpdate(tx, input.update.caseId);
+      // **案件を先に動かし、その版を更新へ書き戻す。** `RECONCILE_REQUIRED` は終端では
+      // ないので、ここで版がずれたまま残すと、次の再開が「別の変更が入った」と誤判定して
+      // 採用できたはずの計画を未採用と断定する（A03／D08）。
+      let caseVersion: number | undefined;
       if (snapshot !== "NOT_FOUND") {
-        await moveCase(
+        const moved = await moveCase(
           tx,
           snapshot,
           resolveCaseReconcile({
@@ -984,7 +1030,14 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           // 未採用へ丸めない。確認できるまで成否不明のまま持つ。
           { adoptionFact: ADOPTION_FACT.UNKNOWN },
         );
+        caseVersion = moved.moved ? moved.version : snapshot.version;
       }
+      await deps.scheduleUpdates.advance(tx, {
+        scheduleUpdateId: input.update.scheduleUpdateId,
+        to: resolveReconcile(finding),
+        resultKind: "UNKNOWN",
+        caseVersion,
+      });
       await deps.cases.recordEvent(tx, {
         caseId: input.update.caseId,
         kind: "ADOPT_RECONCILE_REQUIRED",
@@ -1000,42 +1053,10 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     return fail(ERROR_CODES.RECONCILE_REQUIRED, input.detail, "RECONCILE_REQUIRED");
   }
 
-  /**
-   * 手順4・手順7の照合。勤務ID・担当者・役割・区間・件数を検査する（RFC-010 §4）。
-   *
-   * 件数を落とさない。IDごとの一致だけを見ると、期待していない余分な代替勤務が
-   * 同じ案件から生えていても気付けない（A07）。
-   */
-  function matchesExpected(
-    assignments: readonly LoadedAssignment[],
-    additions: readonly PlannedAssignment[],
-    absences: readonly PlannedAbsence[],
-    caseId: string,
-  ): boolean {
-    for (const addition of additions) {
-      const found = assignments.find((a) => a.shiftAssignmentId === addition.shiftAssignmentId);
-      if (
-        !found ||
-        found.staffId !== addition.staffId ||
-        found.roleCode !== addition.roleCode ||
-        !sameInstant(found.startAt, addition.startAt) ||
-        !sameInstant(found.endAt, addition.endAt)
-      ) {
-        return false;
-      }
-    }
-    if (assignments.filter((a) => a.sourceCaseId === caseId).length !== additions.length) {
-      return false;
-    }
-    for (const absence of absences) {
-      const found = assignments.find((a) => a.shiftAssignmentId === absence.shiftAssignmentId);
-      // 欠勤（ABSENT）と取消（CANCELLED）を混同しない。往復して同じ状態で戻ること。
-      if (!found || found.status !== "ABSENT") return false;
-    }
-    return true;
-  }
-
   return async function run(command: AdoptPlanCommand): Promise<AdoptPlanResult> {
+    // 操作IDが描画ごとに一意なので、D07の内容照合はここでは実質働かない（同じIDが
+    // 再び来るのは同じ描画からの二重クリックだけで、そのとき内容は必ず同じ）。
+    // 内容の照合が効くのは外部作用の側（`apply:{selectionId}`）。
     const requestHash = computeRequestHash({ caseId: command.caseId });
 
     const begun = await withTransaction((tx) =>
@@ -1066,12 +1087,18 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           reason?: string;
         } | null;
         if (result?.outcome === "ADOPTED" && result.scheduleUpdateId) {
+          // **照合結果を true で固定しない。** 手順7は別取引なので、採用済みでも
+          // 読戻しが一致していない（`ATTENTION`）ことがある。再表示のときだけ
+          // 要対応を黙らせると、A07／D09 が画面から消える。
+          const current = await withTransaction((tx) => deps.cases.findById(tx, command.caseId));
           return {
             ok: true,
             outcome: "ADOPTED",
             scheduleUpdateId: result.scheduleUpdateId,
             adopted: result.adopted ?? 0,
-            readBackMatches: true,
+            readBackMatches:
+              current !== "NOT_FOUND" &&
+              (current.state === "REPORTING" || current.state === "COMPLETED"),
             replayed: true,
           };
         }
@@ -1099,6 +1126,11 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     let additions: readonly PlannedAssignment[];
     let absences: readonly PlannedAbsence[];
 
+    // **この呼出しで作った更新**と、DBから拾った更新を区別する。拾った更新は、
+    // 前回の呼出しが `applyUpdate` の途中で落ちていたかもしれない。確かめずに
+    // もう一度送ると外部作用が二度起きる（A03／RFC-010 §7）。
+    const resuming = open !== "NONE";
+
     if (open === "NONE") {
       const prepared = await prepare(command);
       if (prepared.kind !== "PREPARED") return prepared.result;
@@ -1114,8 +1146,8 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         return fail(ERROR_CODES.INVALID_INPUT, "再開に必要な選定結果または案件がありません。");
       }
       selection = resumed.stored;
-      additions = sortedAdditions(selection, resumed.snapshot);
-      absences = absencesOf(resumed.snapshot);
+      additions = plannedAdditions(selection, resumed.snapshot);
+      absences = plannedAbsences(resumed.snapshot);
       applyHash = computeRequestHash({
         connectionId: update.connectionId,
         scheduleId: update.scheduleId,
@@ -1123,6 +1155,26 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         additions,
         absences,
       } satisfies ApplyUpdatePayloadForHash);
+
+      // D07：再開で作り直した内容が、前回と同じであることを確かめる。案件や承諾が
+      // 動いていれば、同じ冪等キーのまま**内容の違う**要求になる。ここで気付かないと、
+      // 外部から見て同じ操作なのに中身が入れ替わる。
+      const again = await withTransaction((tx) =>
+        deps.operations.begin(tx, {
+          operation: { operationId: update.operationId, requestHash: applyHash },
+          kind: "APPLY_UPDATE",
+          connectionId: update.connectionId,
+          caseId: command.caseId,
+        }),
+      );
+      if (again.match === "CONFLICT") {
+        // 前回と内容が違う。外部作用の成否は分からないので、未採用と断定しない。
+        return markReconcileRequired({
+          update,
+          operationId: command.operationId,
+          detail: "再開時の更新内容が前回と一致しません。照合するまで採用しません。",
+        });
+      }
     }
 
     // --- 手順3-4：外部作用と読戻し ---
@@ -1131,8 +1183,10 @@ export function adoptPlan(deps: AdoptPlanDeps) {
 
     if (update.state !== "PREPARED") {
       let outcome: UpdateResult | "UNRESOLVED";
-      if (update.state === "RECONCILE_REQUIRED") {
-        // 再実行しない。照会して照合できたときだけ先へ進む（A03）。
+      if (resuming) {
+        // **再実行しない。** 前回の呼出しが途中で落ちていれば外部作用は済んでいる
+        // かもしれない。「未実行の確認」ができるのは照会だけで、それができない
+        // うちは成否不明として人の対応を待つ（A03／RFC-010 §7）。
         outcome = await lookUp(update, applyHash);
       } else {
         const applied = await applyToSource({
@@ -1155,6 +1209,15 @@ export function adoptPlan(deps: AdoptPlanDeps) {
       }
 
       if (outcome === "UNRESOLVED" || isOutcomeUnknown(outcome.kind)) {
+        // 外部作用の操作も結果不明として閉じる。IN_PROGRESS のまま残すと、
+        // 「まだ始めていない」と「結果が分からない」を操作表で区別できない。
+        await withTransaction((tx) =>
+          deps.operations.complete(tx, {
+            operationId: update.operationId,
+            status: "UNKNOWN",
+            result: { kind: outcome === "UNRESOLVED" ? "UNRESOLVED" : outcome.kind },
+          }),
+        );
         return markReconcileRequired({
           update,
           operationId: command.operationId,
@@ -1162,6 +1225,13 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         });
       }
       if (outcome.kind === "NOT_APPLIED" || outcome.kind === "CONFLICT") {
+        await withTransaction((tx) =>
+          deps.operations.complete(tx, {
+            operationId: update.operationId,
+            status: "REFUSED",
+            result: { kind: outcome.kind },
+          }),
+        );
         return settleNotAdopted({
           update,
           operationId: command.operationId,
@@ -1215,19 +1285,68 @@ export function adoptPlan(deps: AdoptPlanDeps) {
       }
 
       // 検査済みの作業用成果物ができた。**まだ正式勤務ではない。**
-      if (update.state === "PREPARING") {
-        await withTransaction((tx) =>
-          deps.scheduleUpdates.advance(tx, {
+      await withTransaction(async (tx) => {
+        if (update.state === "PREPARING") {
+          await deps.scheduleUpdates.advance(tx, {
             scheduleUpdateId: update.scheduleUpdateId,
             to: "PREPARED",
             resultKind: outcome.kind,
             artifactRef,
             newSourceRevision,
             revisionCheckEnforced: outcome.revisionCheckEnforced,
-          }),
-        );
-        update = { ...update, state: "PREPARED" };
+          });
+        }
+        await deps.operations.complete(tx, {
+          operationId: update.operationId,
+          status: "SUCCEEDED",
+          result: { kind: outcome.kind, artifactRef },
+        });
+      });
+      update = { ...update, state: "PREPARED", artifactRef, newSourceRevision };
+    } else if (resuming) {
+      // RFC-010 §7「CSV保存後・正式採用前の停止：操作IDで**成果物を照合し**、前提を
+      // 再検査して採用または破棄」。前提（手順5）は採用取引で見るが、成果物そのものは
+      // ここで見る。前回検査した後にファイルが変わっている可能性を消さない。
+      if (!artifactRef) {
+        return markReconcileRequired({
+          update,
+          operationId: command.operationId,
+          detail: "検査済みの成果物の参照がありません。照合するまで採用しません。",
+        });
       }
+      assertOutsideTransaction("成果物の読戻し");
+      try {
+        const back = await deps.gateway.readBack({
+          connectionId: update.connectionId,
+          artifactRef,
+        });
+        if (!matchesExpected(back.assignments, additions, absences, update.caseId)) {
+          return settleNotAdopted({
+            update,
+            operationId: command.operationId,
+            code: ERROR_CODES.INVALID_INPUT,
+            detail: "検査済みの成果物が期待する内容と一致しません。採用しません。",
+            artifactRef,
+          });
+        }
+        newSourceRevision = back.sourceRevision;
+      } catch {
+        return markReconcileRequired({
+          update,
+          operationId: command.operationId,
+          detail: "成果物を読み戻せません。照合するまで採用しません。",
+        });
+      }
+    }
+
+    // 成果物と新しい版が無いまま正式版参照を差し替えない。旧版のまま採用済みに
+    // 書き換えると、勤務だけ増えて成果物は古いままになる。
+    if (!artifactRef || !newSourceRevision) {
+      return markReconcileRequired({
+        update,
+        operationId: command.operationId,
+        detail: "成果物または新しい版が確定していません。採用しません。",
+      });
     }
 
     // --- 手順5-6：直前再検査と一括保存 ---
@@ -1236,6 +1355,26 @@ export function adoptPlan(deps: AdoptPlanDeps) {
       selection,
       operationId: command.operationId,
     });
+    if ("rolledBack" in adopted) {
+      const { code, message, alreadyAdopted } = adopted.rolledBack;
+      if (alreadyAdopted) {
+        // A04：別の実行がすでに採用している。**未採用として上書きしない。**
+        // 自分の操作だけを拒否として閉じ、相手の確定事実へは触れない。
+        await withTransaction((tx) =>
+          refuse(deps.operations, tx, command.operationId, code, message),
+        );
+        return fail(code, message);
+      }
+      // 取引は巻き戻り、勤務は1件も残っていない（A08）。**未採用と確定して構わない。**
+      // ここで確定させないと、更新が PREPARED・操作が IN_PROGRESS のまま残り、
+      // 決定的な失敗（重複・重なり）なら再試行が同じ場所で無限に止まる。
+      return settleNotAdopted({
+        update,
+        operationId: command.operationId,
+        code,
+        detail: message,
+      });
+    }
     if (!adopted.ok) return adopted;
 
     // --- 手順7：正式版参照から読み直して照合する（D11／A01） ---

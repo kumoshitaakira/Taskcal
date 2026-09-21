@@ -67,6 +67,8 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   const absentShift = randomUUID();
   const absentStaff = randomUUID();
   const candidates = [randomUUID(), randomUUID()];
+  /** 打診は届いたが返信が無い相手。募集終了通知（Q07）の宛先になる。 */
+  const silentStaff = randomUUID();
   let caseId: string;
   /** 打診ID・承諾ID。案件ごとに作り直す。 */
   let outreachIds: string[];
@@ -86,6 +88,17 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       eligibility: options.eligibility ?? createFakeEligibilityRecheck(),
       clock: { now: () => NOW },
       ids: { next: () => randomUUID() },
+    });
+  }
+
+  /** worker の1ステップ（採用の後始末）。 */
+  function settle() {
+    return settleReporting({
+      cases: repos.cases,
+      outbox: repos.outbox,
+      scheduleUpdates: repos.scheduleUpdates,
+      selections: repos.selections,
+      schedules: repos.schedules,
     });
   }
 
@@ -229,7 +242,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
          values ($1, '採用テスト店', 'Asia/Tokyo', 'FLOOR')`,
         [storeId],
       );
-      for (const [i, id] of [absentStaff, ...candidates].entries()) {
+      for (const [i, id] of [absentStaff, ...candidates, silentStaff].entries()) {
         await tx.query(
           `insert into staff (staff_id, store_id, display_name, role_code, monthly_cap_minutes)
            values ($1, $2, $3, 'FLOOR', 9600)`,
@@ -287,6 +300,24 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
           SHIFT_START,
           SHIFT_END,
           DEADLINE,
+        ],
+      );
+
+      // 返信の無い相手。打診は届いている（AWAITING_REPLY）ので、募集終了通知の対象。
+      await tx.query(
+        `insert into outreach
+           (outreach_id, case_id, staff_id, endpoint_provider, endpoint_connection_id,
+            endpoint_key, endpoint_version, offered_start_at, offered_end_at,
+            state, last_applied_seq, anonymous_staff_ref)
+         values ($1, $2, $3, 'mock', $4, $5, 1, $6, $7, 'AWAITING_REPLY', 0, 'staff-9')`,
+        [
+          randomUUID(),
+          caseId,
+          silentStaff,
+          CONNECTION,
+          `staff:${silentStaff}`,
+          SHIFT_START,
+          SHIFT_END,
         ],
       );
 
@@ -414,6 +445,8 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     );
     expect(Object.fromEntries(outbox.map((row) => [row.kind, row.n]))).toEqual({
       CONFIRMATION: 2,
+      // 返信が無かった相手も待たせない（Q07）。
+      CASE_CLOSED: 1,
     });
   });
 
@@ -470,7 +503,9 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     expect(await additionalShifts()).toHaveLength(0);
   });
 
-  it("A04：同じ旧版からの二つ目の採用は、別の操作キーでも通らない", async () => {
+  it("A04の一部：同じ旧版からの二つ目の採用を、DBの制約が別の操作キーでも拒む", async () => {
+    // **`adoptPlan` を2本走らせてはいない。** ここで確かめているのは、二重採用を
+    // 止める最後の砦（部分一意索引と期待版付きCAS）であって、アプリ経路の競合ではない。
     await build({})({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     const adoptedRef = await refRow();
     expect(adoptedRef.version).toBe(2);
@@ -617,7 +652,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       ),
     );
 
-    const outcome = await settleReporting({ cases: repos.cases, outbox: repos.outbox })();
+    const outcome = await settle()();
     expect(outcome).toMatchObject({ handled: true, to: "ATTENTION" });
 
     // D09：勤務を取り消さない。採用事実も保持する。「未確定」と表示しない。
@@ -632,7 +667,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       tx.query("update notification_outbox set status = 'SENT' where case_id = $1", [caseId]),
     );
 
-    const outcome = await settleReporting({ cases: repos.cases, outbox: repos.outbox })();
+    const outcome = await settle()();
     expect(outcome).toMatchObject({ handled: true, to: "COMPLETED" });
     expect(await caseRow()).toMatchObject({ state: "COMPLETED", adoption_fact: "ADOPTED" });
   });
@@ -669,6 +704,123 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     expect(await caseRow()).toMatchObject({ state: "COORDINATING", adoption_fact: "NOT_ADOPTED" });
     expect(await updateRow()).toBeUndefined();
     expect(await additionalShifts()).toHaveLength(0);
+  });
+
+  it("A03の続き：照会で確定できたら、そこから採用まで進む（未採用と断定しない）", async () => {
+    // 1回目は成否不明。2回目の再開で照会が確定結果を返す。
+    const gateway = createFakeScheduleGateway({
+      sourceRevision: REVISION,
+      applyThrows: new Error("timeout"),
+      lookup: "PREPARED",
+    });
+    const run = build({ gateway });
+
+    await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+    expect(await caseRow()).toMatchObject({ state: "RECONCILE_REQUIRED" });
+
+    const second = await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+    expect(second).toMatchObject({ ok: true, outcome: "ADOPTED", adopted: 2 });
+    // **再実行していない。** 照会で確定してから採用している。
+    expect(gateway.calls.applyUpdate).toBe(1);
+    expect(await additionalShifts()).toHaveLength(2);
+    expect(await updateRow()).toMatchObject({ state: "ADOPTED" });
+    expect(await caseRow()).toMatchObject({ state: "REPORTING", adoption_fact: "ADOPTED" });
+  });
+
+  it("A03：作成済みの更新を再開しても applyUpdate をやり直さない", async () => {
+    const gateway = createFakeScheduleGateway({
+      sourceRevision: REVISION,
+      applyThrows: new Error("timeout"),
+    });
+    const run = build({ gateway });
+    await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+
+    // applyUpdate の直後にプロセスが落ちた状態を作る。更新は PREPARING のまま、
+    // 外部作用が起きたかどうかは分からない。
+    await withTransaction((tx) =>
+      tx.query(
+        `update schedule_update set state = 'PREPARING', result_kind = null where case_id = $1`,
+        [caseId],
+      ),
+    );
+
+    const resumed = await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+    expect(resumed).toMatchObject({ ok: false, outcome: "RECONCILE_REQUIRED" });
+    // 未実行を確認できないので送り直さない。照会だけを行う。
+    expect(gateway.calls.applyUpdate).toBe(1);
+    expect(gateway.calls.getUpdateResult).toBeGreaterThan(0);
+    expect(await additionalShifts()).toHaveLength(0);
+  });
+
+  it("A08：決定的な失敗で巻き戻したら、未採用として確定させる（同じ場所で止め続けない）", async () => {
+    // 候補の一人に、必要枠と重なる別の勤務を先に入れておく。排他制約が採用取引を
+    // 中断させる（ADR-006）。
+    await withTransaction((tx) =>
+      tx.query(
+        `insert into shift_assignment
+           (shift_assignment_id, schedule_id, store_id, staff_id, role_code,
+            start_at, end_at, status)
+         values ($1, $2, $3, $4, 'FLOOR', $5, $6, 'SCHEDULED')`,
+        [randomUUID(), scheduleId, storeId, candidates[0], SHIFT_START, SHIFT_END],
+      ),
+    );
+
+    const result = await build({})({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    // 一部だけ正式勤務にしない。もう一方の候補の勤務も残っていない。
+    expect(await additionalShifts()).toHaveLength(0);
+    expect(await refRow()).toMatchObject({ version: 1 });
+    // **PREPARED のまま残さない。** 残すと決定的な失敗を毎回やり直して止まり続ける。
+    expect(await updateRow()).toMatchObject({ state: "REJECTED" });
+    expect(await caseRow()).toMatchObject({ state: "COORDINATING", adoption_fact: "NOT_ADOPTED" });
+  });
+
+  it("手順7の前に落ちた案件を、workerが読み直して進める（RFC-010 §4 手順7）", async () => {
+    await build({})({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+    // 採用取引は commit したが、手順7の前に落ちた状態を作る。
+    await withTransaction((tx) =>
+      tx.query("update absence_case set state = 'COMMITTED' where case_id = $1", [caseId]),
+    );
+
+    const outcome = await settle()();
+    expect(outcome).toMatchObject({ handled: true, to: "VERIFIED" });
+    expect(await caseRow()).toMatchObject({ state: "REPORTING", adoption_fact: "ADOPTED" });
+    // 確定済みの勤務は触らない。
+    expect(await additionalShifts()).toHaveLength(2);
+  });
+
+  it("Q07：非選定の相手と、返信の無かった相手にも通知を積む", async () => {
+    // 2件の承諾のうち1件だけを選ぶ。残り1件は非選定、承諾の無い打診は募集終了。
+    const thirdStaff = candidates[0];
+    const result = await build({ planner: createFakeSelectionPlanner({ take: 1 }) })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+    expect(result).toMatchObject({ ok: true, outcome: "ADOPTED", adopted: 1 });
+    expect(thirdStaff).toBeTruthy();
+
+    const outbox = await query<{ kind: string; n: number }>(
+      "select kind, count(*)::int as n from notification_outbox where case_id = $1 group by kind",
+      [caseId],
+    );
+    expect(Object.fromEntries(outbox.map((row) => [row.kind, row.n]))).toEqual({
+      CONFIRMATION: 1,
+      NOT_SELECTED: 1,
+      CASE_CLOSED: 1,
+    });
+
+    // 辞退理由を尋ねない。非選定を次回の不利として伝えない（AGENTS.md）。
+    const bodies = await query<{ kind: string; body: string }>(
+      "select kind, body from notification_outbox where case_id = $1",
+      [caseId],
+    );
+    const notSelected = bodies.find((row) => row.kind === "NOT_SELECTED");
+    expect(notSelected?.body).toContain("次回の打診に影響しません");
+    expect(notSelected?.body).not.toContain("理由");
   });
 
   it("月内入力が完全でなければ、採用の直前で止める（Q06 / A09）", async () => {

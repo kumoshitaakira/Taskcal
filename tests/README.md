@@ -22,13 +22,15 @@
 | `A13の一部：…` | ケースの一部だけ。前提を fixture で作っている場合を含む |
 | `A06の前提：…` | ケースが成り立つための下位の規則だけ。ケース自体は未実行 |
 
-現在そのまま再現できているのは A11・A12・A15・A18の一部（予算・回数上限）に加え、
-`integration/adopt-plan.test.ts` の A02・A03・A04・A05・A08 です。A07・A13 は一部のみ。
+**本番経路でそのまま再現**できているのは A11・A12・A15・A18の一部（予算・回数上限）です。
 
-**`adopt-plan.test.ts` は選定そのものを検査していません。** `SelectionPlanner` と
-`EligibilityChecker`（担当B）を `tests/fakes/` の台に差し替えており、Q02の被覆・重複や
-月次上限の規則は動いていません。A16・A17 を合格と読まないでください。同じ理由で
-`ScheduleGateway` も台です。CSVの往復（A01・A06・A14）は未実行のままです。
+`integration/adopt-plan.test.ts` の A02・A03・A05・A08（および A04・A07・A13 の一部）は、
+**担当Bの口を `tests/fakes/` の台に差し替えて手順だけを確認**したものです。同じ「確認済み」
+で括らないでください。`SelectionPlanner`・`EligibilityChecker`・`ScheduleGateway` が台なので、
+Q02の被覆・重複、月次上限、CSVの往復は動いていません。A16・A17・A01・A06・A14 は未実行です。
+
+A04 は二重採用を止めるDB制約（部分一意索引・期待版付きCAS）だけを確かめており、
+`adoptPlan` を2本走らせた競合は未実行です。
 
 `tests/fakes/` は**テスト専用**です。`src/` へ入れないでください。合成の根
 （`src/application/deps.ts`）には `NOT_IMPLEMENTED` を投げる実装だけを置きます。
