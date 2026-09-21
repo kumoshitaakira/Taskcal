@@ -206,6 +206,27 @@ describe.skipIf(!connectionString)("欠勤案件の作成（DATABASE_URL 必須�
     expect(second).toMatchObject({ ok: false, code: "OPERATION_CONFLICT" });
   });
 
+  it("検査で弾いた操作は進行中のまま残さない（同じ操作IDが恒久的に塞がらない）", async () => {
+    await clearCases();
+    const operationId = `case-${randomUUID()}`;
+    const missingShift = randomUUID();
+    // 存在しない勤務で弾かれる。
+    const first = await run(command({ operationId, absentShiftAssignmentId: missingShift }));
+    expect(first).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+
+    const stored = await withTransaction((tx) =>
+      tx.query<{ status: string }>("select status from operation_result where operation_id = $1", [
+        operationId,
+      ]),
+    );
+    // IN_PROGRESS のままだと、再実行が常に「結果不明」になって前へ進めない。
+    expect(stored.rows[0]?.status).toBe("REFUSED");
+
+    // 同じ操作IDの再実行は、同じ理由を返す（作り直さない）。
+    const again = await run(command({ operationId, absentShiftAssignmentId: missingShift }));
+    expect(again).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+  });
+
   it("D01：予定済みでない勤務は対象にしない", async () => {
     await clearCases();
     const result = await run(command({ absentShiftAssignmentId: completedShift }));

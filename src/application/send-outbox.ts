@@ -23,7 +23,7 @@ import {
   type SendOutcome,
 } from "../contracts/outreach-state";
 import type { OutboxRepository, OutboxStatus, OutreachRepository } from "../contracts/repository";
-import { withTransaction } from "../adapters/db/transaction";
+import { assertOutsideTransaction, withTransaction } from "../adapters/db/transaction";
 
 export interface SendOutboxDeps {
   readonly outbox: OutboxRepository;
@@ -42,6 +42,8 @@ export type SendOutboxOutcome =
       readonly outboxId: string;
       readonly status: OutboxStatus;
       readonly leaseLost: boolean;
+      /** 打診の状態を更新できなかった（並行更新）。黙って成功として扱わない。 */
+      readonly transitionConflict: boolean;
     };
 
 /** 返信を待つ送信の種別。 */
@@ -87,7 +89,9 @@ export function sendOutbox(deps: SendOutboxDeps) {
       throw new Error(`通知待ち ${claimed.outboxId} に対応する打診がありません。`);
     }
 
-    // ここから外部作用。取引の外で行う。
+    // ここから外部作用。取引の外で行う。取引の内側から呼ぶと、HTTP待ちの間
+    // 宛先行と通知待ち行のロックを保持する（RFC-010 §5）。
+    assertOutsideTransaction("メッセージ送信");
     const sent = await deps.messaging.send({
       operation: claimed.operation,
       to: target.endpoint,
@@ -98,6 +102,7 @@ export function sendOutbox(deps: SendOutboxDeps) {
     const outcome: SendOutcome = isRefused(sent) ? DELIVERY_NOT_SENT : sent.state;
     const status = statusOf(outcome);
 
+    let transitionConflict = false;
     const leaseLost = await withTransaction(async (tx) => {
       const settled = await deps.outbox.settle(tx, {
         outboxId: claimed.outboxId,
@@ -113,28 +118,33 @@ export function sendOutbox(deps: SendOutboxDeps) {
       if (outreach !== "NOT_FOUND") {
         const delivered = resolveOutreachAfterSend({ current: outreach.state, outcome });
         if (delivered !== outreach.state) {
-          await deps.outreaches.applyTransition(tx, {
+          const moved = await deps.outreaches.applyTransition(tx, {
             outreachId: outreach.outreachId,
             expectedVersion: outreach.version,
             to: delivered,
           });
+          if (moved === "VERSION_CONFLICT") {
+            transitionConflict = true;
+            return false;
+          }
 
           // 受付まで進んだ打診のうち、返信を待つ種別だけを返信待ちへ動かす。
           // 確定通知・非選定通知・募集終了通知は返信を前提にしない。
           // 送信済み（SENT）を飛ばして返信待ちへ直行しない——「受け付けられた」と
           // 「返信を待っている」を一つの遷移に畳むと、遷移表がその区別を失う。
           if (delivered === "SENT" && AWAITS_REPLY.includes(claimed.kind)) {
-            await deps.outreaches.applyTransition(tx, {
+            const awaited = await deps.outreaches.applyTransition(tx, {
               outreachId: outreach.outreachId,
               expectedVersion: outreach.version + 1,
               to: "AWAITING_REPLY",
             });
+            if (awaited === "VERSION_CONFLICT") transitionConflict = true;
           }
         }
       }
       return false;
     });
 
-    return { handled: true, outboxId: claimed.outboxId, status, leaseLost };
+    return { handled: true, outboxId: claimed.outboxId, status, leaseLost, transitionConflict };
   };
 }

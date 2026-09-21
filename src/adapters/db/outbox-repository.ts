@@ -5,8 +5,10 @@
  * 入れない）。取り出しは `for update skip locked` ＋ lease で、同じ項目を二つの
  * workerが同時に送らないようにする。
  *
- * **`UNKNOWN` は取り出さない。** 結果不明を失敗として扱わず、`getSendResult` で
- * 照合するまで再送しない（AGENTS.md）。照合は別の経路で行う。
+ * **`UNKNOWN` と `FAILED` は取り出さない。** 結果不明を失敗として扱わず、`getSendResult`
+ * で照合するまで再送しない（AGENTS.md）。配送失敗も自動では再送しない——同じ内容の
+ * 再送は保存済み結果を返すだけで結果が変わらず、取り出し続けると worker が空回りする。
+ * どちらの復旧も照合の経路が要る（未実装）。
  */
 
 import "server-only";
@@ -81,7 +83,10 @@ export function createPgOutboxRepository(): OutboxRepository {
                 attempts = attempts + 1
           where o.outbox_id = (
             select outbox_id from notification_outbox
-             where status in ('PENDING', 'FAILED')
+             -- FAILED と UNKNOWN は取り出さない。同じ内容の再送は保存済み結果を
+             -- 返すだけで結果が変わらず、取り出し続けると worker が空回りする。
+             -- 復旧は照合の経路（未実装）が入ってから行う。
+             where status = 'PENDING'
                and next_attempt_at <= now()
                and (leased_until is null or leased_until < now())
              order by created_at

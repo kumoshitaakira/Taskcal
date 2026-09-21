@@ -13,7 +13,7 @@
  */
 
 import "server-only";
-import { ERROR_CODES, type ErrorCode } from "../contracts/errors";
+import { ERROR_CODES, TaskcalError, type ErrorCode } from "../contracts/errors";
 import type { InboundEvent } from "../contracts/messaging-gateway";
 import {
   resolveOutreachAfterInbound,
@@ -89,17 +89,30 @@ export function receiveInboundEvent(deps: ReceiveInboundEventDeps) {
         return summarize(stored, identity);
       }
 
+      // 打診は `persist` の後に読み直す。`persist` が案件行をロックするので、
+      // ここで読んだ版は解釈経路と直列化されている。ロックの前に読んだ版のまま
+      // 更新すると、並行する解釈と競合して静かに失敗する。
+      const live = await deps.outreaches.findById(tx, outreach.outreachId);
+      if (live === "NOT_FOUND") return summarize(stored, identity);
+
       const next = resolveOutreachAfterInbound({
-        current: outreach.state,
+        current: live.state,
         senderIdentity: identity,
         hasBody: Boolean(event.body && event.body.length > 0),
       });
-      if (next !== outreach.state) {
-        await deps.outreaches.applyTransition(tx, {
-          outreachId: outreach.outreachId,
-          expectedVersion: outreach.version,
+      if (next !== live.state) {
+        const moved = await deps.outreaches.applyTransition(tx, {
+          outreachId: live.outreachId,
+          expectedVersion: live.version,
           to: next,
         });
+        if (moved === "VERSION_CONFLICT") {
+          // 起きないはずの経路。握り潰すと画面と実態がずれたまま気付けない。
+          throw new TaskcalError(
+            ERROR_CODES.OPERATION_CONFLICT,
+            "受信の取り込み中に打診が更新されました。もう一度受信してください。",
+          );
+        }
       }
 
       return summarize(stored, identity);

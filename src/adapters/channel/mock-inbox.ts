@@ -23,6 +23,7 @@ import {
   type EndpointCheck,
   type MessagingGateway,
   type SendCommand,
+  type SendRefusal,
   type SendRefused,
   type SendResult,
 } from "../../contracts/messaging-gateway";
@@ -108,7 +109,13 @@ export function createMockMessagingGateway(deps: MockInboxDeps): MessagingGatewa
           return { refused: SEND_REFUSAL.CONFLICT, detail: "同じ操作IDで内容が異なります" };
         }
         if (begun.match === "REPLAY") {
-          const stored = begun.stored?.result as { state?: DeliveryState; messageId?: string };
+          const stored = begun.stored?.result as
+            { state?: DeliveryState; messageId?: string; refused?: SendRefusal } | undefined;
+          // 前回が拒否（未送信）なら、同じ拒否をそのまま返す。ここで UNKNOWN へ
+          // すり替えると、未送信の項目が「結果不明」として恒久的に止まる。
+          if (stored?.refused) {
+            return { refused: stored.refused, detail: "同じ操作は前回送信していません" };
+          }
           return {
             operation: command.operation,
             state: stored?.state ?? "UNKNOWN",
@@ -209,10 +216,13 @@ export function createMockMessagingGateway(deps: MockInboxDeps): MessagingGatewa
                   o.status as op_status,
                   d.state,
                   d.message_id,
+                  -- 照会不能は**この操作の宛先**で判定する。接続に1件でもあれば
+                  -- 返す形にすると、無関係な操作まで照会不能になる。
                   (select ce.mock_fault_mode
                      from contact_endpoint ce
-                    where ce.connection_id = o.connection_id
-                      and ce.mock_fault_mode = 'LOOKUP_UNAVAILABLE'
+                     join mock_inbox_item mi on mi.staff_id = ce.staff_id
+                    where mi.message_id = d.message_id
+                      and ce.connection_id = o.connection_id
                     limit 1) as fault
              from operation_result o
              left join message_delivery d on d.operation_id = o.operation_id

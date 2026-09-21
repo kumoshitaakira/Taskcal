@@ -23,6 +23,8 @@
   `DeliveryState.FAILED`（送信を試みて失敗）と区別する。未送信のときは
   `message_delivery` の行を作らない。
 - 送信は `operationId` ＋ `requestHash` で冪等。内容が変われば `CONFLICT` を返し送信しない。
+- 拒否した操作を再実行しても、**同じ拒否**を返す。`UNKNOWN` へすり替えない（未送信の
+  項目が「結果不明」として恒久的に止まるため）。
 - 結果不明（`UNKNOWN`）を失敗として扱わず、`getSendResult` で照合するまで再実行しない。
 
 ## 送信先の解決
@@ -41,9 +43,9 @@
 | 値 | 送信の結果 |
 |---|---|
 | `NONE` | `ACCEPTED`。受信箱に現れる |
-| `FAILED` | `FAILED`。送信を試みた記録は残るが受信箱には現れない |
+| `FAILED` | `FAILED`。送信を試みた記録は残るが受信箱には現れない。**自動では再送しない**（同じ内容の再送は保存済み結果を返すだけで結果が変わらない） |
 | `UNKNOWN` | `UNKNOWN`。操作結果も `UNKNOWN`。再送せず照合へ回す |
-| `LOOKUP_UNAVAILABLE` | 送信は `ACCEPTED`。`getSendResult` が `LOOKUP_UNAVAILABLE` を返す |
+| `LOOKUP_UNAVAILABLE` | 送信は `ACCEPTED`。**その宛先への**送信の `getSendResult` が `LOOKUP_UNAVAILABLE` を返す |
 
 ## `getSendResult` の「記録が無い」
 

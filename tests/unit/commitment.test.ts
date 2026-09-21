@@ -50,12 +50,12 @@ describe("承諾の状態遷移（RFC-011 §4）", () => {
   });
 });
 
-describe("選定できる承諾の判定（D04 / A05）", () => {
+describe("選定できる承諾の判定（D04 / A05の前提）", () => {
   it("有効・未処理返信なし・期限内なら選定できる", () => {
     expect(selectable()).toEqual({ selectable: true });
   });
 
-  it("有効でも未処理の新しい返信があれば選定しない（A05：更新準備中の訂正）", () => {
+  it("有効でも未処理の新しい返信があれば選定しない（A05の前提：更新準備中の訂正）", () => {
     expect(selectable({ hasUnprocessedReply: true })).toEqual({
       selectable: false,
       reason: COMMITMENT_BLOCK_REASON.UNPROCESSED_REPLY,

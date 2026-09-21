@@ -122,6 +122,9 @@ export function createPgAbsenceCaseRepository(): AbsenceCaseRepository {
 
     async create(handle: TxHandle, input: CreateCaseInput) {
       const tx = handle as Tx;
+      // 制約違反は取引全体を中断させる。SAVEPOINT で囲まないと、重複を検出した後に
+      // 呼出し元が拒否の記録を書けない（「current transaction is aborted」）。
+      await tx.query("savepoint create_case");
       try {
         const { rows } = await tx.query<CaseRow>(
           `insert into absence_case
@@ -145,8 +148,10 @@ export function createPgAbsenceCaseRepository(): AbsenceCaseRepository {
             input.runId,
           ],
         );
+        await tx.query("release savepoint create_case");
         return toSnapshot(rows[0]);
       } catch (error) {
+        await tx.query("rollback to savepoint create_case");
         // D02：稼働中の重複案件。部分一意索引が拒否する。
         if ((error as { code?: string }).code === UNIQUE_VIOLATION) {
           return "DUPLICATE_ACTIVE_CASE";

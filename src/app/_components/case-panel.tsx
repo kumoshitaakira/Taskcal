@@ -127,6 +127,42 @@ const UPDATE_CLASS: Record<ScheduleUpdateState, string> = {
   REJECTED: "tag",
 };
 
+const HANDOFF_LABEL: Record<string, string> = {
+  CANDIDATES_EXHAUSTED: "候補が尽きた",
+  DEADLINE_REACHED: "期限に達した",
+  LIMIT_REACHED: "予算・回数の上限に達した",
+  RECONCILE_STALLED: "採用結果の照合が継続不能",
+  REPORTING_FAILED: "読戻しまたは通知が復旧しない",
+};
+
+const STOP_LABEL: Record<string, string> = {
+  MANAGER_STOP: "店長が停止した",
+  DEADLINE: "期限に達した",
+  LIMIT: "上限に達した",
+  CANDIDATES_EXHAUSTED: "候補が尽きた",
+};
+
+const KIND_LABEL: Record<string, string> = {
+  INITIAL_OFFER: "初回打診",
+  CLARIFICATION: "追加確認",
+  CONFIRMATION: "確定通知",
+  NOT_SELECTED: "非選定通知",
+  CASE_CLOSED: "募集終了通知",
+};
+
+const OUTBOX_STATUS_LABEL: Record<string, string> = {
+  PENDING: "送信待ち",
+  SENT: "送信済み",
+  FAILED: "配送失敗",
+  UNKNOWN: "結果不明",
+  REFUSED: "未送信",
+};
+
+/** 対応表に無い値を握り潰さない。生の値を出して、訳し忘れに気付けるようにする。 */
+function label(map: Record<string, string>, value: string): string {
+  return map[value] ?? `未対応の値: ${value}`;
+}
+
 export function CaseStateTag({ state }: { state: CaseState }) {
   return <span className={CASE_CLASS[state]}>{CASE_LABEL[state]}</span>;
 }
@@ -218,8 +254,10 @@ export function CasePanel({ view, timeZone }: { view: CaseView; timeZone: string
                 <CaseStateTag state={view.state} />
               </span>{" "}
               版 {view.version}
-              {view.handoffReason ? `／引き継ぎ理由 ${view.handoffReason}` : ""}
-              {view.stopCause ? `／停止 ${view.stopCause}` : ""}
+              {view.handoffReason
+                ? `／引き継ぎ理由：${label(HANDOFF_LABEL, view.handoffReason)}`
+                : ""}
+              {view.stopCause ? `／停止：${label(STOP_LABEL, view.stopCause)}` : ""}
             </dd>
           </div>
           <div className="row">
@@ -259,8 +297,8 @@ export function CasePanel({ view, timeZone }: { view: CaseView; timeZone: string
                   <ScheduleUpdateTag state={update.state} />
                 </dt>
                 <dd>
-                  {update.operationId}
-                  {update.artifactRef ? `／${update.artifactRef}` : ""}
+                  操作ID {update.operationId}
+                  {update.artifactRef ? `／成果物 ${update.artifactRef}（未採用）` : ""}
                 </dd>
               </div>
             ))}
@@ -325,9 +363,9 @@ export function CasePanel({ view, timeZone }: { view: CaseView; timeZone: string
           <dl>
             {view.outbox.map((row) => (
               <div className="row" key={`${row.kind}:${row.status}`}>
-                <dt>{row.kind}</dt>
+                <dt>{label(KIND_LABEL, row.kind)}</dt>
                 <dd>
-                  {row.status} × {row.count}
+                  {label(OUTBOX_STATUS_LABEL, row.status)} × {row.count}
                 </dd>
               </div>
             ))}

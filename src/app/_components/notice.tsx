@@ -67,8 +67,18 @@ const BAD: readonly NoticeCode[] = [
   NOTICE.FAILED,
 ];
 
+/**
+ * 既知の通知コードか。
+ *
+ * **`value in TEXT` にしない。** `in` は prototype chain を見るため、`toString` や
+ * `__proto__` が「既知のコード」として通る。`/manager?n=toString` で緑の成功バッジと
+ * `[object Object]` が出たり、描画が落ちたりする。URLから任意の表示を作らせない
+ * （ADR-023）ための照合なので、自身のキーだけを見る。
+ */
+const KNOWN: ReadonlySet<string> = new Set(Object.values(NOTICE));
+
 function isNoticeCode(value: string): value is NoticeCode {
-  return value in TEXT;
+  return KNOWN.has(value);
 }
 
 export function Notice({ code, count }: { code?: string; count?: string }) {

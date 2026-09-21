@@ -59,16 +59,19 @@ export function createRosterEligibility(): RosterEligibility {
             and s.role_code = $2
             and s.active
             and s.staff_id <> $3
-          order by s.staff_id
-          limit $5`,
-        [
-          input.storeId,
-          input.requirement.roleCode,
-          input.absentStaffId,
-          input.connectionId,
-          MAX_STAFF,
-        ],
+          order by s.staff_id`,
+        [input.storeId, input.requirement.roleCode, input.absentStaffId, input.connectionId],
       );
+
+      // Q10の8人はMVPの範囲の上限であって、黙って切る根拠ではない。
+      // 超えたら範囲外として明示的に断る。切り捨てると、打診されなかった人が
+      // 記録にも画面にも残らない（RFC-011 §2「適格な全員へ個別に打診」）。
+      if (rows.length > MAX_STAFF) {
+        throw new TaskcalError(
+          ERROR_CODES.OUT_OF_SCOPE,
+          `候補が${rows.length}人おり、MVPの上限${MAX_STAFF}人を超えています。`,
+        );
+      }
 
       return rows.map((row) => ({
         staffId: row.staff_id,

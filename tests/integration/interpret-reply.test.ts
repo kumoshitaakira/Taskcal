@@ -80,6 +80,11 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
   let makeInterpret: (
     gateway: ReturnType<typeof createFakeModelGateway>,
   ) => ReturnType<typeof import("@/application/interpret-reply").interpretReply>;
+  /** モデル応答の直後、適用の直前に割り込む。並行更新の再現に使う。 */
+  let interpretWithHook: (
+    gateway: ReturnType<typeof createFakeModelGateway>,
+    afterModel: () => Promise<void>,
+  ) => ReturnType<typeof import("@/application/interpret-reply").interpretReply>;
 
   const storeId = randomUUID();
   const staffId = randomUUID();
@@ -150,6 +155,25 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
     const inbound = createPgInboundEventRepository();
     const outreaches = createPgOutreachRepository();
     receive = receiveInboundEvent({ inbound, outreaches });
+    interpretWithHook = (model, afterModel) =>
+      interpretReply({
+        model: {
+          isConfigured: () => model.isConfigured(),
+          async interpretReply(request) {
+            const result = await model.interpretReply(request);
+            await afterModel();
+            return result;
+          },
+        },
+        cases: createPgAbsenceCaseRepository(),
+        outreaches,
+        inbound,
+        interpretations: createPgReplyInterpretationRepository(),
+        commitments: createPgCommitmentRepository(),
+        outbox: createPgOutboxRepository(),
+        clock: { now: () => now },
+        ids: { next: () => randomUUID() },
+      });
     makeInterpret = (model) =>
       interpretReply({
         model,
@@ -309,7 +333,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
     expect(saved.rows.map((r) => r.applied)).toEqual(["DISCARDED_STALE", "APPLIED"]);
   });
 
-  it("Q03：分断した可能時間は承諾にしない。追加確認へ回す", async () => {
+  it("Q03：分断した可能時間は範囲外として明示的に拒否する（追加確認へ畳まない）", async () => {
     const id = await reply("18時と21時なら空いてます");
     const result = await makeInterpret(
       createFakeModelGateway({
@@ -322,7 +346,117 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
 
     expect(result).toMatchObject({ ok: true, applied: "REJECTED_BY_CHECK" });
     expect(await commitments()).toHaveLength(0);
-    expect(await outreachState()).toBe("CLARIFYING");
+    // 聞き直しても結果が変わらないので追加確認を送らない。
+    expect(await outreachState()).toBe("ANSWERED");
+    const outbox = await withTransaction((tx) =>
+      tx.query<{ n: number }>(
+        "select count(*)::int as n from notification_outbox where case_id = $1",
+        [caseId],
+      ),
+    );
+    expect(outbox.rows[0]?.n).toBe(0);
+    const events = await withTransaction((tx) =>
+      tx.query<{ kind: string }>("select kind from case_processing_event where case_id = $1", [
+        caseId,
+      ]),
+    );
+    expect(events.rows.map((r) => r.kind)).toContain("REPLY_OUT_OF_SCOPE");
+  });
+
+  it("期限を過ぎた返信に、過ぎた期限を書いた追加確認を送り返さない（RFC-011 §4）", async () => {
+    await withTransaction((tx) =>
+      tx.query(
+        "update absence_case set deadline_at = '2026-09-28T08:00:00+09:00' where case_id = $1",
+        [caseId],
+      ),
+    );
+    const id = await reply("大丈夫です");
+    const result = await makeInterpret(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+    )({ inboundEventId: id });
+
+    expect(result).toMatchObject({ applied: "REJECTED_BY_CHECK" });
+    expect(await commitments()).toHaveLength(0);
+    const outbox = await withTransaction((tx) =>
+      tx.query<{ n: number }>(
+        "select count(*)::int as n from notification_outbox where case_id = $1",
+        [caseId],
+      ),
+    );
+    expect(outbox.rows[0]?.n).toBe(0);
+  });
+
+  it("案件版が動いていたら、受信順を進めずに破棄する（未処理のまま残す）", async () => {
+    const id = await reply("大丈夫です");
+    const interpret = interpretWithHook(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+      async () => {
+        // モデル応答の後、適用の直前に案件版が進む（停止・状態遷移・正式採用で起きる）。
+        await withTransaction((tx) =>
+          tx.query("update absence_case set version = version + 1 where case_id = $1", [caseId]),
+        );
+      },
+    );
+    const result = await interpret({ inboundEventId: id });
+
+    expect(result).toMatchObject({ applied: "DISCARDED_STALE" });
+    expect(await commitments()).toHaveLength(0);
+    // 適用していないので「未処理の返信あり」のまま残す。ここを進めると、撤回や
+    // 訂正が無かったことになる（D04 / A05）。
+    const applied = await withTransaction((tx) =>
+      tx.query<{ last_applied_seq: string }>(
+        "select last_applied_seq from outreach where outreach_id = $1",
+        [outreachId],
+      ),
+    );
+    expect(Number(applied.rows[0]?.last_applied_seq)).toBe(0);
+  });
+
+  it("終了した打診への返信は記録するが、承諾も遷移も作らず前へ進む", async () => {
+    const first = await reply("今回は難しいです");
+    await makeInterpret(createFakeModelGateway({ fallback: replyOutput({ intent: "DECLINE" }) }))({
+      inboundEventId: first,
+    });
+    expect(await outreachState()).toBe("CLOSED");
+
+    const second = await reply("やっぱり行けます");
+    const result = await makeInterpret(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+    )({ inboundEventId: second });
+
+    expect(result).toMatchObject({ ok: true, applied: "REJECTED_BY_CHECK" });
+    expect(await commitments()).toHaveLength(0);
+    expect(await outreachState()).toBe("CLOSED");
+    // 受信順は進める。進めないと同じ受信を毎回選び直して前へ進めない。
+    const applied = await withTransaction((tx) =>
+      tx.query<{ last_applied_seq: string }>(
+        "select last_applied_seq from outreach where outreach_id = $1",
+        [outreachId],
+      ),
+    );
+    expect(Number(applied.rows[0]?.last_applied_seq)).toBe(2);
+  });
+
+  it("保留になった承諾にも撤回が届く（ACTIVE だけを見ない）", async () => {
+    const first = await reply("大丈夫です");
+    await makeInterpret(
+      createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
+    )({ inboundEventId: first });
+
+    const second = await reply("やっぱり少し遅れるかも");
+    await makeInterpret(createFakeModelGateway({ fallback: replyOutput({ intent: "UNCLEAR" }) }))({
+      inboundEventId: second,
+    });
+    expect((await commitments())[0]?.status).toBe("HELD");
+
+    const third = await reply("取り消します");
+    await makeInterpret(createFakeModelGateway({ fallback: replyOutput({ intent: "WITHDRAW" }) }))({
+      inboundEventId: third,
+    });
+
+    const rows = await commitments();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("WITHDRAWN");
   });
 
   it("提示の範囲外・15分刻みでない・長すぎる時間は承諾にしない", async () => {
@@ -371,7 +505,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
     expect(outbox.rows).toEqual([{ kind: "CLARIFICATION", status: "PENDING" }]);
   });
 
-  it("曖昧な訂正は旧承諾を保留にする（選定へ出さない：D04 / A05）", async () => {
+  it("曖昧な訂正は旧承諾を保留にする（選定へ出さない：D04 / A05の前提）", async () => {
     const first = await reply("大丈夫です");
     await makeInterpret(
       createFakeModelGateway({ fallback: accepting([{ startAt: OFFER_START, endAt: OFFER_END }]) }),
@@ -414,7 +548,9 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
     expect(rows[0]?.status).toBe("WITHDRAWN");
   });
 
-  it("A13：確定後の返信は承諾を動かさず、変更申告として記録する", async () => {
+  it("A13の一部：確定後の返信は承諾を動かさず、変更申告として記録する", async () => {
+    // 「採用済み」は fixture で直接作っている。正式採用の経路は未実装なので、
+    // A13 の前半（確定通知失敗からの復旧）は検証していない。
     await withTransaction((tx) =>
       tx.query("update absence_case set adoption_fact = 'ADOPTED' where case_id = $1", [caseId]),
     );

@@ -20,6 +20,7 @@ import type {
   Clock,
   IdGenerator,
   OperationResultStore,
+  TxHandle,
 } from "../contracts/repository";
 import type { ConnectionId, ShiftAssignmentId } from "../contracts/schedule-gateway";
 import type { ScheduleReadRepository } from "../adapters/db/schedule-repository";
@@ -45,6 +46,28 @@ export interface CreateAbsenceCaseDeps {
   readonly operations: OperationResultStore;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+}
+
+/**
+ * 検査で弾いたことを操作結果へ確定させる。
+ *
+ * **IN_PROGRESS のまま取引を閉じない。** 操作IDが内容から決まる操作では、一度失敗した
+ * だけでその操作が「進行中」のまま残り、以後の再実行がすべて「結果不明」になって
+ * 恒久的に塞がる。外部作用の前に自分で弾いた結果は**確定した拒否**であり、成否不明ではない。
+ */
+async function refuse(
+  deps: { operations: OperationResultStore },
+  tx: TxHandle,
+  operationId: string,
+  code: ErrorCode,
+  detail: string,
+) {
+  await deps.operations.complete(tx, {
+    operationId,
+    status: "REFUSED",
+    result: { code, detail },
+  });
+  return fail(code, detail);
 }
 
 function fail(code: ErrorCode, detail: string): CreateAbsenceCaseResult {
@@ -85,6 +108,14 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
           "同じ操作IDで内容が異なります。画面を読み直してください。",
         );
       }
+      if (begun.match === "REPLAY" && begun.stored?.status === "REFUSED") {
+        // 前回、外部作用の前に自分で弾いた操作。同じ結果を返す（作り直さない）。
+        const stored = begun.stored.result as { code?: ErrorCode; detail?: string } | undefined;
+        return fail(
+          stored?.code ?? ERROR_CODES.INVALID_INPUT,
+          stored?.detail ?? "同じ操作は前回拒否しています。",
+        );
+      }
       if (begun.match === "REPLAY") {
         const stored = begun.stored?.result as { caseId?: string } | undefined;
         if (stored?.caseId) {
@@ -103,7 +134,13 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
       );
       const storeRow = store.rows[0];
       if (!storeRow) {
-        return fail(ERROR_CODES.INVALID_INPUT, "店舗が見つかりません。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.INVALID_INPUT,
+          "店舗が見つかりません。",
+        );
       }
 
       const target = await tx.query<{
@@ -128,7 +165,13 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
       );
       const shift = target.rows[0];
       if (!shift) {
-        return fail(ERROR_CODES.INVALID_INPUT, "対象の勤務が見つかりません。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.INVALID_INPUT,
+          "対象の勤務が見つかりません。",
+        );
       }
 
       // D11：正式版参照を経由して読めることを確かめる。参照が無い勤務表は
@@ -140,20 +183,32 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
         businessDate,
       });
       if (loaded === "NOT_ADOPTED") {
-        return fail(
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
           ERROR_CODES.INVALID_INPUT,
           "この営業日の正式版参照がありません。勤務表を取り込んでください。",
         );
       }
 
       if (shift.status !== "SCHEDULED") {
-        return fail(
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
           ERROR_CODES.INVALID_INPUT,
           `予定済みの勤務ではありません（現在: ${shift.status}）。`,
         );
       }
       if (shift.role_code !== storeRow.role_code) {
-        return fail(ERROR_CODES.OUT_OF_SCOPE, "MVPは職種1種類のみを扱います。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.OUT_OF_SCOPE,
+          "MVPは職種1種類のみを扱います。",
+        );
       }
 
       const startAt = shift.start_at.toISOString();
@@ -164,18 +219,42 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
         businessDateOf(startAt, storeRow.timezone) !== businessDate ||
         businessDateOf(endAt, storeRow.timezone) !== businessDate
       ) {
-        return fail(ERROR_CODES.OUT_OF_SCOPE, "日跨ぎの勤務は対応範囲外です。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.OUT_OF_SCOPE,
+          "日跨ぎの勤務は対応範囲外です。",
+        );
       }
 
       const deadline = Date.parse(command.deadlineAt);
       if (Number.isNaN(deadline)) {
-        return fail(ERROR_CODES.INVALID_INPUT, "回答期限の形式が不正です。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.INVALID_INPUT,
+          "回答期限の形式が不正です。",
+        );
       }
       if (deadline <= Date.parse(now)) {
-        return fail(ERROR_CODES.INVALID_INPUT, "回答期限が現在より前です。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.INVALID_INPUT,
+          "回答期限が現在より前です。",
+        );
       }
       if (deadline > Date.parse(startAt)) {
-        return fail(ERROR_CODES.INVALID_INPUT, "回答期限が勤務開始より後です。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.INVALID_INPUT,
+          "回答期限が勤務開始より後です。",
+        );
       }
 
       const caseId = deps.ids.next();
@@ -197,7 +276,10 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
 
       if (created === "DUPLICATE_ACTIVE_CASE") {
         // D02。進行中の案件がある。作らずに理由を返す。
-        return fail(
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
           ERROR_CODES.OPERATION_CONFLICT,
           "この勤務、またはこの店舗で進行中の案件があります。",
         );

@@ -93,7 +93,10 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   // 実際に走る判定が別物になる。
   { name: "evaluateRule", from: ["scripts/check-consistency.ts"] },
   // 作ったが繋いでいない状態を止める。検査を足しても呼ばなければ効かない。
-  { name: "assertOutsideTransaction", from: ["src/application/interpret-reply.ts"] },
+  {
+    name: "assertOutsideTransaction",
+    from: ["src/application/interpret-reply.ts", "src/application/send-outbox.ts"],
+  },
   { name: "isAllowedOutreachTransition", from: ["src/adapters/db/outreach-repository.ts"] },
   { name: "isAllowedCommitmentTransition", from: ["src/adapters/db/commitment-repository.ts"] },
   { name: "resolveOutreachAfterSend", from: ["src/application/send-outbox.ts"] },

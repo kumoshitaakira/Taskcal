@@ -75,7 +75,7 @@ export default async function ManagerPage({
     <main>
       <h1>店長画面</h1>
       <p className="lede">
-        欠勤の登録、適格候補への同時打診、返信の受信までが動きます。返信の解釈・正式採用は未実装です。
+        欠勤の登録、名簿上の同職種への同時打診、返信の受信までが動きます。適格性（可能時間・月次上限・勤務の重複）は未検査で、返信の解釈・正式採用も未実装です。
       </p>
       <nav className="links">
         <Link href="/">トップ</Link>
@@ -109,7 +109,7 @@ export default async function ManagerPage({
           <input type="hidden" name="operationId" value={outreachOperationId} />
           <input type="hidden" name="caseId" value={view.activeCase.caseId} />
           <p className="lede" style={{ margin: 0 }}>
-            適格候補の全員へ個別に打診します。送信はworkerが行います。
+            名簿上の同職種の全員（欠勤者本人を除く）へ個別に打診します。適格性は未検査です。送信はworkerが行います。
           </p>
           <button type="submit">打診を開始する</button>
         </form>

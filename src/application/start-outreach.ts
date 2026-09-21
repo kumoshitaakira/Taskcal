@@ -1,8 +1,11 @@
 /**
  * 同時個別打診の開始（RFC-011 §2、ADR-013）。
  *
- * 適格な全員へ個別に打診する。グループチャットへ公開しない。「同時」は同じ募集で
+ * 候補の全員へ個別に打診する。グループチャットへ公開しない。「同時」は同じ募集で
  * 並行に開始することであり、全宛先への同時到達を保証する意味ではない。
+ *
+ * **現在の候補は名簿だけで選んでいる**（`roster-eligibility.ts`）。可能時間・月次上限・
+ * 勤務の重複は未検査なので、「適格者全員」とは言えない。
  *
  * **この取引では送信しない。** 打診と通知待ちを積むだけで、送信はworkerが取引の外で
  * 行う（RFC-010 §5：外部API待ちを取引に入れない）。送信の操作IDと内容ハッシュは
@@ -22,6 +25,7 @@ import type {
   IdGenerator,
   OperationResultStore,
   OutboxRepository,
+  TxHandle,
   OutreachRepository,
 } from "../contracts/repository";
 import { withTransaction } from "../adapters/db/transaction";
@@ -45,6 +49,28 @@ export interface StartOutreachDeps {
   readonly roster: RosterEligibility;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+}
+
+/**
+ * 検査で弾いたことを操作結果へ確定させる。
+ *
+ * **IN_PROGRESS のまま取引を閉じない。** 操作IDが内容から決まる操作では、一度失敗した
+ * だけでその操作が「進行中」のまま残り、以後の再実行がすべて「結果不明」になって
+ * 恒久的に塞がる。外部作用の前に自分で弾いた結果は**確定した拒否**であり、成否不明ではない。
+ */
+async function refuse(
+  deps: { operations: OperationResultStore },
+  tx: TxHandle,
+  operationId: string,
+  code: ErrorCode,
+  detail: string,
+) {
+  await deps.operations.complete(tx, {
+    operationId,
+    status: "REFUSED",
+    result: { code, detail },
+  });
+  return fail(code, detail);
 }
 
 function fail(code: ErrorCode, detail: string): StartOutreachResult {
@@ -73,6 +99,14 @@ export function startOutreach(deps: StartOutreachDeps) {
       if (begun.match === "CONFLICT") {
         return fail(ERROR_CODES.OPERATION_CONFLICT, "同じ操作IDで内容が異なります。");
       }
+      if (begun.match === "REPLAY" && begun.stored?.status === "REFUSED") {
+        // 前回、外部作用の前に自分で弾いた操作。同じ結果を返す（作り直さない）。
+        const stored = begun.stored.result as { code?: ErrorCode; detail?: string } | undefined;
+        return fail(
+          stored?.code ?? ERROR_CODES.INVALID_INPUT,
+          stored?.detail ?? "同じ操作は前回拒否しています。",
+        );
+      }
       if (begun.match === "REPLAY") {
         const stored = begun.stored?.result as { started?: number } | undefined;
         if (typeof stored?.started === "number") {
@@ -83,25 +117,52 @@ export function startOutreach(deps: StartOutreachDeps) {
 
       const snapshot = await deps.cases.lockForUpdate(tx, command.caseId);
       if (snapshot === "NOT_FOUND") {
-        return fail(ERROR_CODES.INVALID_INPUT, "案件が見つかりません。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.INVALID_INPUT,
+          "案件が見つかりません。",
+        );
       }
       // D10：停止後は新規打診を行わない。確定済みの事実は保持する。
       if (snapshot.stoppedAt) {
-        return fail(ERROR_CODES.CASE_STOPPED, "停止済みの案件です。新規の打診は行いません。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.CASE_STOPPED,
+          "停止済みの案件です。新規の打診は行いません。",
+        );
       }
       if (snapshot.state !== "COORDINATING") {
-        return fail(
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
           ERROR_CODES.INVALID_INPUT,
           `調整中の案件ではありません（現在: ${snapshot.state}）。`,
         );
       }
       if (Date.parse(now) >= Date.parse(snapshot.deadlineAt)) {
-        return fail(ERROR_CODES.DEADLINE_EXCEEDED, "回答期限を過ぎています。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.DEADLINE_EXCEEDED,
+          "回答期限を過ぎています。",
+        );
       }
 
       const existing = await deps.outreaches.listByCase(tx, command.caseId);
       if (existing.length > 0) {
-        return fail(ERROR_CODES.OPERATION_CONFLICT, "この案件ではすでに打診を開始しています。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.OPERATION_CONFLICT,
+          "この案件ではすでに打診を開始しています。",
+        );
       }
 
       const store = await tx.query<{ name: string; timezone: string }>(
@@ -110,7 +171,13 @@ export function startOutreach(deps: StartOutreachDeps) {
       );
       const storeRow = store.rows[0];
       if (!storeRow) {
-        return fail(ERROR_CODES.INVALID_INPUT, "店舗が見つかりません。");
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.INVALID_INPUT,
+          "店舗が見つかりません。",
+        );
       }
 
       const candidates = await deps.roster.listEligible(tx, {
