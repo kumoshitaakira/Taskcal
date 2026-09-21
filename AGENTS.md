@@ -86,4 +86,5 @@ Codexを主要な開発エージェントとする。主エージェントが計
 - コード識別子と永続化するenum値は英語を使う。ユーザー向け応答、プロダクト文書、設計文書、エージェント指示は、ユーザー指定がない限り日本語を主要言語とする。
 - 秘密情報、ローカル環境ファイル、生成した依存フォルダ、実在スタッフのデータをコミットしない。
 - コミットを目的単位に保ち、無関係なユーザー変更を書き換えない。
+- `main`への変更はPull Request経由のSquash mergeで統合する。`main`を同期する前に`git fetch origin main`で最新化し、Squash前のコミットから派生した作業ブランチでは、履歴と派生点を確認して`git rebase --onto origin/main <branch-point> HEAD`を使う。`git rebase origin/main`や履歴を確認しないmergeを一律に実行しない。詳細は[ADR-023](docs/adr/ADR-023-squash-merge-workflow.md)を参照する。
 - ユーザーの許可なくPush、merge、deploy、公開、外部への連絡を行わない。
