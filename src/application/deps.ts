@@ -8,14 +8,21 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { createDefaultMessagingGateway } from "../adapters/channel";
+import { createPgBudgetLedger } from "../adapters/db/budget-ledger";
+import { createPgCommitmentRepository } from "../adapters/db/commitment-repository";
 import { createPgAbsenceCaseRepository } from "../adapters/db/case-repository";
 import { createPgOperationResultStore } from "../adapters/db/operation-result-store";
 import { createPgInboundEventRepository } from "../adapters/db/inbound-repository";
+import { createPgReplyInterpretationRepository } from "../adapters/db/interpretation-repository";
+import { createPgModelCallStore } from "../adapters/db/model-call-store";
 import { createPgOutboxRepository } from "../adapters/db/outbox-repository";
 import { createPgOutreachRepository } from "../adapters/db/outreach-repository";
 import { createPgScheduleReadRepository } from "../adapters/db/schedule-repository";
 import type { Clock, IdGenerator } from "../contracts/repository";
+import { createModelGateway } from "../adapters/orca";
 import { createAbsenceCase } from "./create-absence-case";
+import { interpretPending } from "./interpret-pending";
+import { interpretReply } from "./interpret-reply";
 import { receiveInboundEvent } from "./receive-inbound-event";
 import { createRosterEligibility } from "./roster-eligibility";
 import { sendOutbox } from "./send-outbox";
@@ -29,16 +36,38 @@ export function buildAppServices() {
   const outreaches = createPgOutreachRepository();
   const outbox = createPgOutboxRepository();
   const inbound = createPgInboundEventRepository();
+  const interpretations = createPgReplyInterpretationRepository();
+  const commitments = createPgCommitmentRepository();
+  // OrcaRouter の接続情報・金額予算が揃わなければ UnconfiguredModelGateway になり、
+  // 実推論を行わない（模擬結果も返さない）。
+  const model = createModelGateway({
+    ledger: createPgBudgetLedger(),
+    callStore: createPgModelCallStore(),
+  });
   const operations = createPgOperationResultStore();
   const schedules = createPgScheduleReadRepository();
   const roster = createRosterEligibility();
   const messaging = createDefaultMessagingGateway({ operations });
+  const interpret = interpretReply({
+    model,
+    cases,
+    outreaches,
+    inbound,
+    interpretations,
+    commitments,
+    outbox,
+    clock,
+    ids: idGenerator,
+  });
 
   return {
     cases,
     outreaches,
     outbox,
     inbound,
+    interpretations,
+    commitments,
+    model,
     operations,
     schedules,
     messaging,
@@ -55,6 +84,8 @@ export function buildAppServices() {
     }),
     sendOutbox: sendOutbox({ outbox, outreaches, messaging }),
     receiveInboundEvent: receiveInboundEvent({ inbound, outreaches }),
+    interpretReply: interpret,
+    interpretPending: interpretPending({ model, interpret }),
   };
 }
 

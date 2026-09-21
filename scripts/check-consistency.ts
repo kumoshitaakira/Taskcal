@@ -92,6 +92,13 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   // 対称性の判定本体。ここが呼ばれていないと、テストが見ている evaluateRule と
   // 実際に走る判定が別物になる。
   { name: "evaluateRule", from: ["scripts/check-consistency.ts"] },
+  // 作ったが繋いでいない状態を止める。検査を足しても呼ばなければ効かない。
+  { name: "assertOutsideTransaction", from: ["src/application/interpret-reply.ts"] },
+  { name: "isAllowedOutreachTransition", from: ["src/adapters/db/outreach-repository.ts"] },
+  { name: "isAllowedCommitmentTransition", from: ["src/adapters/db/commitment-repository.ts"] },
+  { name: "resolveOutreachAfterSend", from: ["src/application/send-outbox.ts"] },
+  { name: "resolveOutreachAfterInbound", from: ["src/application/receive-inbound-event.ts"] },
+  { name: "computeRequestHash", from: ["src/application/start-outreach.ts"] },
 ];
 
 /** 文書として走査する範囲。 */

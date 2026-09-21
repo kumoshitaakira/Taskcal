@@ -57,3 +57,27 @@ export function buildOfferBody(context: OfferContext): string {
     "選定されなかった場合は勤務は決まりません。結果は改めてご連絡します。",
   ].join("\n");
 }
+
+/**
+ * 追加確認の本文（RFC-011 §3、Q09）。
+ *
+ * 条件が一意に決まらない返信には確認を返す。**自己申告のconfidenceを同意の証拠に
+ * しない**ため、曖昧なまま承諾へ進めず、必ずここを通す。
+ *
+ * 未解決の条件はモデルの出力だが、**そのまま貼らない**。原文や推論をそのまま
+ * 画面・メッセージへ出さない方針（ADR-008）に合わせ、定型文で尋ねる。
+ */
+export function buildClarificationBody(context: OfferContext): string {
+  const from = formatTime(context.startAt, context.timeZone);
+  const to = formatTime(context.endAt, context.timeZone);
+  const deadlineDate = formatDate(context.deadlineAt, context.timeZone);
+  const deadlineTime = formatTime(context.deadlineAt, context.timeZone);
+
+  return [
+    "ご返信ありがとうございます。時間を確定できなかったため、確認させてください。",
+    `対象は ${from}〜${to} の範囲です。`,
+    "入れる開始時刻と終了時刻を、続けて書いた形で返信してください（例：19:00〜22:00）。",
+    "難しい場合は「今回は難しいです」とご返信ください。",
+    `回答期限：${deadlineDate} ${deadlineTime}`,
+  ].join("\n");
+}

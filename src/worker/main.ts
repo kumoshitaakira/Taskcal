@@ -2,8 +2,9 @@
  * 常駐worker。担当A（ADR-003：webとworkerは別プロセス・単一DB・同じリリース単位）。
  *
  * 2026-09-22時点の状態：
- *   通知待ち（outbox）の送信だけを処理する。**期限処理・返信解釈の起動は未実装。**
- *   返信解釈は画面からの投入で動く（OrcaRouterが未設定なら実行しない）。
+ *   通知待ち（outbox）の送信と、未処理の返信の解釈を処理する。
+ *   **期限の検知・停止・復旧は未実装。**
+ *   解釈はOrcaRouterが未設定なら何もしない（模擬結果を返さない）。
  *
  * 設計（RFC-003 §2）：
  *   - 案件状態から1ステップだけ処理し、対象がなければ待機する。
@@ -47,7 +48,8 @@ async function main(): Promise<void> {
   // 接続できなければ起動しない。黙って空回りさせない。
   await pool.query("select 1");
   process.stdout.write(`worker: 起動 instance=${instanceId}\n`);
-  process.stdout.write("worker: 通知待ちの送信を処理します（期限処理・返信解釈は未実装）。\n");
+  process.stdout.write("worker: 通知待ちの送信と、未処理の返信の解釈を処理します。\n");
+  process.stdout.write("worker: 期限の検知・停止・復旧は未実装です。\n");
 
   const { buildAppServices } = await import("@/application/deps");
   const services = buildAppServices();
@@ -70,6 +72,19 @@ async function main(): Promise<void> {
       if (!outcome.handled) break;
       drained += 1;
       process.stdout.write(`worker: 送信 ${outcome.outboxId} -> ${outcome.status}\n`);
+    }
+
+    // 未処理の返信を解釈する。モデルが未設定なら何もしない（模擬結果を返さない）。
+    while (running && drained < DRAIN_LIMIT) {
+      const outcome = await services.interpretPending().catch((error: unknown) => {
+        process.stderr.write(
+          `worker: 解釈で例外 ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return { handled: false, reason: "NONE" } as const;
+      });
+      if (!outcome.handled) break;
+      drained += 1;
+      process.stdout.write(`worker: 解釈 ${outcome.inboundEventId}\n`);
     }
 
     if (drained === 0) await sleep(TICK_MS, () => running);

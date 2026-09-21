@@ -162,6 +162,23 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["tx: TxHandle"],
   },
   {
+    label: "モデル呼出しは取引の外で行い、受信順のガードを通す（A12 / RFC-010 §5）",
+    members: [
+      { name: "export function interpretReply", file: "src/application/interpret-reply.ts" },
+    ],
+    // 取引の内側から呼ぶとHTTP待ちの間ロックを持つ。受信順のガードが無いと、
+    // 遅れて返った古い結果が新しい承諾を戻す。
+    mustContain: ["assertOutsideTransaction", "tryAdvanceAppliedSeq"],
+  },
+  {
+    label: "承諾にできない返信も状態へ反映する（Q09 / RFC-011 §4）",
+    members: [
+      { name: "export function interpretReply", file: "src/application/interpret-reply.ts" },
+    ],
+    // 「承諾として採用しない」と「返信を無視する」は別。辞退・撤回・保留を扱う。
+    mustContain: ["DECLINE", "WITHDRAW", "HELD", "CLARIFYING"],
+  },
+  {
     label: "営業日を date 型のまま受け取らない（RFC-009 §5：表示と月境界は店舗timezone）",
     members: [
       { name: "const COLUMNS", file: "src/adapters/db/case-repository.ts" },
