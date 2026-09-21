@@ -1,23 +1,59 @@
 # src/adapters/channel
 
-**担当A** — 模擬メッセージ受信箱（作業U07）。未実装。
+**担当A** — 模擬メッセージ受信箱（RFC-012 §3.1、作業U07）。
 
 `src/contracts/messaging-gateway.ts` の `MessagingGateway` を実装する。
-MVPは模擬返信契約だけを実装し、LINE等の本番接続は行わない（RFC-011 §6）。
 
-守る規則：
+| ファイル | 内容 |
+|---|---|
+| `mock-inbox.ts` | `send` / `getSendResult` / `verifyEndpoint` |
+| `index.ts` | 組み立て。送信先の案件・打診を通知待ちから引く |
 
-- 受信イベントは、モデル処理の前に永続化する。返信順は永続化した受信順で決める。
+実在の連絡手段ではない。架空スタッフ役の画面（`/staff`）へメッセージを置くだけで、
+本番の本人認証・配送とは区別する（RFC-009 §2）。
+
+## 守る規則（RFC-011 §6）
+
+- 受信イベントはモデル処理の**前に**永続化する。返信順は永続化した受信順で決める。
 - 重複排除キーは provider・connectionId の範囲を含める（A15）。
 - 受信本文で名乗った staffId を本人とみなさない。
-- **宛先の検査は `send` の内部で、外部作用の直前に行う。** `verifyEndpoint` を先に
-  呼んで `MATCHES` を得ても、その後に宛先の版や連絡許可が変わり得る。検査と送信を
-  別操作にすると、その間が競合窓になり旧宛先へ送ってしまう（A15、RFC-011 §6）。
-  `verifyEndpoint` は画面表示・診断のための照会であり、送信の前提条件ではない。
-- 宛先不一致・連絡不許可・内容不一致は `SendRefused` を返す。**いずれも送信して
-  いない。** 配送の失敗（`DeliveryState.FAILED`）と区別する。
-- 送信は `operationId` ＋ `requestHash` で冪等にする。同じキーで内容（宛先・種別・
-  本文）が変われば `CONFLICT` を返し、**送信しない**。hashが無いと、変更後の通知を
-  `REPLAY` として握り潰すか、別内容を送るかの二択になる（ADR-006 / D07）。
-- 結果不明（`UNKNOWN`）を失敗として扱わない。`getSendResult` で照合するまで
-  同じ送信を再実行しない。
+- **宛先検査は `send` の内部で外部作用の直前に行う。** `verifyEndpoint` は画面表示・
+  診断用で、送信の前提条件にしない（検査と送信を分けると、その間が競合窓になる）。
+- 宛先不一致・連絡不許可・内容不一致は `SendRefused`（**未送信**）。
+  `DeliveryState.FAILED`（送信を試みて失敗）と区別する。未送信のときは
+  `message_delivery` の行を作らない。
+- 送信は `operationId` ＋ `requestHash` で冪等。内容が変われば `CONFLICT` を返し送信しない。
+- 結果不明（`UNKNOWN`）を失敗として扱わず、`getSendResult` で照合するまで再実行しない。
+
+## 送信先の解決
+
+`send` は `command.operation.operationId` から通知待ち（`notification_outbox`）を引いて
+案件・打診を決める。宛先（provider / connectionId / endpointKey）から逆引きしない。
+同じ宛先が複数の案件に現れ得るため、逆引きはどの案件のメッセージか推測することになる。
+
+通知待ちに積まずに `send` を呼ぶと `INVALID_INPUT` で止まる。送信は必ず outbox を通す。
+
+## 障害の注入
+
+`contact_endpoint.mock_fault_mode` で宛先ごとに指定する。**デモと受入試験のためのもので、
+本番の経路ではない。**
+
+| 値 | 送信の結果 |
+|---|---|
+| `NONE` | `ACCEPTED`。受信箱に現れる |
+| `FAILED` | `FAILED`。送信を試みた記録は残るが受信箱には現れない |
+| `UNKNOWN` | `UNKNOWN`。操作結果も `UNKNOWN`。再送せず照合へ回す |
+| `LOOKUP_UNAVAILABLE` | 送信は `ACCEPTED`。`getSendResult` が `LOOKUP_UNAVAILABLE` を返す |
+
+## `getSendResult` の「記録が無い」
+
+模擬受信箱は自分の受信箱の権威なので、**記録が無い＝未送信**は確定した所見であり、
+`QUEUED` を返す。照会不能（`LOOKUP_UNAVAILABLE`）とは別。外部SaaSの場合はこの前提が
+成り立たないため、同じ扱いにしない。
+
+## 受信
+
+受信の永続化は `MessagingGateway` に含めない。案件内順序の採番を伴うため、repository
+側の契約（`InboundEventRepository`）にしてある。
+
+関連する受入ケース：A11、A15。

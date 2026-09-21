@@ -162,6 +162,13 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["tx: TxHandle"],
   },
   {
+    label: "送信は未送信（SendRefused）と配送失敗を区別する（A15 / RFC-011 §6）",
+    members: [{ name: "async send", file: "src/adapters/channel/mock-inbox.ts" }],
+    // 3つの拒否理由をすべて扱う。いずれも外部作用が起きていないので、
+    // DeliveryState.FAILED と同じ扱いにしない。
+    mustContain: ["ENDPOINT_CHANGED", "NOT_PERMITTED", "CONFLICT"],
+  },
+  {
     label: "受信の永続化と解釈が案件内の受信順を持つ（A12 / RFC-011 §4）",
     members: [
       { name: "export interface InboundEventRepository", file: "src/contracts/repository.ts" },
