@@ -97,6 +97,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       "候補選定・勤務計画の決定（担当B）",
       "返信解釈（OrcaRouterの接続情報と金額予算が未取得のため実推論を行っていない）",
       "正式採用・CSV生成・読戻し・結果照合",
+      "送信結果が不明な通知の照合（getSendResult での再確認）。UNKNOWN の項目は再送せず止まったまま",
       "期限の検知、案件の停止・再開、要対応からの復旧",
       "worker の fence token（通知待ちの lease はアイテム単位のみ）",
     ],
