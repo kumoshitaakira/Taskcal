@@ -26,6 +26,29 @@ const optionalPositiveInt = z
     return parsed;
   });
 
+const optionalHttpUrl = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value, ctx) => {
+    if (value === undefined || value === "") return undefined;
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      ctx.addIssue({
+        code: "custom",
+        message: "絶対URLを指定してください（例: https://example.com）。",
+      });
+      return z.NEVER;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      ctx.addIssue({ code: "custom", message: "http または https のURLを指定してください。" });
+      return z.NEVER;
+    }
+    return value;
+  });
+
 const optionalText = z
   .string()
   .trim()
@@ -34,7 +57,11 @@ const optionalText = z
 
 export const serverEnvSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL が未設定です。.env.example を参照してください。"),
-  ORCA_BASE_URL: optionalText,
+  // 空文字は「未設定」。値があるなら絶対HTTP(S) URLでなければならない。
+  // 任意の文字列を通すと、typo が check:orca を素通りしてgatewayが作られ、
+  // 最初の推論で「予約 → fetchが送信前に失敗 → UNKNOWN_CHARGE」となり、
+  // 一度も送っていない呼出しの照合が必要になる（RFC-004 §7）。
+  ORCA_BASE_URL: optionalHttpUrl,
   ORCA_API_KEY: optionalText,
   // RFC-004 §7：金額はUSDの整数micro単位。円換算は表示時のみ。
   ORCA_CASE_SPEND_LIMIT_MICRO_USD: optionalPositiveInt,

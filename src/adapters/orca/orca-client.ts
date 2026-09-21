@@ -15,6 +15,7 @@ import {
   MODEL_OUTPUT_SCHEMA_VERSION,
   modelReplyOutputJsonSchema,
   modelReplyOutputSchema,
+  validateEvidenceSpans,
 } from "@/contracts/model-output";
 import type { InterpretReplyRequest, InterpretReplyResponse, ModelGateway } from "./model-gateway";
 import { RESERVATION_RESULT, type BudgetGuard, type ModelCallStore } from "./budget";
@@ -259,6 +260,32 @@ export class OrcaRouterClient implements ModelGateway {
       throw new InvalidModelOutputError(
         invalidUsage,
         "モデル出力がschemaに一致しません。承諾として扱いません。",
+      );
+    }
+
+    // schemaを通っても、根拠の位置が本文の範囲外なら採用しない（RFC-004 §3）。
+    // schema側では本文長と突き合わせられない。ここで決定的に検査する。
+    const spans = validateEvidenceSpans(parsed.data.interpretation, masked.text);
+    if (!spans.ok) {
+      const invalidSpanUsage = {
+        ...usage,
+        validationResult: VALIDATION_RESULT.SCHEMA_INVALID,
+      };
+      await this.options.callStore.saveResult({
+        requestId,
+        requestHash: request.requestHash,
+        outcome: "SCHEMA_INVALID",
+        usage: invalidSpanUsage,
+        maskedReplyText: masked.text,
+      });
+      await this.options.budget.settle({
+        requestId,
+        actualMicroUsd: invalidSpanUsage.costMicroUsd,
+        costKind: invalidSpanUsage.costKind,
+      });
+      throw new InvalidModelOutputError(
+        invalidSpanUsage,
+        `モデル出力の根拠が不正です：${spans.reason}`,
       );
     }
 

@@ -10,6 +10,7 @@
  *   2. 文書が参照する環境変数名が、実在すること
  *   3. 既定値を持つ定数の値が、それを説明する文書に現れること
  *   4. 廃止した説明が文書に残っていないこと
+ *   5. 検査のために作った関数が、実際に呼ばれていること
  *
  * 使い方: npm run check:docs
  */
@@ -69,6 +70,21 @@ const RETIRED_WORDING: { readonly pattern: RegExp; readonly why: string }[] = [
     pattern: /ORCA_ESTIMATED_MICRO_USD_PER_CALL/,
     why: "固定額の見積りは廃止し、単価と上限から要求ごとに算出する",
   },
+];
+
+/**
+ * 検査のために作ったのに、どこからも呼ばれていない関数を見つける。
+ *
+ * `validateEvidenceSpans` を作ってテストからしか呼んでおらず、本番経路に
+ * 通していなかった。「作ったが繋いでいない」は繰り返している型なので、
+ * 機械的に止める。
+ */
+const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] }[] = [
+  { name: "validateEvidenceSpans", from: ["src/adapters/orca/orca-client.ts"] },
+  { name: "maskContactInfo", from: ["src/adapters/orca/orca-client.ts"] },
+  { name: "assertWithinInputBounds", from: ["src/adapters/orca/orca-client.ts"] },
+  { name: "estimateCallCost", from: ["src/adapters/orca/orca-client.ts"] },
+  { name: "compareMigrations", from: ["src/application/runtime-status.ts"] },
 ];
 
 /** 文書として走査する範囲。 */
@@ -183,9 +199,29 @@ async function checkRetiredWording(): Promise<void> {
   }
 }
 
+async function checkFunctionsAreCalled(): Promise<void> {
+  for (const entry of MUST_BE_CALLED) {
+    for (const caller of entry.from) {
+      const text = await read(caller);
+      // import 行を除いた本文で、呼出しの形になっているかを見る。
+      const body = text
+        .split("\n")
+        .filter((line) => !/^\s*(import|export)\s/.test(line))
+        .join("\n");
+      if (!new RegExp(`\\b${entry.name}\\s*\\(`).test(body)) {
+        problems.push(
+          `${caller} が ${entry.name} を呼んでいません` +
+            `（検査のために作った関数を本番経路へ通していない）`,
+        );
+      }
+    }
+  }
+}
+
 async function main(): Promise<void> {
   await checkEnvExampleMatchesSchema();
   await checkRetiredWording();
+  await checkFunctionsAreCalled();
   await checkDocsReferenceRealEnvNames();
   await checkDocumentedDefaults();
 

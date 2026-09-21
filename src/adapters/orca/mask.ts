@@ -69,28 +69,48 @@ const SIMPLE_RULES: {
 ];
 
 /**
- * 電話番号らしき並び。
+ * 電話番号。
  *
- * **桁数で絞る。** 単純な「数字と区切り」の並びを拾うと、勤務時間帯の範囲表記
- * （`0900-1730`、`1700-2200`）や郵便番号・従業員番号まで消してしまう。
- * 勤務条件が消えると解釈そのものが成立しないため、過剰マスクは検知漏れより悪い。
+ * **貪欲に拾って後から桁数で捨てる方式を採らない。** 隣に時刻が続く返信
+ * （`080-1234-5678 18から勤務できます`）で、候補が `080-1234-5678 18` まで伸び、
+ * 13桁になって候補ごと捨てられ、電話番号が素通りする。
  *
- * 採用する条件：
- *   - 国内番号は先頭が 0 で、数字の合計が 10 桁または 11 桁
- *   - 国際表記は +81 に続く数字が 9 桁または 10 桁
- *   - 前後が数字・コロン・「時」でない（時刻の一部を切り出さない）
+ * 代わりに、日本の電話番号の**桁の区切り方を直接並べる**。各分岐の桁数が固定
+ * なので、時刻の範囲表記（`0900-1730`）や郵便番号（`060-0001`）、従業員番号には
+ * 一致せず、隣に数字が続いても番号部分だけで止まる。
+ *
+ *   市外局番の桁 - 市内局番の桁 - 加入者番号  合計
+ *     2 - 4 - 4                                10
+ *     3 - 3 - 4                                10
+ *     3 - 4 - 4                                11（携帯・IP）
+ *     4 - 3 - 4                                11（0800等）
+ *     4 - 3 - 3                                10（0120・0570等）
+ *     4 - 2 - 4                                10
+ *     5 - 1 - 4                                10
+ *     区切り無し                               10〜11
  */
-const PHONE_CANDIDATE =
-  /(?<![\d:時])(\+81[-\s(]?\d[\d\-\s().]{7,15}\d|0\d[\d\-\s().]{7,15}\d)(?![\d:時])/g;
+const SEP = "[-.\\s]?";
 
-function isPhoneNumber(candidate: string): boolean {
-  const digits = candidate.replace(/\D/g, "");
-  if (candidate.startsWith("+81")) {
-    // 81 を除いた残りが加入者番号。
-    return digits.length - 2 >= 9 && digits.length - 2 <= 10;
-  }
-  return digits.length === 10 || digits.length === 11;
-}
+const PHONE_FORMS = [
+  // 市外局番は括弧書きも受ける：(03) 1234-5678
+  `\\(?0\\d\\)?${SEP}\\d{4}${SEP}\\d{4}`,
+  `\\(?0\\d{2}\\)?${SEP}\\d{4}${SEP}\\d{4}`,
+  `\\(?0\\d{2}\\)?${SEP}\\d{3}${SEP}\\d{4}`,
+  `\\(?0\\d{3}\\)?${SEP}\\d{3}${SEP}\\d{4}`,
+  `\\(?0\\d{3}\\)?${SEP}\\d{3}${SEP}\\d{3}`,
+  `\\(?0\\d{3}\\)?${SEP}\\d{2}${SEP}\\d{4}`,
+  `\\(?0\\d{4}\\)?${SEP}\\d${SEP}\\d{4}`,
+  `0\\d{9,10}`,
+  // 国際表記。+81 に続く加入者番号。
+  `\\+81${SEP}\\d{1,2}${SEP}\\d{4}${SEP}\\d{4}`,
+];
+
+/**
+ * 前後の境界：数字・コロン・「時」に隣接しない。
+ * 長い分岐から順に試すため、`0\d{2}-\d{4}-\d{4}`（11桁）が
+ * `0\d{2}-\d{3}-\d{4}`（10桁）より先に来るよう並べてある。
+ */
+const PHONE_PATTERN = new RegExp(`(?<![\\d:時])(?:${PHONE_FORMS.join("|")})(?![\\d:時])`, "g");
 
 export function maskContactInfo(text: string): MaskResult {
   const summary: { -readonly [K in keyof MaskSummary]: number } = {
@@ -110,8 +130,7 @@ export function maskContactInfo(text: string): MaskResult {
       return rule.token + tail;
     });
   }
-  result = result.replace(PHONE_CANDIDATE, (candidate) => {
-    if (!isPhoneNumber(candidate)) return candidate;
+  result = result.replace(PHONE_PATTERN, () => {
     summary.phone += 1;
     return "[電話番号]";
   });

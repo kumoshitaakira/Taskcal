@@ -319,6 +319,42 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("根拠の位置が本文の範囲外なら、schemaを通っても採用しない（RFC-004 §3）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      ...VALID_OUTPUT,
+                      interpretation: {
+                        ...VALID_OUTPUT.interpretation,
+                        // schemaは通るが、本文長を超えている。
+                        evidenceSpans: [{ start: 0, end: 999 }],
+                      },
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    const { client, saved } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    await expect(client.interpretReply(request)).rejects.toMatchObject({
+      code: ERROR_CODES.INVALID_INPUT,
+    });
+    // 検証失敗として保存する。再生でも成功として返さない。
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.outcome).toBe("SCHEMA_INVALID");
+  });
+
   it("返信内の連絡先をマスクしてから送る（RFC-004 §5）", async () => {
     let body: Record<string, unknown> = {};
     vi.stubGlobal(
