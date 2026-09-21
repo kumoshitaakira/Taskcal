@@ -1,0 +1,14 @@
+.next/
+node_modules/
+var/
+package-lock.json
+
+# 設計記録は既存の体裁のまま扱う。
+# 過去の資料・レビュー・ADR/RFCの本文を、整形によって書き換えない（AGENTS.md）。
+docs/
+README.md
+AGENTS.md
+CLAUDE.md
+.claude/
+.agents/
+.codex/

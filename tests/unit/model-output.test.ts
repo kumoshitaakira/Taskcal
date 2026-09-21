@@ -1,0 +1,126 @@
+import { describe, expect, it } from "vitest";
+import {
+  MODEL_OUTPUT_SCHEMA_VERSION,
+  modelReplyOutputJsonSchema,
+  modelReplyOutputSchema,
+  validateEvidenceSpans,
+} from "@/contracts/model-output";
+
+describe("モデル出力の契約（RFC-011 §3 / ADR-004）", () => {
+  it("検査に使うschemaからJSON Schemaを生成する（手書きの形式説明と食い違わせない）", () => {
+    const schema = modelReplyOutputJsonSchema();
+    expect(schema).toMatchObject({ type: "object" });
+
+    const properties = schema.properties as Record<string, unknown>;
+    expect(Object.keys(properties).sort()).toEqual(["interpretation", "proposedAction"]);
+
+    const interpretation = (properties.interpretation as { properties: Record<string, unknown> })
+      .properties;
+    // 承諾の判定に必要な項目がモデルへ伝わること。
+    expect(Object.keys(interpretation).sort()).toEqual([
+      "evidenceSpans",
+      "extractionRuleVersion",
+      "intent",
+      "offeredRanges",
+      "unresolvedConditions",
+    ]);
+  });
+
+  it("schema版を固定する（prompt・モデルIDと併せて版管理する）", () => {
+    expect(MODEL_OUTPUT_SCHEMA_VERSION).toBe("reply-interpretation/0.1.0-draft");
+  });
+
+  it("許可していない次行動を受け付けない", () => {
+    const base = {
+      interpretation: {
+        extractionRuleVersion: "v1",
+        intent: "ACCEPT",
+        offeredRanges: [
+          { startAt: "2026-09-21T18:00:00+09:00", endAt: "2026-09-21T22:00:00+09:00" },
+        ],
+        unresolvedConditions: [],
+        evidenceSpans: [],
+      },
+    };
+    expect(modelReplyOutputSchema.safeParse({ ...base, proposedAction: "NO_ACTION" }).success).toBe(
+      true,
+    );
+    // 勤務の確定をモデルに提案させない。
+    expect(
+      modelReplyOutputSchema.safeParse({ ...base, proposedAction: "ADOPT_SCHEDULE" }).success,
+    ).toBe(false);
+  });
+
+  it("未知のintentを承諾として通さない", () => {
+    const parsed = modelReplyOutputSchema.safeParse({
+      interpretation: {
+        extractionRuleVersion: "v1",
+        intent: "PROBABLY_YES",
+        offeredRanges: [],
+        unresolvedConditions: [],
+        evidenceSpans: [],
+      },
+      proposedAction: "NO_ACTION",
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("根拠の位置の検査（RFC-004 §3）", () => {
+  const base = {
+    extractionRuleVersion: "v1",
+    intent: "ACCEPT" as const,
+    offeredRanges: [],
+    unresolvedConditions: [],
+  };
+
+  it("本文の範囲内なら通す", () => {
+    const r = validateEvidenceSpans(
+      { ...base, evidenceSpans: [{ start: 0, end: 5 }] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("本文の範囲を超える根拠を拒否する", () => {
+    const r = validateEvidenceSpans(
+      { ...base, evidenceSpans: [{ start: 0, end: 11 }] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("端（end === 本文長）は通す", () => {
+    const r = validateEvidenceSpans(
+      { ...base, evidenceSpans: [{ start: 0, end: 10 }] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("意思を読み取ったのに根拠が無ければ拒否する（D03 / RFC-004 §3）", () => {
+    for (const spans of [[], [{ start: 0, end: 0 }]]) {
+      const r = validateEvidenceSpans(
+        { ...base, intent: "ACCEPT", evidenceSpans: spans },
+        "0123456789",
+      );
+      expect(r.ok, JSON.stringify(spans)).toBe(false);
+    }
+  });
+
+  it("UNCLEAR は「読み取れなかった」結論なので根拠を求めない", () => {
+    const r = validateEvidenceSpans(
+      { ...base, intent: "UNCLEAR", evidenceSpans: [] },
+      "0123456789",
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("逆転した範囲はschemaで弾く", () => {
+    const parsed = modelReplyOutputSchema.safeParse({
+      interpretation: { ...base, evidenceSpans: [{ start: 5, end: 2 }] },
+      proposedAction: "NO_ACTION",
+    });
+    expect(parsed.success).toBe(false);
+  });
+});

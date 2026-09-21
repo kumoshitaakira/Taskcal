@@ -1,6 +1,8 @@
 # RFC-011：同時個別打診・自然文承諾・案件状態の契約
 
-作成：2026-09-20／状態：打診・承諾・状態分離は現行決定、完了境界はQ07未決
+作成：2026-09-20／更新：2026-09-21／状態：打診・承諾・状態分離は現行決定。Q07・Q09は確定済み
+
+> 2026-09-21適用注記：Q07を「正式採用・読戻し・必要通知の受付まで」で確定しました（非選定通知・募集終了通知も対象）。Q09は、判定対象を元打診・現在の承諾・確定前後の状態を含む形で確定しました。§5の状態図には出口の無い経路が三つあり、[ADR-022](../adr/ADR-022-handoff-and-outcome-retention.md)で`ReconcileRequired → Attention`、`Attention → HandedOff`、`Preparing → HandedOff`を追加し、`HandedOff`の意味を「自動調整を終了し、人へ引き継いだ」へ変更しました。§5の表にある「未確定で引き継ぎ」は、この更新前の記載です。以下の本文は変更していません。
 関連：[ADR-013](../adr/ADR-013-parallel-outreach.md)、[ADR-014](../adr/ADR-014-natural-consent.md)、[ADR-017](../adr/ADR-017-state-boundaries.md)
 
 ## 1. 自律性の範囲

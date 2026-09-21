@@ -1,0 +1,106 @@
+/**
+ * モデル呼出しの契約。テストのため差し替え可能にする（RFC-003 §3）。
+ *
+ * モデルには案件内匿名IDと必要条件のみを渡す。任意SQL・URL・宛先を提供しない
+ * （ADR-008）。
+ */
+
+import type { ModelReplyOutput } from "@/contracts/model-output";
+import type { ModelCallStep, UsageRecord } from "./usage";
+
+export interface InterpretReplyRequest {
+  /**
+   * RFC-004 §8 の `request_id`。**呼出し元が永続化した安定ID。**
+   *
+   * worker再起動やlease失効で同じ受信イベントを再処理したとき、同じIDを渡す。
+   * adapter側で採番すると、再試行のたびに新しい予約と新しい有料呼出しが起き、
+   * 元の呼出しと照合できない（ADR-006 / AGENTS.md「結果不明の外部作用を
+   * 照会・照合なしに再実行しない」）。
+   */
+  readonly requestId: string;
+  /** 要求内容のハッシュ。同じIDで内容が異なる要求を検出する（D07）。 */
+  readonly requestHash: string;
+  /**
+   * どの処理での呼出しか（RFC-004 §6・§8 の `step`）。
+   * 修復・昇格（`REPAIR`）は別の呼出しとして数える。
+   */
+  readonly step: ModelCallStep;
+  /**
+   * 同じ step の何回目か。0起点。
+   *
+   * RFC-004 §6は「schema不正・根拠不一致で最大1回修復／昇格」を認めている。
+   * 修復は**別の `requestId`** で呼ぶ（同じIDでは `ALREADY_RESERVED` になる）。
+   * 呼出し元は step と attempt を含めて `requestId` を採番し、元の呼出しとの
+   * 紐づけを保つこと。
+   */
+  readonly attempt: number;
+  readonly caseId: string;
+  /**
+   * 実行単位（RFC-004 §8 の `run_id`）。呼出し元が永続化する。
+   * `run_spend_limit` の残額をこの単位で数える。
+   */
+  readonly runId: string;
+  /** 案件内の匿名ID。実名・連絡先を渡さない（ADR-008）。 */
+  readonly anonymousStaffRef: string;
+  /** 打診で提示した条件。 */
+  readonly offer: {
+    readonly date: string;
+    readonly roleCode: string;
+    readonly startAt: string;
+    readonly endAt: string;
+    readonly deadlineAt: string;
+  };
+  /**
+   * この返信の時点で、このスタッフに有効な承諾（Q09）。
+   *
+   * 訂正・撤回は既存の回答を参照するため、これが無いと解釈できない。
+   * 匿名化した時間だけを渡す。氏名・連絡先は渡さない（ADR-008）。
+   */
+  readonly currentCommitment?: {
+    readonly startAt: string;
+    readonly endAt: string;
+  };
+  /**
+   * 案件がすでに正式採用済みか（Q09）。
+   *
+   * 同じ文面でも、確定前なら再計画、確定後なら人への引き継ぎになる（RFC-011 §4）。
+   * 判定するのはコードだが、モデルが intent を誤らないために文脈として渡す。
+   */
+  readonly afterCommit: boolean;
+  /**
+   * 返信本文。引用されたデータとして扱い、system指示と同じ権限を与えない。
+   *
+   * adapterが送信前に連絡先等をマスクする（RFC-004 §5、`mask.ts`）。
+   * ただしパターン検知で完全な匿名化は保証されない。氏名・電話番号・
+   * LINE user ID・他人の返信全文を、そもそもここへ入れないこと。
+   */
+  readonly replyText: string;
+  readonly promptVersion: string;
+}
+
+export interface InterpretReplyResponse {
+  readonly output: ModelReplyOutput;
+  readonly usage: UsageRecord;
+  /**
+   * **モデルへ実際に渡した本文**（マスク後）。
+   *
+   * `output.interpretation.evidenceSpans` はこの文字列のインデックスであって、
+   * 原文の位置ではない。マスクで文字数が変わるため、原文へそのまま当てると
+   * 別の箇所を指す。根拠を保存・表示するときは必ずこの本文と組で扱う
+   * （RFC-004 §3の突き合わせもこの本文に対して行う）。
+   */
+  readonly maskedReplyText: string;
+}
+
+export interface ModelGateway {
+  /**
+   * 接続設定があるか。
+   *
+   * **false でも `interpretReply` が成功し得る。** 保存済み結果の再生は外部
+   * 呼出しを要さないため許している（`UnconfiguredModelGateway`）。
+   * 「false なら呼んでも無駄」と判断して縮退しないこと。新規呼出しが必要な
+   * 場合だけ `NOT_CONFIGURED` で失敗する。
+   */
+  isConfigured(): boolean;
+  interpretReply(request: InterpretReplyRequest): Promise<InterpretReplyResponse>;
+}
