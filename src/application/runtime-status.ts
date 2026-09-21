@@ -73,7 +73,8 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const budgetConfigured = Boolean(
     env?.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
     env?.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&
-    env?.ORCA_ESTIMATED_MICRO_USD_PER_CALL !== undefined,
+    env?.ORCA_INPUT_MICRO_USD_PER_KTOK !== undefined &&
+    env?.ORCA_OUTPUT_MICRO_USD_PER_KTOK !== undefined,
   );
 
   return {

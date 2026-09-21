@@ -18,6 +18,13 @@ import {
 } from "@/contracts/model-output";
 import type { InterpretReplyRequest, InterpretReplyResponse, ModelGateway } from "./model-gateway";
 import { RESERVATION_RESULT, type BudgetGuard, type ModelCallStore } from "./budget";
+import {
+  assertWithinInputBounds,
+  costFromTokens,
+  estimateCallCost,
+  type EstimateBounds,
+  type WorstCasePrices,
+} from "./estimate";
 import { CALL_OUTCOME, COST_KIND, MEASUREMENT, ROUTING_SOURCE, unknownChargeUsage } from "./usage";
 import type { MicroUsd, UsageRecord } from "./usage";
 
@@ -32,10 +39,11 @@ export interface OrcaClientOptions {
   /** 保存済み結果の照会先。再送せず照合するために要る。 */
   readonly callStore: ModelCallStore;
   /**
-   * 1呼出しの保守的な費用見積り（USD整数micro）。
-   * 単価が未確認のため呼出し側が与える（RFC-004 §7）。
+   * 入力長・出力トークンの上限。固定額での予約をしないために必須（RFC-004 §7）。
    */
-  readonly estimatedMicroUsdPerCall: MicroUsd;
+  readonly bounds: EstimateBounds;
+  /** 候補モデルのうち最も高い単価。振り先が変わっても予約が不足しないようにする。 */
+  readonly prices: WorstCasePrices;
 }
 
 export class OrcaRouterClient implements ModelGateway {
@@ -55,13 +63,25 @@ export class OrcaRouterClient implements ModelGateway {
     const requestId = request.requestId;
     const routingSource = this.options.model ? ROUTING_SOURCE.APPLICATION : ROUTING_SOURCE.ROUTER;
 
+    // 入力長を先に縛る。上限を超える入力は、見積りを超える費用になり得るため
+    // 呼出さない（RFC-004 §7）。
+    assertWithinInputBounds(request.replyText.length, this.options.bounds);
+
+    // この要求に固有の保守的な見積りを作る。固定額を使わない。
+    const body = this.buildBody(request);
+    const estimatedMicroUsd = estimateCallCost({
+      promptChars: JSON.stringify(body).length,
+      bounds: this.options.bounds,
+      prices: this.options.prices,
+    });
+
     // 呼出し前に予約する。予算未設定ならここで止まる（RFC-004 §7）。
     // 同じ requestId で内容が違えば OPERATION_CONFLICT で止まる（D07）。
     const reservation = await this.options.budget.reserve({
       caseId: request.caseId,
       requestId,
       requestHash: request.requestHash,
-      estimatedMicroUsd: this.options.estimatedMicroUsdPerCall,
+      estimatedMicroUsd,
     });
 
     if (reservation === RESERVATION_RESULT.ALREADY_RESERVED) {
@@ -80,6 +100,13 @@ export class OrcaRouterClient implements ModelGateway {
         throw new TaskcalError(
           ERROR_CODES.OPERATION_CONFLICT,
           "同じ request_id で内容が異なる要求です。拒否します。",
+        );
+      }
+      if (stored.outcome === "SCHEMA_INVALID") {
+        // 判明している検証失敗。結果不明ではないので、同じ失敗を決定的に返す。
+        throw new InvalidModelOutputError(
+          stored.usage as UsageRecord,
+          "モデル出力がschemaに一致しません（保存済みの結果）。承諾として扱いません。",
         );
       }
       const replayed = modelReplyOutputSchema.safeParse(stored.output);
@@ -106,7 +133,7 @@ export class OrcaRouterClient implements ModelGateway {
           // キーはここから先へ出さない。ログ・UI・ドメインへ渡さない（ADR-008）。
           authorization: `Bearer ${this.options.apiKey}`,
         },
-        body: JSON.stringify(this.buildBody(request)),
+        body: JSON.stringify(body),
       });
     } catch (error) {
       // タイムアウト・接続断は「結果不明」。課金の有無も不明であり、費用0にしない。
@@ -115,6 +142,7 @@ export class OrcaRouterClient implements ModelGateway {
         requestId,
         request,
         routingSource,
+        estimatedMicroUsd,
         startedAt,
         // 原文をそのまま載せない。接続先URLが混ざる可能性がある。
         error instanceof Error ? error.name : "呼出しの結果が不明です。",
@@ -129,6 +157,7 @@ export class OrcaRouterClient implements ModelGateway {
         requestId,
         request,
         routingSource,
+        estimatedMicroUsd,
         startedAt,
         `OrcaRouterがHTTP ${response.status}を返しました。`,
       );
@@ -143,6 +172,7 @@ export class OrcaRouterClient implements ModelGateway {
         requestId,
         request,
         routingSource,
+        estimatedMicroUsd,
         startedAt,
         error instanceof Error ? error.name : "応答本文を読めませんでした。",
       );
@@ -152,6 +182,7 @@ export class OrcaRouterClient implements ModelGateway {
 
     const finishedAt = new Date().toISOString();
     const usage = this.extractUsage({
+      reservedMicroUsd: estimatedMicroUsd,
       requestId,
       caseId: request.caseId,
       payload,
@@ -165,6 +196,14 @@ export class OrcaRouterClient implements ModelGateway {
     if (!parsed.success) {
       // 呼出しは成立して課金されている。実測した使用量を捨てない（ADR-007：
       // schema修復・昇格も総回数に含む）。
+      // 判明した検証失敗として永続化する。保存しないと、再起動後の再試行で
+      // 「結果不明」と誤分類され、使用量の記録も失われる。
+      await this.options.callStore.saveResult({
+        requestId,
+        requestHash: request.requestHash,
+        outcome: "SCHEMA_INVALID",
+        usage,
+      });
       // 呼出しは成立して課金されている。予約を残さず精算する（ADR-007：
       // schema修復・昇格も総回数に含む）。
       await this.options.budget.settle({
@@ -182,6 +221,7 @@ export class OrcaRouterClient implements ModelGateway {
     await this.options.callStore.saveResult({
       requestId,
       requestHash: request.requestHash,
+      outcome: "VALID",
       output: parsed.data,
       usage,
     });
@@ -203,13 +243,14 @@ export class OrcaRouterClient implements ModelGateway {
     requestId: string,
     request: InterpretReplyRequest,
     routingSource: (typeof ROUTING_SOURCE)[keyof typeof ROUTING_SOURCE],
+    reservedMicroUsd: MicroUsd,
     startedAt: string,
     detail: string,
   ): Promise<UnknownOutcomeError> {
     // 課金不明として精算する。予約は取り消さず残す（RFC-004 §7）。
     await this.options.budget.settle({
       requestId,
-      actualMicroUsd: this.options.estimatedMicroUsdPerCall,
+      actualMicroUsd: reservedMicroUsd,
       costKind: COST_KIND.UNKNOWN_CHARGE,
     });
     return new UnknownOutcomeError(
@@ -220,7 +261,7 @@ export class OrcaRouterClient implements ModelGateway {
         promptVersion: request.promptVersion,
         rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
         routingSource,
-        reservedMicroUsd: this.options.estimatedMicroUsdPerCall,
+        reservedMicroUsd,
         startedAt,
         finishedAt: new Date().toISOString(),
       }),
@@ -235,6 +276,8 @@ export class OrcaRouterClient implements ModelGateway {
 
     return {
       model: this.options.model,
+      // 出力の上限を要求にも入れる。見積りの前提をモデル側でも縛るため（RFC-004 §7）。
+      max_tokens: this.options.bounds.maxOutputTokens,
       // 接続先が構造化出力に対応していれば、これで形式を強制できる。
       // 対応有無は接続確認まで不明なため、プロンプト側にもschemaを載せる。
       response_format: {
@@ -277,6 +320,7 @@ export class OrcaRouterClient implements ModelGateway {
   }
 
   private extractUsage(input: {
+    reservedMicroUsd: MicroUsd;
     requestId: string;
     caseId: string;
     payload: unknown;
@@ -310,8 +354,12 @@ export class OrcaRouterClient implements ModelGateway {
         inputTokens !== undefined && outputTokens !== undefined
           ? MEASUREMENT.MEASURED
           : MEASUREMENT.UNKNOWN,
-      // 単価が未確認のため実費を算出できない。予約額を推定値として残し、0にしない。
-      costMicroUsd: this.options.estimatedMicroUsdPerCall,
+      // 実測トークンが取れたら、それと候補モデルの最大単価から費用を出す。
+      // 単価そのものは未確認なので確度は ESTIMATED のまま。取れなければ予約額を残す。
+      costMicroUsd:
+        inputTokens !== undefined && outputTokens !== undefined
+          ? costFromTokens({ inputTokens, outputTokens, prices: this.options.prices })
+          : input.reservedMicroUsd,
       costKind: COST_KIND.ESTIMATED,
       latencyMs: Date.parse(input.finishedAt) - Date.parse(input.startedAt),
       startedAt: input.startedAt,

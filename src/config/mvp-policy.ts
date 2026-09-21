@@ -51,3 +51,12 @@ export const MONTHLY_CAP_BASIS = "PLANNED_INCLUDING_COMPLETED" as const;
  * 非選定通知と募集終了通知も対象に含める。
  */
 export const COMPLETION_REQUIRES_NOTIFICATION_ACCEPTED = true;
+
+/**
+ * Q10／RFC-004 §7：1呼出しの入力長の上限（文字）。
+ * 超える返信は呼出さずに拒否する。見積りを超える費用になり得るため。
+ */
+export const MAX_REPLY_CHARS = 1_000;
+
+/** Q10／RFC-004 §7：1呼出しの出力トークン上限。要求にも含める。 */
+export const MAX_OUTPUT_TOKENS = 512;

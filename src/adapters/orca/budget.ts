@@ -199,8 +199,16 @@ export interface ModelCallStore {
 export interface StoredModelCall {
   readonly requestId: string;
   readonly requestHash: string;
-  /** モデル出力。schema不一致で保存しなかった場合は undefined。 */
+  /**
+   * 終了の種別。
+   *
+   * `SCHEMA_INVALID` も**確定した結果**として保存する。保存しないと、再試行時に
+   * 予約済み＋結果なしとなり、判明している検証失敗を「結果不明」と誤分類して
+   * 再送・再課金の判断を誤る。
+   */
+  readonly outcome: "VALID" | "SCHEMA_INVALID";
+  /** モデル出力。`SCHEMA_INVALID` のときは undefined。 */
   readonly output?: unknown;
-  /** 使用量。費用の確度を含む。 */
+  /** 使用量。費用の確度を含む。再起動後もここから費用を説明できる。 */
   readonly usage: unknown;
 }

@@ -87,7 +87,9 @@ function clientWith(
       ledger,
     ),
     callStore: store,
-    estimatedMicroUsdPerCall: 5_000,
+    bounds: { maxReplyChars: 1_000, maxOutputTokens: 512 },
+    // 入力3000/Ktok・出力15000/Ktok を候補モデルの最大単価として扱う。
+    prices: { inputMicroUsdPerKiloToken: 3_000, outputMicroUsdPerKiloToken: 15_000 },
   });
   return { client, saved, settled };
 }
@@ -104,6 +106,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     const { client } = clientWith(RESERVATION_RESULT.ALREADY_RESERVED, {
       requestId: "req-1",
       requestHash: REQUEST_HASH,
+      outcome: "VALID",
       output: VALID_OUTPUT,
       usage: { requestId: "req-1" },
     });
@@ -134,6 +137,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     const { client } = clientWith(RESERVATION_RESULT.ALREADY_RESERVED, {
       requestId: "req-1",
       requestHash: "b".repeat(64),
+      outcome: "VALID",
       output: VALID_OUTPUT,
       usage: {},
     });
@@ -166,8 +170,9 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     // 次の再試行が再送にならないよう、結果を保存している。
     expect(saved).toHaveLength(1);
     expect(saved[0]?.requestHash).toBe(REQUEST_HASH);
-    // 予約を予約のまま残さない（RFC-004 §7）。
-    expect(settled).toEqual([{ requestId: "req-1", actualMicroUsd: 5_000, costKind: "ESTIMATED" }]);
+    // 予約を予約のまま残さない（RFC-004 §7）。実測トークンから費用を出す。
+    // 入力10tok → ceil(10*3000/1000)=30、出力5tok → ceil(5*15000/1000)=75。
+    expect(settled).toEqual([{ requestId: "req-1", actualMicroUsd: 105, costKind: "ESTIMATED" }]);
   });
 
   it("結果不明でも精算し、予約を残す（UNKNOWN_CHARGE）", async () => {
@@ -181,9 +186,10 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     const { client, settled } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
     await expect(client.interpretReply(request)).rejects.toThrow();
 
-    expect(settled).toEqual([
-      { requestId: "req-1", actualMicroUsd: 5_000, costKind: "UNKNOWN_CHARGE" },
-    ]);
+    // 予約額（要求ごとの見積り）をそのまま残す。0にしない。
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.costKind).toBe("UNKNOWN_CHARGE");
+    expect(settled[0]?.actualMicroUsd).toBeGreaterThan(0);
   });
 
   it("モデル出力がschemaに合わなくても精算する（課金は発生している）", async () => {
@@ -198,11 +204,45 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       ),
     );
 
-    const { client, settled } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const { client, settled, saved } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
     await expect(client.interpretReply(request)).rejects.toThrow();
 
     expect(settled).toHaveLength(1);
     expect(settled[0]?.costKind).toBe("ESTIMATED");
+    // 判明した検証失敗として永続化する。再試行で「結果不明」と誤分類しないため。
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.outcome).toBe("SCHEMA_INVALID");
+    expect(saved[0]?.output).toBeUndefined();
+  });
+
+  it("保存済みのschema不一致は、結果不明ではなく同じ失敗を決定的に返す", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { client } = clientWith(RESERVATION_RESULT.ALREADY_RESERVED, {
+      requestId: "req-1",
+      requestHash: REQUEST_HASH,
+      outcome: "SCHEMA_INVALID",
+      usage: { requestId: "req-1" },
+    });
+
+    await expect(client.interpretReply(request)).rejects.toMatchObject({
+      code: ERROR_CODES.INVALID_INPUT,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("入力長の上限を超える返信は、予約前に拒否する（RFC-004 §7）", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { client, settled } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    await expect(
+      client.interpretReply({ ...request, replyText: "あ".repeat(1_001) }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.OUT_OF_SCOPE });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(settled).toHaveLength(0);
   });
 
   it("Q09: 現在の承諾と確定状態をモデルへ渡す", async () => {

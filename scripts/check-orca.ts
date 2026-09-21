@@ -22,7 +22,10 @@ const KEYS = [
   "ORCA_CASE_SPEND_LIMIT_MICRO_USD",
   "ORCA_RUN_SPEND_LIMIT_MICRO_USD",
   "ORCA_CASE_CALL_LIMIT",
-  "ORCA_ESTIMATED_MICRO_USD_PER_CALL",
+  "ORCA_INPUT_MICRO_USD_PER_KTOK",
+  "ORCA_OUTPUT_MICRO_USD_PER_KTOK",
+  "ORCA_MAX_REPLY_CHARS",
+  "ORCA_MAX_OUTPUT_TOKENS",
 ] as const;
 
 const parsed = serverEnvSchema.safeParse(process.env);
@@ -60,7 +63,8 @@ if (!parsed.success) {
   const budgetReady =
     env.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
     env.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&
-    env.ORCA_ESTIMATED_MICRO_USD_PER_CALL !== undefined;
+    env.ORCA_INPUT_MICRO_USD_PER_KTOK !== undefined &&
+    env.ORCA_OUTPUT_MICRO_USD_PER_KTOK !== undefined;
 
   if (!connectionReady) {
     process.stdout.write("\n結果: UNCONFIGURED（接続情報が未取得）\n");
@@ -68,7 +72,7 @@ if (!parsed.success) {
   } else if (!budgetReady) {
     process.stdout.write("\n結果: BUDGET_NOT_CONFIGURED（Q10未確定）\n");
     process.stdout.write(
-      "  case_spend_limit / run_spend_limit / 1呼出しの見積りが揃うまで、\n" +
+      "  case_spend_limit / run_spend_limit / 候補モデルの単価が揃うまで、\n" +
         "  有料呼出しを開始しません（RFC-004 §7 / ADR-007）。\n",
     );
   } else {

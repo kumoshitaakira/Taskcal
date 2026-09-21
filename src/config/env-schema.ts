@@ -40,7 +40,12 @@ export const serverEnvSchema = z.object({
   ORCA_CASE_SPEND_LIMIT_MICRO_USD: optionalPositiveInt,
   ORCA_RUN_SPEND_LIMIT_MICRO_USD: optionalPositiveInt,
   ORCA_CASE_CALL_LIMIT: optionalPositiveInt,
-  ORCA_ESTIMATED_MICRO_USD_PER_CALL: optionalPositiveInt,
+  // RFC-004 §7：固定額ではなく、入力長・出力上限・候補モデル単価から見積もる。
+  // 単価は候補モデルのうち**最も高い**ものを入れる（振り先が変わっても不足しないため）。
+  ORCA_INPUT_MICRO_USD_PER_KTOK: optionalPositiveInt,
+  ORCA_OUTPUT_MICRO_USD_PER_KTOK: optionalPositiveInt,
+  ORCA_MAX_REPLY_CHARS: optionalPositiveInt,
+  ORCA_MAX_OUTPUT_TOKENS: optionalPositiveInt,
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

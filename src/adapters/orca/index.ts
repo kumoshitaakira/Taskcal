@@ -7,6 +7,7 @@
 
 import "server-only";
 import { getServerEnv } from "@/config/env";
+import { MAX_OUTPUT_TOKENS, MAX_REPLY_CHARS } from "@/config/mvp-policy";
 import type { BudgetLedger, ModelCallStore } from "./budget";
 import { BudgetGuard } from "./budget";
 import type { ModelGateway } from "./model-gateway";
@@ -28,10 +29,11 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
   if (
     env.ORCA_CASE_SPEND_LIMIT_MICRO_USD === undefined ||
     env.ORCA_RUN_SPEND_LIMIT_MICRO_USD === undefined ||
-    env.ORCA_ESTIMATED_MICRO_USD_PER_CALL === undefined
+    env.ORCA_INPUT_MICRO_USD_PER_KTOK === undefined ||
+    env.ORCA_OUTPUT_MICRO_USD_PER_KTOK === undefined
   ) {
-    // 接続できても、金額上限または1呼出しの見積りが無ければ有料呼出しを開始しない
-    // （RFC-004 §7）。見積り0は予算検査を無効にするため、未設定と同じ扱いにする。
+    // 接続できても、金額上限または単価が無ければ有料呼出しを開始しない（RFC-004 §7）。
+    // 単価が無ければ保守的な見積りを作れず、予約が実費を下回り得る。
     return new UnconfiguredModelGateway();
   }
 
@@ -47,10 +49,18 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
       deps.ledger,
     ),
     callStore: deps.callStore,
-    estimatedMicroUsdPerCall: env.ORCA_ESTIMATED_MICRO_USD_PER_CALL,
+    bounds: {
+      maxReplyChars: env.ORCA_MAX_REPLY_CHARS ?? MAX_REPLY_CHARS,
+      maxOutputTokens: env.ORCA_MAX_OUTPUT_TOKENS ?? MAX_OUTPUT_TOKENS,
+    },
+    prices: {
+      inputMicroUsdPerKiloToken: env.ORCA_INPUT_MICRO_USD_PER_KTOK,
+      outputMicroUsdPerKiloToken: env.ORCA_OUTPUT_MICRO_USD_PER_KTOK,
+    },
   });
 }
 
 export * from "./budget";
+export * from "./estimate";
 export * from "./model-gateway";
 export * from "./usage";

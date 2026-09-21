@@ -40,16 +40,27 @@ export interface SendCommand {
   readonly body: string;
 }
 
-/** `requestHash` に含める内容。ここに無いものを変えても検出できない。 */
+/**
+ * `requestHash` に含める内容。ここに無いものを変えても検出できない。
+ *
+ * 宛先は `ContactEndpointRef` を**丸ごと**含める。`provider` と `connectionId` を
+ * 落とすと、endpointKey・版・種別・本文が同じまま接続先だけ切り替えた再試行が
+ * 同じhashになり、宛先の変わった送信を `REPLAY` として握り潰す（A15）。
+ */
 export interface SendPayloadForHash {
-  readonly endpointKey: string;
-  readonly endpointVersion: number;
+  readonly to: ContactEndpointRef;
   readonly kind: OutreachMessageKind;
   readonly body: string;
 }
 
 export interface SendResult {
-  readonly operationId: string;
+  /**
+   * 保存されていた操作の参照。**`requestHash` を含めて返す。**
+   *
+   * 照会した結果が本当に今の要求のものかを、呼出し元が照合できるようにする。
+   * ScheduleGateway の `UpdateResult` と同じ形にそろえる。
+   */
+  readonly operation: OperationRef;
   readonly state: DeliveryState;
   /**
    * 新規送信か、同じ operationId・同じ内容による再生か。
@@ -122,12 +133,18 @@ export interface MessagingGateway {
   send(command: SendCommand): Promise<SendResult>;
   /**
    * 送信結果の照会。ACCEPTED は受付であり到達の保証ではない。
+   *
    * 接続範囲を含めて照会する（宛先を切り替えた後に別接続の結果を拾わないため）。
+   * 返る `SendResult.operation.requestHash` を呼出し元が照合する。ID を誤って
+   * 再利用した場合に、内容の違う古い結果を今の要求へ結び付けないため。
+   * `expectedRequestHash` を渡した場合、adapter 側でも照合して不一致なら
+   * `"CONFLICT"` を返す。
    */
   getSendResult(ref: {
     operationId: string;
     connectionId: string;
-  }): Promise<SendResult | "LOOKUP_UNAVAILABLE">;
+    expectedRequestHash?: string;
+  }): Promise<SendResult | "LOOKUP_UNAVAILABLE" | "CONFLICT">;
   /**
    * 宛先が現在も同じ相手を指すかを検査する。MATCHES 以外は送信しない。
    * 送信直前の連絡許可は別途検査する（RFC-011 §6）。
