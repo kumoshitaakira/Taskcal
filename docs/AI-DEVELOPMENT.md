@@ -59,3 +59,7 @@ Claude Codeではスキルの先頭を `/` に置き換える。
 同種の指摘を繰り返し受けた分類は、スキルのチェックリストに留めず`scripts/check-consistency.ts`へ移す。PR #4では、同じ分類の指摘を複数回受けてから検査へ移した経緯がある。
 
 実行可能なコマンドはルートREADMEの「確認コマンド」を参照する。
+
+## リポジトリ運用
+
+`main`への変更はPull Request経由のSquash mergeで統合する。Squash後は履歴上の共通祖先が連続しない場合があるため、同期前に`git fetch origin main`と派生点の確認を行い、必要なら`git rebase --onto origin/main <branch-point> HEAD`を使う。詳細は[ADR-023](adr/ADR-023-squash-merge-workflow.md)を参照する。
