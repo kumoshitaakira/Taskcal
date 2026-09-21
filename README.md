@@ -4,7 +4,7 @@ Taskcalサービスのリポジトリ
 
 飲食店の突発欠勤に対し、既存スタッフへの打診、返信の解釈、再調整、勤務条件の検査、シフト反映を進めるAIエージェントです。
 
-ハッカソン向けの実装を開始しました（2026-09-21、Day 1）。現時点で動くのは開発環境の起動（アプリ・DB・worker）と共通契約の下書きだけです。欠勤登録、打診、返信解釈、CSV取込、正式採用は未実装です。実接続・受入試験も未実施です。
+ハッカソン向けの実装を開始しました（2026-09-21、Day 1）。開発環境の起動（アプリ・DB・worker）、共通契約の下書きに加え、Bの第1段階として固定形式の月内CSV取込・正規化出力と架空fixtureを追加しました。欠勤登録、打診、返信解釈、正式採用、CSVの画面接続は未実装です。実モデル接続・業務全体の受入試験も未実施です。
 
 ## まず読む文書
 
@@ -121,7 +121,7 @@ src/contracts/            共同 API・イベント・モデル出力のschema
 src/config/               A  環境変数の検査
 src/domain/interval/      B  時間区間、重複、充足計算（README のみ。実装は未着手）
 src/domain/selection/     B  候補評価、勤務計画の選定（同上）
-src/adapters/csv/         B  CSV正規化、安定ID、読戻し（同上）
+src/adapters/csv/         B  固定CSV正規化・安定ID（Gateway本体は未実装）
 fixtures/ tests/          B中心 デモデータ、単体・統合・受入試験
 ```
 
@@ -133,7 +133,7 @@ fixtures/ tests/          B中心 デモデータ、単体・統合・受入試�
 
 RFC-012 §4のDay 1共同ゲートのうち、以下は**未達**です。デモや進捗報告で完成扱いにしないでください。
 
-- CSVを読んで画面表示、並べ替え後も同じ勤務IDを維持（担当BのU02が未着手）
+- CSVを読んで画面表示（未実装）。並べ替え後の勤務ID維持はBのCLI・単体テストで確認する
 - 実推論1回のモデル・費用状態の保存（OrcaRouterの接続情報と金額予算が未取得。Q10未決）
 
 `/api/health` の `orcaRouter` は、接続設定があっても `CONFIGURED_UNVERIFIED`（設定あり・
@@ -149,6 +149,28 @@ RFC-012 §4のDay 1共同ゲートのうち、以下は**未達**です。デモ
 実装時に決め直さないでください。
 
 `src/adapters/orca/orca-client.ts` の要求・応答形式はOpenAI互換を仮定した下書きで、実接続で検証していません。
+
+## Bの第1段階：CSV往復の確認
+
+DB・OrcaRouter・画面を起動せず、リポジトリルートで実行できます。
+
+```bash
+npx tsx scripts/check-csv.ts
+npx vitest run tests/unit/monthly-csv.test.ts
+```
+
+既存の単体テストも含める場合は`npm run test:unit`を使います。
+変更確認には上記の`npm run format:check`、`npm run typecheck`、`npm run lint`も実行します。
+
+[架空の月内fixture](fixtures/dev/month-2026-09/README.md)を読み、
+`var/csv-check/<sourceRevision>/schedule.csv`へ正規化CSVを保存して読戻します。
+同じ入力の再実行は既存出力と照合し、不一致なら上書きせず止まります。
+元CSV・業務DB・正式版参照は変更しません。結果の`formallyAdopted: false`は、
+勤務の正式採用をしていないことを示します。
+
+ID付きの固定列CSVのみを対象とし、月内の入力完全性はJSON範囲宣言で検査します。
+CSV形式は変更可能な実装上の仮定です。詳細は[RFC-010 §10](docs/rfc/RFC-010-csv-authority.md)を参照。
+時間計算、月次上限、候補選定、欠勤適用、画面接続は次のステップです。
 
 ## 文書の扱い
 

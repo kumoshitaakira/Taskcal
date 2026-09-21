@@ -2,7 +2,16 @@
 
 **担当B** — CSV正規化、安定ID、読戻し（RFC-012 §3.1、作業U02・U04）。
 
-`src/contracts/schedule-gateway.ts` の `ScheduleGateway` を実装する。
+`monthly-csv.ts`に固定形式の月内CSV取込・正規化・出力を実装済み。
+`src/contracts/schedule-gateway.ts` の `ScheduleGateway` 本体（更新・操作照会・正式版接続）は次段階。
+
+`parseMonthlyCsv(csv, manifest)`は通常・代替勤務を共通の`LoadedAssignment`に営業日と
+勤務表IDを添えた形で返す。`normalizedCsv`を保存・再読込でき、入力順によらない
+`sourceRevision`と入力完全性を返す。ID欠落時は拒否し、自動採番しない。
+
+CSV列、範囲宣言、正規化、拒否条件は[RFC-010 §10](../../../docs/rfc/RFC-010-csv-authority.md)を参照。
+固定形式は変更可能な実装上の仮定であり、共同のGateway契約は変更していない。
+完全性は信頼するfixtureの宣言との一致を指し、外部原本の完全性や勤務条件の合法性を保証しない。
 
 守る規則（RFC-010）：
 
