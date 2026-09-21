@@ -104,6 +104,52 @@ CIはOrcaRouterのキーを持ちません。`check:orca` は設定の点検の�
 Codexによるレビューは、リポジトリに入れたGitHub Appが担当します。workflowでは動かして
 いません。PRへ `@codex review` とコメントすると再実行できます。
 
+### ディレクトリと担当
+
+RFC-012 §3.1の所有範囲に対応します。所有は排他的な編集権ではなく、設計・完了・説明の責任です。
+
+```text
+src/app/                  A  店長画面・スタッフ画面・Route Handlers
+src/application/          A  use case、状態遷移、正式採用の進行制御
+src/agent/                A  返信解釈、action選択、費用記録
+src/adapters/orca/        A  OrcaRouter、予算予約、使用量記録
+src/adapters/db/          A  接続、transaction、migration runner
+src/adapters/db/migrations/ B作成・A承認（0001はworker基盤でA、業務は0002以降）
+src/adapters/channel/     A  模擬メッセージ受信箱
+src/worker/               A  常駐worker
+src/contracts/            共同 API・イベント・モデル出力のschema
+src/config/               A  環境変数の検査
+src/domain/interval/      B  時間区間、重複、充足計算（README のみ。実装は未着手）
+src/domain/selection/     B  候補評価、勤務計画の選定（同上）
+src/adapters/csv/         B  CSV正規化、安定ID、読戻し（同上）
+fixtures/ tests/          B中心 デモデータ、単体・統合・受入試験
+```
+
+`src/contracts/` はDay 1に共同で固定します。以後の変更は、変更者でない側の確認を必須とします（ADR-021）。
+現時点では**下書き**で、承諾（Commitment）・選定結果・永続化した解釈の型がまだありません。
+不足の一覧は [`src/contracts/README.md`](src/contracts/README.md) にあります。
+
+### 現時点で動かないもの
+
+RFC-012 §4のDay 1共同ゲートのうち、以下は**未達**です。デモや進捗報告で完成扱いにしないでください。
+
+- CSVを読んで画面表示、並べ替え後も同じ勤務IDを維持（担当BのU02が未着手）
+- 実推論1回のモデル・費用状態の保存（OrcaRouterの接続情報と金額予算が未取得。Q10未決）
+
+`/api/health` の `orcaRouter` は、接続設定があっても `CONFIGURED_UNVERIFIED`（設定あり・
+未検証）までしか返しません。実接続を一度も確認していないため「正常」とは表示しません。
+
+費用の上限は `case_spend_limit` / `run_spend_limit` / `case_call_limit` の3つで、金額は
+**USDの整数micro単位**です（RFC-004 §7）。円換算は表示時のみ行います。`case_call_limit` の
+既定は24（Q10の暫定値。検証前の上限候補であり、十分な回数だという保証ではありません）。
+金額の上限値は単価判明後に設定します。
+
+未決事項Q01〜Q13は2026-09-21に確定済みです（[未決事項](docs/OPEN-QUESTIONS.md)の
+「確定した選択」）。Q10の金額上限だけは単価判明後に設定します。確定済みの条件を
+実装時に決め直さないでください。
+
+`src/adapters/orca/orca-client.ts` の要求・応答形式はOpenAI互換を仮定した下書きで、実接続で検証していません。
+
 ## 文書の扱い
 
 現行方針・レビュー提案・未決事項を区別し、古いADRや提供資料は履歴として残します。過去資料内の「案05」「欠勤リカバリー」はTaskcalの旧呼称です。

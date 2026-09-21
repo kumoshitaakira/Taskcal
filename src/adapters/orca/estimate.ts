@@ -28,15 +28,21 @@ export interface EstimateBounds {
 }
 
 /**
- * 文字数からトークン数の上限を見積もる。
+ * 入力のトークン数の上限を見積もる。
  *
- * 日本語は1文字が1トークンを超えることがあるため、**1文字=1トークンでは足りない**。
- * 保守的に1文字あたり2トークンとする。過大に見積もる分には予算を守れる。
+ * **UTF-16の文字数を基準にしない。** Routerが候補モデルを選ぶ構成では、
+ * tokenizerを特定できない。byte fallbackを使うtokenizerでは、未登録の文字が
+ * UTF-8のbyteへ分割される。BMPの1文字は最大3 byte、絵文字等は4 byteになるため、
+ * 「1文字=2トークン」は上限として成立しない。
+ *
+ * UTF-8のbyte長を使い、**1 byte = 1トークン**を上限とする。byte fallbackは
+ * 1 byteを1トークンより細かく分割しないため、これはどのtokenizerでも上限になる。
+ * 過大に見積もる分には予算を守れる。
+ *
+ * 候補モデル全てで実測した上限が得られたら、その値へ置き換える。
  */
-const TOKENS_PER_CHAR_UPPER_BOUND = 2;
-
-export function estimateInputTokens(promptChars: number): number {
-  return Math.ceil(promptChars * TOKENS_PER_CHAR_UPPER_BOUND);
+export function estimateInputTokens(promptText: string): number {
+  return Buffer.byteLength(promptText, "utf8");
 }
 
 /**
@@ -45,11 +51,12 @@ export function estimateInputTokens(promptChars: number): number {
  * 切り上げるので、実費がこれを超えることは単価が想定内である限り起きない。
  */
 export function estimateCallCost(input: {
-  promptChars: number;
+  /** 送信するpayloadそのもの。文字数ではなくUTF-8 byte長で見積もるため。 */
+  promptText: string;
   bounds: EstimateBounds;
   prices: WorstCasePrices;
 }): MicroUsd {
-  const inputTokens = estimateInputTokens(input.promptChars);
+  const inputTokens = estimateInputTokens(input.promptText);
   const inputCost = Math.ceil((inputTokens * input.prices.inputMicroUsdPerKiloToken) / 1000);
   const outputCost = Math.ceil(
     (input.bounds.maxOutputTokens * input.prices.outputMicroUsdPerKiloToken) / 1000,

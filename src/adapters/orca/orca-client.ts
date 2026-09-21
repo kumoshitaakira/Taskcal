@@ -69,8 +69,9 @@ export class OrcaRouterClient implements ModelGateway {
 
     // この要求に固有の保守的な見積りを作る。固定額を使わない。
     const body = this.buildBody(request);
+    const serializedBody = JSON.stringify(body);
     const estimatedMicroUsd = estimateCallCost({
-      promptChars: JSON.stringify(body).length,
+      promptText: serializedBody,
       bounds: this.options.bounds,
       prices: this.options.prices,
     });
@@ -102,11 +103,27 @@ export class OrcaRouterClient implements ModelGateway {
           "同じ request_id で内容が異なる要求です。拒否します。",
         );
       }
+      // 結果を保存した直後、精算の前に停止していた可能性がある。予約が残り続けると
+      // 後続の呼出しを誤って上限で止めるため、保存済みusageで精算をやり直す。
+      // settle は requestId で冪等（BudgetLedger の契約）。
+      await this.options.budget.settle({
+        requestId,
+        actualMicroUsd: stored.usage.costMicroUsd,
+        costKind: stored.usage.costKind,
+      });
+
       if (stored.outcome === "SCHEMA_INVALID") {
         // 判明している検証失敗。結果不明ではないので、同じ失敗を決定的に返す。
         throw new InvalidModelOutputError(
-          stored.usage as UsageRecord,
+          stored.usage,
           "モデル出力がschemaに一致しません（保存済みの結果）。承諾として扱いません。",
+        );
+      }
+      if (stored.outcome === "UNKNOWN") {
+        // 課金不明のまま終わった呼出し。再送せず、同じ結果不明を返す。
+        throw new UnknownOutcomeError(
+          stored.usage,
+          "前回の呼出しの結果が不明のままです（保存済みの記録）。再送しません。",
         );
       }
       const replayed = modelReplyOutputSchema.safeParse(stored.output);
@@ -116,7 +133,7 @@ export class OrcaRouterClient implements ModelGateway {
           "保存済みの呼出し結果がschemaに一致しません。再送せず人の対応へ回します。",
         );
       }
-      return { output: replayed.data, usage: stored.usage as UsageRecord };
+      return { output: replayed.data, usage: stored.usage };
     }
 
     const startedAt = new Date().toISOString();
@@ -133,7 +150,7 @@ export class OrcaRouterClient implements ModelGateway {
           // キーはここから先へ出さない。ログ・UI・ドメインへ渡さない（ADR-008）。
           authorization: `Bearer ${this.options.apiKey}`,
         },
-        body: JSON.stringify(body),
+        body: serializedBody,
       });
     } catch (error) {
       // タイムアウト・接続断は「結果不明」。課金の有無も不明であり、費用0にしない。
@@ -247,26 +264,35 @@ export class OrcaRouterClient implements ModelGateway {
     startedAt: string,
     detail: string,
   ): Promise<UnknownOutcomeError> {
+    const usage = unknownChargeUsage({
+      requestId,
+      caseId: request.caseId,
+      requestedModel: this.options.model,
+      promptVersion: request.promptVersion,
+      rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
+      routingSource,
+      reservedMicroUsd,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+    });
+
+    // 完全な記録を**送出前に**永続化する。例外オブジェクトにしか残さないと、
+    // worker停止や直後のクラッシュで、モデル・prompt/schema版・routing source・
+    // latency を復元できない（RFC-004 §8）。
+    await this.options.callStore.saveResult({
+      requestId,
+      requestHash: request.requestHash,
+      outcome: "UNKNOWN",
+      usage,
+    });
     // 課金不明として精算する。予約は取り消さず残す（RFC-004 §7）。
     await this.options.budget.settle({
       requestId,
       actualMicroUsd: reservedMicroUsd,
       costKind: COST_KIND.UNKNOWN_CHARGE,
     });
-    return new UnknownOutcomeError(
-      unknownChargeUsage({
-        requestId,
-        caseId: request.caseId,
-        requestedModel: this.options.model,
-        promptVersion: request.promptVersion,
-        rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
-        routingSource,
-        reservedMicroUsd,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-      }),
-      detail,
-    );
+
+    return new UnknownOutcomeError(usage, detail);
   }
 
   private buildBody(request: InterpretReplyRequest): Record<string, unknown> {

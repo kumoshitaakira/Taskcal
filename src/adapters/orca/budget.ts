@@ -17,7 +17,7 @@
  */
 
 import { ERROR_CODES, TaskcalError } from "@/contracts/errors";
-import { isValidMicroUsd, type CostKind, type MicroUsd } from "./usage";
+import { isValidMicroUsd, type CostKind, type MicroUsd, type UsageRecord } from "./usage";
 
 /**
  * 1案件あたりの呼出し回数の既定値（RFC-004 §7 の `case_call_limit`）。
@@ -97,6 +97,10 @@ export interface BudgetLedger {
   /**
    * 実測費用で精算する（RFC-004 §7）。
    * `costKind` が UNKNOWN_CHARGE のときは予約額を残す。取り消さない。
+   *
+   * **`requestId` で冪等でなければならない。** 結果を保存した直後、精算の前に
+   * 停止すると、再試行は保存済み結果を返す経路へ入る。そこから精算をやり直せる
+   * ように、同じ requestId への二度目の精算を二重計上しない実装にする。
    */
   settle(input: {
     requestId: string;
@@ -202,13 +206,14 @@ export interface StoredModelCall {
   /**
    * 終了の種別。
    *
-   * `SCHEMA_INVALID` も**確定した結果**として保存する。保存しないと、再試行時に
-   * 予約済み＋結果なしとなり、判明している検証失敗を「結果不明」と誤分類して
-   * 再送・再課金の判断を誤る。
+   * `SCHEMA_INVALID` と `UNKNOWN` も**確定した記録**として保存する。保存しないと、
+   * 再試行時に予約済み＋結果なしとなり、判明している検証失敗を「結果不明」と
+   * 誤分類する。また、例外オブジェクトにしか残っていない使用量（モデル、
+   * prompt/schema版、routing source、latency）が再起動で失われる（RFC-004 §8）。
    */
-  readonly outcome: "VALID" | "SCHEMA_INVALID";
-  /** モデル出力。`SCHEMA_INVALID` のときは undefined。 */
+  readonly outcome: "VALID" | "SCHEMA_INVALID" | "UNKNOWN";
+  /** モデル出力。`VALID` 以外は undefined。 */
   readonly output?: unknown;
   /** 使用量。費用の確度を含む。再起動後もここから費用を説明できる。 */
-  readonly usage: unknown;
+  readonly usage: UsageRecord;
 }

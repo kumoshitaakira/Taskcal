@@ -116,7 +116,10 @@ async function checkDatabase(configured: boolean): Promise<RuntimeStatus["databa
     );
     applied = rows;
   } catch (error) {
-    if (error instanceof Error && /schema_migrations/.test(error.message)) {
+    // 未適用の判定はSQLSTATE 42P01（undefined_table）に限る。
+    // エラー文の表名で判定すると、SELECT権限が無い場合や追跡表が壊れている場合も
+    // 「migrateを実行してください」と誤った復旧案を出す。migrateでは直らない。
+    if (isUndefinedTable(error)) {
       // 接続はできるがmigration未適用。「接続できない」と表示しない。
       return {
         status: "UNCONFIGURED",
@@ -170,6 +173,13 @@ async function checkDatabase(configured: boolean): Promise<RuntimeStatus["databa
     };
   }
   return { ...base, status: "OK" };
+}
+
+/** PostgreSQL の undefined_table。 */
+function isUndefinedTable(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { code?: unknown }).code === "42P01"
+  );
 }
 
 const UNAVAILABLE_WORKER: RuntimeStatus["worker"] = {

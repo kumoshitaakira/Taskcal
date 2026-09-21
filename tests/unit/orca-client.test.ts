@@ -13,11 +13,29 @@ import {
   type StoredModelCall,
 } from "@/adapters/orca/budget";
 import { OrcaRouterClient } from "@/adapters/orca/orca-client";
-import { MICRO_USD_PER_USD } from "@/adapters/orca/usage";
+import { MICRO_USD_PER_USD, type UsageRecord } from "@/adapters/orca/usage";
 import { ERROR_CODES } from "@/contracts/errors";
 import type { InterpretReplyRequest } from "@/adapters/orca/model-gateway";
 
 const REQUEST_HASH = "a".repeat(64);
+
+/** 保存済み記録の usage。最低限の形を満たす。 */
+function usageOf(overrides: Partial<UsageRecord> = {}): UsageRecord {
+  return {
+    requestId: "req-1",
+    outcome: "SUCCEEDED",
+    modelMeasurement: "UNKNOWN",
+    routingSource: "ROUTER",
+    promptVersion: "p1",
+    rulesVersion: "s1",
+    tokenMeasurement: "UNKNOWN",
+    costMicroUsd: 5_000,
+    costKind: "ESTIMATED",
+    startedAt: "2026-09-21T00:00:00.000Z",
+    finishedAt: "2026-09-21T00:00:01.000Z",
+    ...overrides,
+  };
+}
 
 const request: InterpretReplyRequest = {
   requestId: "req-1",
@@ -108,7 +126,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       requestHash: REQUEST_HASH,
       outcome: "VALID",
       output: VALID_OUTPUT,
-      usage: { requestId: "req-1" },
+      usage: usageOf(),
     });
 
     const result = await client.interpretReply(request);
@@ -139,7 +157,7 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       requestHash: "b".repeat(64),
       outcome: "VALID",
       output: VALID_OUTPUT,
-      usage: {},
+      usage: usageOf(),
     });
 
     await expect(client.interpretReply(request)).rejects.toMatchObject({
@@ -223,11 +241,68 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
       requestId: "req-1",
       requestHash: REQUEST_HASH,
       outcome: "SCHEMA_INVALID",
-      usage: { requestId: "req-1" },
+      usage: usageOf(),
     });
 
     await expect(client.interpretReply(request)).rejects.toMatchObject({
       code: ERROR_CODES.INVALID_INPUT,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("保存と精算の間で落ちた場合、再生時に精算をやり直す", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    // 保存済みだが、精算の記録が無い（＝精算前に停止した）状態。
+    const { client, settled } = clientWith(RESERVATION_RESULT.ALREADY_RESERVED, {
+      requestId: "req-1",
+      requestHash: REQUEST_HASH,
+      outcome: "VALID",
+      output: VALID_OUTPUT,
+      usage: usageOf({ costMicroUsd: 105, costKind: "ESTIMATED" }),
+    });
+
+    await client.interpretReply(request);
+
+    // 再送はしない。
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // 予約が残り続けないよう、保存済みusageで精算をやり直す。
+    expect(settled).toEqual([{ requestId: "req-1", actualMicroUsd: 105, costKind: "ESTIMATED" }]);
+  });
+
+  it("結果不明の記録を、例外を投げる前に永続化する", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+
+    const { client, saved } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    await expect(client.interpretReply(request)).rejects.toThrow();
+
+    // 例外オブジェクトにしか残さないと、直後のクラッシュで失われる（RFC-004 §8）。
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.outcome).toBe("UNKNOWN");
+    expect(saved[0]?.usage.costKind).toBe("UNKNOWN_CHARGE");
+    expect(saved[0]?.usage.routingSource).toBe("ROUTER");
+    expect(saved[0]?.usage.rulesVersion).toBeTruthy();
+  });
+
+  it("保存済みの結果不明は、再送せず同じ結果不明を返す", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const { client } = clientWith(RESERVATION_RESULT.ALREADY_RESERVED, {
+      requestId: "req-1",
+      requestHash: REQUEST_HASH,
+      outcome: "UNKNOWN",
+      usage: usageOf({ outcome: "UNKNOWN", costKind: "UNKNOWN_CHARGE" }),
+    });
+
+    await expect(client.interpretReply(request)).rejects.toMatchObject({
+      code: ERROR_CODES.RECONCILE_REQUIRED,
     });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
