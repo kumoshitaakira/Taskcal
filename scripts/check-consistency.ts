@@ -1,5 +1,5 @@
 /**
- * コードと文書の食い違いを検出する。
+ * コードと文書、コード同士の食い違いを検出する。
  *
  * 背景：環境変数名や既定値を変えたときに、それを説明している文書の更新が
  * 繰り返し漏れた。担当者が古い記載どおりに運用すると、想定より多くの有料
@@ -11,11 +11,15 @@
  *   3. 既定値を持つ定数の値が、それを説明する文書に現れること
  *   4. 廃止した説明が文書に残っていないこと
  *   5. 検査のために作った関数が、実際に呼ばれていること
+ *   6. 同種の操作群が、同じ規則を持つこと（対称性）
+ *   7. スキルがCodexとClaude Codeの両方から使える状態にあること
  *
- * 使い方: npm run check:docs
+ * 使い方: npm run check:consistency
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { extractDefinition } from "./lib/extract-definition";
+import { SYMMETRY_RULES, evaluateRule } from "./lib/symmetry-rules";
 import path from "node:path";
 import process from "node:process";
 
@@ -199,6 +203,83 @@ async function checkRetiredWording(): Promise<void> {
   }
 }
 
+/**
+ * スキルが両ツールから使えるか。
+ *
+ * `.agents/skills/` が正本で、`.claude/skills/` のシンボリックリンクから
+ * Claude Codeへ公開する（CLAUDE.md）。`docs/AI-DEVELOPMENT.md` のスキル表が
+ * 両ツールの呼び出し名を対にして示す唯一の場所。片方だけ足すと、もう一方の
+ * ツールから使えないまま気付かない。
+ */
+async function checkSkillParity(): Promise<void> {
+  const entries = await readdir(path.join(ROOT, ".agents", "skills"), { withFileTypes: true });
+  const aiDevelopment = await read("docs/AI-DEVELOPMENT.md");
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const name = entry.name;
+
+    try {
+      await read(path.join(".agents", "skills", name, "SKILL.md"));
+    } catch {
+      problems.push(`.agents/skills/${name}/SKILL.md がありません`);
+      continue;
+    }
+    try {
+      // リンク切れならここで失敗する。
+      await read(path.join(".claude", "skills", name, "SKILL.md"));
+    } catch {
+      problems.push(`.claude/skills/${name} からSKILL.mdを読めません（Claude Codeから使えない）`);
+    }
+    // 表の行として、両ツールの呼び出し名が対で並んでいることを確かめる。
+    // ファイル内のどこかに名前があるだけでは足りない（依頼例にも出てくる）。
+    const hasTableRow = aiDevelopment
+      .split("\n")
+      .some(
+        (line) =>
+          line.startsWith("|") &&
+          line.includes(`\`${name}\``) &&
+          line.includes(`\`$${name}\``) &&
+          line.includes(`\`/${name}\``),
+      );
+    if (!hasTableRow) {
+      problems.push(
+        `docs/AI-DEVELOPMENT.md のスキル表に ${name} の行がありません` +
+          `（Codexの $名 とClaude Codeの /名 を対で示す唯一の場所）`,
+      );
+    }
+  }
+}
+
+async function checkSymmetry(): Promise<void> {
+  for (const rule of SYMMETRY_RULES) {
+    for (const member of rule.members) {
+      // 1ファイルの欠落で以降の検査を止めない。他の検査と同じく problems へ積む。
+      let source: string;
+      try {
+        source = await read(member.file);
+      } catch {
+        problems.push(`${member.file} を読めません（対称性: ${rule.label}）`);
+        continue;
+      }
+      const body = extractDefinition(source, member.name);
+      if (body === undefined) {
+        problems.push(`${member.file} に ${member.name} がありません（対称性: ${rule.label}）`);
+        continue;
+      }
+      const missing = rule.mustContain.filter((needle) => !body.includes(needle));
+      const failed =
+        rule.mode === "any" ? missing.length === rule.mustContain.length : missing.length > 0;
+      if (failed) {
+        problems.push(
+          `${member.file} の ${member.name} に ${missing.join(" / ")} がありません` +
+            `（対称性: ${rule.label}）`,
+        );
+      }
+    }
+  }
+}
+
 async function checkFunctionsAreCalled(): Promise<void> {
   for (const entry of MUST_BE_CALLED) {
     for (const caller of entry.from) {
@@ -222,16 +303,18 @@ async function main(): Promise<void> {
   await checkEnvExampleMatchesSchema();
   await checkRetiredWording();
   await checkFunctionsAreCalled();
+  await checkSymmetry();
+  await checkSkillParity();
   await checkDocsReferenceRealEnvNames();
   await checkDocumentedDefaults();
 
   if (problems.length > 0) {
-    process.stderr.write("コードと文書の食い違いがあります:\n");
+    process.stderr.write("食い違いがあります:\n");
     for (const p of problems) process.stderr.write(`  - ${p}\n`);
     process.exitCode = 1;
     return;
   }
-  process.stdout.write("check:docs: コードと文書は一致しています\n");
+  process.stdout.write("check:consistency: 食い違いはありません\n");
 }
 
 main().catch((error: unknown) => {

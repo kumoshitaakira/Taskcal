@@ -74,7 +74,7 @@ npm run build          # 本番ビルド
 
 ```bash
 npm run format         # prettier --write
-npm run check:docs     # 環境変数名・既定値とドキュメントの整合
+npm run check:consistency  # コードと文書、コード同士の食い違い（7項目。詳細はスクリプト冒頭）
 npm run test:unit      # 単体のみ（DB不要）
 npm run test:integration  # 統合のみ（起動中のDBが必要）
 npm run check:orca     # OrcaRouterの設定点検（実呼出しはしない）
@@ -90,7 +90,7 @@ npm run check:orca     # OrcaRouterの設定点検（実呼出しはしない）
 
 | ジョブ | 内容 | DB |
 |---|---|---|
-| 静的検査 | 環境ファイルの混入検査、`format:check`、`lint`、`typecheck`、`check:docs`、`check:orca` | 不要 |
+| 静的検査 | 環境ファイルの混入検査、`format:check`、`lint`、`typecheck`、`check:consistency`、`check:orca` | 不要 |
 | ビルド | `build` | 不要 |
 | テストとmigration | `migrate` と再実行（`applied=0`）、統合テストがskipされていないこと、`test` | PostgreSQL 18 |
 

@@ -51,7 +51,7 @@ jobs:
       - name: 型検査
         run: npm run typecheck
       - name: コードと文書の整合
-        run: npm run check:docs
+        run: npm run check:consistency
       - name: OrcaRouterの設定点検（実呼出しなし）
         run: npm run check:orca
 
