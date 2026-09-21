@@ -4,6 +4,7 @@ import {
   CASE_STATES,
   canResumeReporting,
   resolvePreparingStop,
+  resolveCaseReconcile,
   resolveReconcileStall,
   STOP_CAUSE,
   TERMINAL_CASE_STATES,
@@ -85,6 +86,24 @@ describe("案件状態の遷移（RFC-011 §5）", () => {
 
   it("未知の状態を黙って遷移禁止として扱わず、拒否する", () => {
     expect(() => isAllowedCaseTransition("NOT_A_STATE" as CaseState, "COMMITTED")).toThrow();
+  });
+
+  it("照合結果なしに調整中へ戻さない（二重採用を防ぐ）", () => {
+    // 未採用と「確認」できたときだけ COORDINATING へ戻す。
+    expect(
+      resolveCaseReconcile({ finding: "CONFIRMED_NOT_ADOPTED", lookupStillPossible: true }),
+    ).toBe("COORDINATING");
+    // 採用済みなら確定事実を保持する。
+    expect(resolveCaseReconcile({ finding: "CONFIRMED_ADOPTED", lookupStillPossible: true })).toBe(
+      "COMMITTED",
+    );
+    // 不明なら断定しない。照会が続くうちは待ち、できなくなったら要対応へ。
+    expect(resolveCaseReconcile({ finding: "STILL_UNKNOWN", lookupStillPossible: true })).toBe(
+      "RECONCILE_REQUIRED",
+    );
+    expect(resolveCaseReconcile({ finding: "STILL_UNKNOWN", lookupStillPossible: false })).toBe(
+      "ATTENTION",
+    );
   });
 
   it("Q11: 照会経路が使えるうちは状態を動かさない", () => {

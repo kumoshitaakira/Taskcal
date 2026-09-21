@@ -524,8 +524,13 @@ export class InvalidModelOutputError extends Error {
  * HTTPエラーを UNKNOWN_CHARGE として残すため、末尾の `/v1` を正規化する。
  */
 export function chatCompletionsUrl(baseUrl: string): string {
-  const root = baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
-  return `${root}/v1/chat/completions`;
+  // 文字列連結にしない。query や fragment があると、追加した path がその中へ
+  // 入り、実際のpathが chat completions にならない。
+  const url = new URL(baseUrl);
+  url.search = "";
+  url.hash = "";
+  url.pathname = `${url.pathname.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1/chat/completions`;
+  return url.toString();
 }
 
 /** 応答のトークン数。非負の安全な整数でなければ「取得できなかった」として扱う。 */

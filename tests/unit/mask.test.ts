@@ -108,6 +108,10 @@ describe("送信前のマスク（RFC-004 §5 / ADR-008）", () => {
       // ASCII区切りでも終端する。
       ["詳細はhttps://example.com,18時から22時まで入れます", "18時から22時まで入れます"],
       ["https://example.com;19時からなら行けます", "19時からなら行けます"],
+      // ASCII閉じ括弧・感嘆符でも終端する。
+      ["詳細(https://example.com)18時から22時まで入れます", "18時から22時まで入れます"],
+      ["[https://example.com]18時から", "18時から"],
+      ["https://example.com!19時から", "19時から"],
     ];
     for (const [input, mustKeep] of cases) {
       expect(maskContactInfo(input).text, input).toContain(mustKeep);

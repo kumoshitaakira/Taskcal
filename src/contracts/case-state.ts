@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import { ERROR_CODES, TaskcalError } from "./errors";
+import { RECONCILE_FINDING, type ReconcileFinding } from "./schedule-update";
 
 export const CASE_STATES = [
   /** 返信を取り込み再計画している。 */
@@ -118,16 +119,46 @@ export interface Handoff {
 }
 
 /**
+ * `RECONCILE_REQUIRED` の案件を、照合結果に応じて動かす。
+ *
+ * **`isAllowedCaseTransition` だけで `COORDINATING` へ戻さないこと。**
+ * RFC-011 §5 の `ReconcileRequired --> Coordinating` は「未採用と**確認**」した
+ * 場合に限られる。確認せずに戻すと、実際には採用済みだった計画があるまま別の
+ * 計画を採用し、二重採用になる（D05、A03、A04）。
+ *
+ * `ScheduleUpdate` 側の `resolveReconcile` と対になる関数。あちらが更新の状態を
+ * 決め、こちらが案件の状態を決める。同じ照合結果から両方を決めること。
+ */
+export function resolveCaseReconcile(input: {
+  /** 照合の結果。`ScheduleUpdate` 側と同じ値を使う。 */
+  finding: ReconcileFinding;
+  /** 照会経路がまだ使えるか。使えないなら人の対応へ回す。 */
+  lookupStillPossible: boolean;
+}): CaseState {
+  switch (input.finding) {
+    case RECONCILE_FINDING.CONFIRMED_ADOPTED:
+      // 採用済みと確認できた。確定事実を保持して先へ進む。
+      return "COMMITTED";
+    case RECONCILE_FINDING.CONFIRMED_NOT_ADOPTED:
+      // 未採用と確認できた。ここで初めて再計画へ戻せる。
+      return "COORDINATING";
+    case RECONCILE_FINDING.STILL_UNKNOWN:
+      // 断定しない。照会が続けられるうちは待ち、できなくなったら要対応へ。
+      return input.lookupStillPossible ? "RECONCILE_REQUIRED" : "ATTENTION";
+  }
+}
+
+/**
  * Q11：照合が継続できないときの行き先。
  *
- * 未採用とも採用済みとも断定せず、成否不明のまま要対応にする。
- * 案件を終端へ落とす目的で不明状態を消さない（RFC-011 §5末尾）。
+ * `resolveCaseReconcile` の `STILL_UNKNOWN` の場合と同じ判断。照合結果が
+ * まだ得られていない段階で使う。
  */
 export function resolveReconcileStall(input: {
   /** 照会経路がまだ使えるか。使えるうちは状態を動かさない。 */
   lookupStillPossible: boolean;
 }): CaseState {
-  return input.lookupStillPossible ? "RECONCILE_REQUIRED" : "ATTENTION";
+  return resolveCaseReconcile({ finding: RECONCILE_FINDING.STILL_UNKNOWN, ...input });
 }
 
 /**

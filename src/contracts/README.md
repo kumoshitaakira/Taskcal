@@ -30,6 +30,14 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 | `resolveReconcileStall`（case-state） | 照会経路が使えるうちは状態を動かさない。使えなくなったら成否不明のまま要対応へ |
 | `canResumeReporting`（case-state） | 採用済みと確認でき、かつ正式版の読戻しが一致した場合だけ通知処理へ戻す |
 | `resolvePreparingStop`（case-state） | 期限を検知しただけで引き継がない。採用結果を先に確定させる |
+| `resolveCaseReconcile`（case-state） | 未採用と**確認**できたときだけ調整中へ戻す。確認せず戻すと二重採用になる |
+
+`resolveReconcile`（ScheduleUpdate側）と `resolveCaseReconcile`（案件側）は対になる。
+同じ照合結果から両方の状態を決めること。片方だけ動かさない。
+
+`ScheduleGateway` の4操作（`loadSchedule` / `applyUpdate` / `getUpdateResult` /
+`readBack`）はすべて `connectionId` を取る。`loadSchedule` は正式版参照も取り、
+初回取込み以外では必ず渡す（RFC-010 §2、A01、D11）。
 
 `HANDED_OFF` は「自動調整を終了し、人へ対応を引き継いだ」であり、**未確定を意味しない**
 （[ADR-022](../../docs/adr/ADR-022-handoff-and-outcome-retention.md)）。採用事実

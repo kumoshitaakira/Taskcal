@@ -67,6 +67,17 @@ describe("費用見積り（RFC-004 §7）", () => {
     expect(costFromTokens({ inputTokens: 0, outputTokens: 0, prices })).toBe(0);
   });
 
+  it("算出した費用が安全な整数を超えたら拒否する", () => {
+    // 入力が安全な整数でも、単価との積は範囲外になり得る。
+    expect(() =>
+      costFromTokens({
+        inputTokens: Number.MAX_SAFE_INTEGER,
+        outputTokens: 0,
+        prices,
+      }),
+    ).toThrowError(expect.objectContaining({ code: ERROR_CODES.INVALID_INPUT }));
+  });
+
   it("入力長の上限を超えたら拒否する", () => {
     expect(() => assertWithinInputBounds(1_001, bounds)).toThrowError(
       expect.objectContaining({ code: ERROR_CODES.OUT_OF_SCOPE }),

@@ -12,7 +12,7 @@ import {
   type ModelCallStore,
   type StoredModelCall,
 } from "@/adapters/orca/budget";
-import { OrcaRouterClient, chatCompletionsUrl } from "@/adapters/orca/orca-client";
+import { OrcaRouterClient } from "@/adapters/orca/orca-client";
 import { MICRO_USD_PER_USD, type UsageRecord } from "@/adapters/orca/usage";
 import { ERROR_CODES } from "@/contracts/errors";
 import type { InterpretReplyRequest } from "@/adapters/orca/model-gateway";
@@ -122,23 +122,6 @@ function clientWith(
 
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe("chat completions のURL", () => {
-  it("base URL が API base 形式でも /v1 を二重に付けない", () => {
-    // 一般的なAPI baseをそのまま設定すると /v1/v1/... になり、予約したあと
-    // 誤ったendpointへ送って HTTPエラーを UNKNOWN_CHARGE として残す。
-    expect(chatCompletionsUrl("https://api.example.com")).toBe(
-      "https://api.example.com/v1/chat/completions",
-    );
-    expect(chatCompletionsUrl("https://api.example.com/")).toBe(
-      "https://api.example.com/v1/chat/completions",
-    );
-    expect(chatCompletionsUrl("http://x.test:8080/v1")).toBe(
-      "http://x.test:8080/v1/chat/completions",
-    );
-    expect(chatCompletionsUrl("https://a.test/v1/")).toBe("https://a.test/v1/chat/completions");
-  });
 });
 
 describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {

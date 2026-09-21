@@ -46,6 +46,14 @@ const optionalHttpUrl = z
       ctx.addIssue({ code: "custom", message: "http または https のURLを指定してください。" });
       return z.NEVER;
     }
+    if (parsed.search !== "" || parsed.hash !== "") {
+      // base URL に query や fragment があると、endpoint の path を組めない。
+      ctx.addIssue({
+        code: "custom",
+        message: "URLにクエリやフラグメントを含めないでください（host か API base まで）。",
+      });
+      return z.NEVER;
+    }
     if (parsed.username !== "" || parsed.password !== "") {
       // Node の fetch は資格情報を含むURLを、ネットワークへ出す前に TypeError で
       // 拒否する。ここで止めないと、予約だけして一度も送っていない呼出しを

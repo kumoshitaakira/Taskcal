@@ -103,8 +103,18 @@ export function costFromTokens(input: {
       );
     }
   }
-  return (
+  const total =
     Math.ceil((input.inputTokens * input.prices.inputMicroUsdPerKiloToken) / 1000) +
-    Math.ceil((input.outputTokens * input.prices.outputMicroUsdPerKiloToken) / 1000)
-  );
+    Math.ceil((input.outputTokens * input.prices.outputMicroUsdPerKiloToken) / 1000);
+
+  // 入力が安全な整数でも、単価との積は範囲外になり得る
+  // （Number.MAX_SAFE_INTEGER × 3000 など）。不正確な費用を台帳へ入れると、
+  // 比較も精算も壊れる。呼出し側が予約額と「取得不能」へ倒せるよう拒否する。
+  if (!isValidMicroUsd(total)) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      "算出した費用が安全な整数の範囲を超えています。実測費用として扱えません。",
+    );
+  }
+  return total;
 }

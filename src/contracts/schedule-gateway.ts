@@ -25,6 +25,15 @@ export type ScheduleId = string;
 /** 安定した勤務ID。行番号・表示名・内容hashを恒久IDにしない（RFC-010 §3）。 */
 export type ShiftAssignmentId = string;
 
+/**
+ * 接続範囲。どの出力先・取得元かを識別する。
+ *
+ * **4つの操作すべてに持たせる。** 片方だけ落とすと、出力先を切り替えた再試行を
+ * 別要求として検出できず、別接続への二重作用や照会不能が起きる
+ * （`getUpdateResult` が接続範囲必須なのに `applyUpdate` が持たない状態だった）。
+ */
+export type ConnectionId = string;
+
 export interface SourceCapabilities {
   /** 現在の版を読めるか。 */
   readonly canReadRevision: boolean;
@@ -101,6 +110,12 @@ export interface LoadedAssignment {
 /** adapter へ渡す、検査済みで固定された更新内容。 */
 export interface ApplyUpdateCommand {
   readonly operation: OperationRef;
+  /**
+   * 出力先の接続範囲。**`requestHash` の対象にも含めること。**
+   * 同じ操作ID・同じ勤務内容のまま接続だけ切り替えた再試行を、別要求として
+   * 検出するため（`getUpdateResult` と対になる）。
+   */
+  readonly connectionId: ConnectionId;
   readonly scheduleId: ScheduleId;
   /**
    * 期待する外部版。一致しなければ CONFLICT。
@@ -180,7 +195,22 @@ export interface ReadBackResult {
  */
 export interface ScheduleGateway {
   readonly capabilities: SourceCapabilities;
-  loadSchedule(ref: { scheduleId: ScheduleId }): Promise<LoadedSchedule>;
+  /**
+   * 勤務表を読む。
+   *
+   * **正式版参照を指定して読む**（RFC-010 §2「全ての照会・再起動・次案件は
+   * 正式版参照から始める」）。`scheduleId` は R1 から R2 へ切り替えた後も
+   * 同じなので、それだけを渡すと adapter が初期設定のR1を読み続けても
+   * 契約上検出できない（A01、D11）。
+   *
+   * `authoritative` を省略できるのは、まだ一度も正式採用していない初回取込みの
+   * ときだけ。以後は必ず渡す。
+   */
+  loadSchedule(ref: {
+    connectionId: ConnectionId;
+    scheduleId: ScheduleId;
+    authoritative?: AuthoritativeScheduleRef;
+  }): Promise<LoadedSchedule>;
   applyUpdate(command: ApplyUpdateCommand): Promise<UpdateResult>;
   /**
    * 実行済み操作の結果照会。結果不明の外部作用を、照会も照合もせずに
@@ -199,7 +229,19 @@ export interface ScheduleGateway {
      */
     expectedRequestHash?: RequestHash;
   }): Promise<UpdateResult | "LOOKUP_UNAVAILABLE" | "CONFLICT">;
-  readBack(ref: { artifactRef: string }): Promise<ReadBackResult>;
+  readBack(ref: { connectionId: ConnectionId; artifactRef: string }): Promise<ReadBackResult>;
+}
+
+/**
+ * `ApplyUpdateCommand.operation.requestHash` に含める内容。
+ * ここに無いものを変えても、同じ操作IDでの再試行として通ってしまう。
+ */
+export interface ApplyUpdatePayloadForHash {
+  readonly connectionId: ConnectionId;
+  readonly scheduleId: ScheduleId;
+  readonly expectedSourceRevision: SourceRevision;
+  readonly additions: readonly PlannedAssignment[];
+  readonly absences: readonly PlannedAbsence[];
 }
 
 /**
