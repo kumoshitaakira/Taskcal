@@ -105,6 +105,9 @@ describe("送信前のマスク（RFC-004 §5 / ADR-008）", () => {
       ["LINE ID: taro_123。19時から", "。19時から"],
       ["@taro_123 19時から行けます", "19時から行けます"],
       ["LINE ID taro_123 19時から", "19時から"],
+      // ASCII区切りでも終端する。
+      ["詳細はhttps://example.com,18時から22時まで入れます", "18時から22時まで入れます"],
+      ["https://example.com;19時からなら行けます", "19時からなら行けます"],
     ];
     for (const [input, mustKeep] of cases) {
       expect(maskContactInfo(input).text, input).toContain(mustKeep);

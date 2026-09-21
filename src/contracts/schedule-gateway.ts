@@ -65,10 +65,23 @@ export interface LoadedSchedule {
 export const ASSIGNMENT_STATUSES = [
   /** 予定。月次上限に数える。 */
   "SCHEDULED",
-  /** 完了済み。予定区間として月次上限に数える（Q06初期推奨）。枠を復活させない。 */
+  /** 完了済み。予定区間として月次上限に数える（Q06）。枠を復活させない。 */
   "COMPLETED",
-  /** 取消済み。月次上限から除く。 */
+  /** 取消済み。勤務自体が無くなった。月次上限から除く。 */
   "CANCELLED",
+  /**
+   * 欠勤。**取消とは別**。
+   *
+   * 勤務の枠は残っていて代替を探す対象だが、本人はその時間に働かない。
+   * 月次上限からは欠勤区間を除く（RFC-009 §5「取消と欠勤区間を除く」、A09）。
+   *
+   * Q04により対象は**全時間欠勤のみ**。部分欠勤は範囲外なので、この状態は
+   * 勤務全体に対して付く。区間の一部だけを欠勤にしない。
+   *
+   * 書込み側の `PlannedAbsence` と往復する。CSVへ書いた欠勤を読み戻したとき、
+   * この状態として再現できなければ、再読込後に月次集計が狂う。
+   */
+  "ABSENT",
 ] as const;
 
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
@@ -117,6 +130,12 @@ export interface PlannedAssignment {
   readonly sourceCaseId: string;
 }
 
+/**
+ * 欠勤にする勤務。
+ *
+ * 読み戻すと `LoadedAssignment.status === "ABSENT"` として現れる必要がある
+ * （往復性）。Q04により全時間欠勤のみを扱うため、区間は元勤務と一致する。
+ */
 export interface PlannedAbsence {
   readonly shiftAssignmentId: ShiftAssignmentId;
   readonly startAt: string;

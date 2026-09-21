@@ -125,7 +125,7 @@ export class OrcaRouterClient implements ModelGateway {
 
     let response: Response;
     try {
-      response = await fetch(`${this.options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
+      response = await fetch(chatCompletionsUrl(this.options.baseUrl), {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -513,6 +513,19 @@ export class InvalidModelOutputError extends Error {
     super(message);
     this.name = "InvalidModelOutputError";
   }
+}
+
+/**
+ * chat completions のURLを組む。
+ *
+ * base URL は host だけの形（`https://api.example.com`）でも、API base の形
+ * （`https://api.example.com/v1`）でも受ける。一般的なAPI baseをそのまま設定
+ * すると `/v1/v1/chat/completions` になり、予約したあと誤ったendpointへ送って
+ * HTTPエラーを UNKNOWN_CHARGE として残すため、末尾の `/v1` を正規化する。
+ */
+export function chatCompletionsUrl(baseUrl: string): string {
+  const root = baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
+  return `${root}/v1/chat/completions`;
 }
 
 /** 応答のトークン数。非負の安全な整数でなければ「取得できなかった」として扱う。 */

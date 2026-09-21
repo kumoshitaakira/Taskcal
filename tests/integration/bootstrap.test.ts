@@ -51,9 +51,14 @@ describe.skipIf(!connectionString)("起動の結合確認（DATABASE_URL 必須�
 
   it("migrateを再実行しても二重適用にならない（同じ操作を繰り返しても結果が変わらない）", async () => {
     const before = await pool.query("select count(*)::int as n from schema_migrations");
-    const { stdout } = await execFileAsync("npx", ["tsx", "scripts/migrate.ts"], {
-      cwd: process.cwd(),
-    });
+    // npx を直接起動しない。execFile はシェルを介さないため、Windowsでは
+    // npx.cmd / npx.ps1 を起動できず spawn npx ENOENT になる。
+    // 実行中のNodeを直接起動すれば、シェルへの依存を避けられる。
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "scripts/migrate.ts"],
+      { cwd: process.cwd() },
+    );
     expect(stdout).toContain("applied=0");
     const after = await pool.query("select count(*)::int as n from schema_migrations");
     expect(after.rows[0]).toEqual(before.rows[0]);
