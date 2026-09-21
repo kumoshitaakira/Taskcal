@@ -114,3 +114,58 @@ supportsRevisionCheckは、版が読めるだけか、更新時に期待版を�
 ## 9. 受入条件
 
 [RFC-012](RFC-012-delivery-and-acceptance.md)のA01〜A08およびA14を検証する。とくに次案件・再起動で新しい正式版を読むこと、並行する二つの採用で一方しか通らないこと、未採用CSVが勤務へ混ざらないことを必須とする。
+
+## 10. Bの第1段階：固定形式の月内CSV（2026-09-21）
+
+本節は§3の具体的なCSV列と正規化を実装するための、**変更可能な実装上の仮定**。
+既存ADRの正本・正式採用・ドメインの意味は変更しない。共同の`ScheduleGateway`契約も変更しない。
+正式採用の実装へ接続する前にAと確認する。IDなしCSVの自動採番や汎用CSV取込はこの段階の対象外。
+
+### 入力
+
+開発者が管理する架空の1店舗・1職種・1か月分のCSVとJSON範囲宣言を使う。
+タイムゾーンはこのfixture形式では`Asia/Tokyo`、時刻は`YYYY-MM-DDTHH:mm:00+09:00`、15分刻み。
+UTC等の別表現への暗黙変換はしない。店舗・スタッフの認証や外部からのアップロード経路は提供しない。
+
+CSVは次の列順で固定する。IDはUUIDを必須とし、小文字へ正規化する。
+
+```text
+scheduleId,businessDate,shiftAssignmentId,staffId,roleCode,startAt,endAt,status,sourceCaseId
+```
+
+`businessDate`は実在する月内の日付。`scheduleId`と営業日は一対一。
+`status`は既存契約の`ASSIGNMENT_STATUSES`を参照する。CSV側で別の状態一覧を固定しない。
+`sourceCaseId`は通常勤務では空、代替勤務では生成元案件のUUID。
+名前・自由文は入れず、引用符・制御文字・空行・余分な列・未知の列を拒否する。
+UTF-8、先頭BOMの有無、LF／CRLF、最終行の改行の有無を許容する。上限は1MiB。
+ID欠落・重複、未知スタッフ・職種、対象月外、不正日時、開始≧終了を拒否する。
+日跨ぎはQ05に従い拒否。4時間上限は代替勤務に適用し、通常勤務の8時間等を切り詰めない。
+勤務重複・適格性・月次上限の計算、欠勤の適用は次段階とし、CSVの受理で合法性を保証しない。
+
+JSON範囲宣言には`formatVersion: 1`、`storeId`、`timezone`、`month`、`roleCode`、
+`staffIds`（最大8人）と任意の`days`を持つ。
+`days`の各項目は`date`、`scheduleId`、`assignmentIds`。
+勤務のない日も`assignmentIds: []`で明示する。取得済み日のID集合とCSVが違えば拒否する。
+
+- 全日が宣言され、各日のID集合が一致：`COMPLETE`。
+- `days`に欠けた日がある（空配列を含む）：`INCOMPLETE`と欠けた日付一覧。
+- `days`自体がない：`UNKNOWN`と対象月の全日付一覧。
+
+CSVに行があるだけでは、その日の全入力が取得できたとはみなさない。
+宣言のない日を0勤務として補完しない。この完全性は開発fixtureの前提を検査するもので、
+外部の自己申告が正しいことを保証しない。`COMPLETE`以外を月次上限検査に使わない。
+
+### 出力・版・検証境界
+
+`parseMonthlyCsv`は勤務ID順の`normalizedCsv`、全勤務、正規化した範囲宣言、完全性を返す。
+勤務IDは入力値を保持し、内容hashから作らない。勤務内容と範囲宣言を合わせてSHA-256の
+`sourceRevision`を計算する。CSVの行順、宣言の集合順、BOM・改行の違いでは版を変えない。
+勤務内容・由来・店舗・月・入力完全性の前提が変われば版を変える。DB内部のversionは扱わない。
+
+`npx tsx scripts/check-csv.ts`で固定fixtureを読み、`var/csv-check/<sourceRevision>/schedule.csv`
+へ排他的に新規保存し、読戻して同じ内容と版を確認する。再実行時は既存出力を照合し、不一致なら
+上書きせず停止する。元CSVは保持する。これは開発用成果物の確認で、業務状態変更操作ではない。
+`PREPARED`／`ADOPTED`や正式版参照は作らず、正式採用・更新操作の冪等性・障害復旧は未実装。
+
+対象の証拠はA06のID往復と、A09の入力完全性部分。A09の月次算式検証やDay 1の画面表示、
+Day 2以降の業務受入が完了したことを意味しない。テストは`tests/unit/monthly-csv.test.ts`。
