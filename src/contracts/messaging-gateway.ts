@@ -176,7 +176,8 @@ export interface MessagingGateway {
   /**
    * 送信結果の照会。ACCEPTED は受付であり到達の保証ではない。
    *
-   * 接続範囲を含めて照会する（宛先を切り替えた後に別接続の結果を拾わないため）。
+   * provider・接続範囲を含めて照会する（宛先を切り替えた後に別provider・接続の
+   * 結果を拾わないため）。
    * 返る `SendResult.operation.requestHash` を呼出し元が照合する。ID を誤って
    * 再利用した場合に、内容の違う古い結果を今の要求へ結び付けないため。
    * `expectedRequestHash` を渡した場合、adapter 側でも照合して不一致なら
@@ -184,6 +185,7 @@ export interface MessagingGateway {
    */
   getSendResult(ref: {
     operationId: OperationId;
+    provider: string;
     connectionId: string;
     expectedRequestHash?: RequestHash;
   }): Promise<SendResult | "LOOKUP_UNAVAILABLE" | "CONFLICT">;
