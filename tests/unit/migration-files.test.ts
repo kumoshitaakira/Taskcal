@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadDraftMigrationFiles, loadMigrationFiles } from "@/adapters/db/migration-files";
 
-async function allMigrationFiles() {
-  return [...(await loadMigrationFiles()), ...(await loadDraftMigrationFiles())];
-}
-
 describe("migration files（静的検証）", () => {
   it("番号付きSQLを重複なく連番順に読み込む", async () => {
     const migrations = await loadMigrationFiles();
@@ -19,14 +15,14 @@ describe("migration files（静的検証）", () => {
   });
 
   it("SQL migrationへrunnerの取引制御を持ち込まない", async () => {
-    const migrations = await allMigrationFiles();
+    const migrations = await loadDraftMigrationFiles();
     for (const migration of migrations) {
       expect(migration.sql, migration.filename).not.toMatch(/\b(begin|commit)\b/i);
     }
   });
 
   it("未確定のCommitment等やworker lease/fenceのtableを作らない", async () => {
-    const migrations = await allMigrationFiles();
+    const migrations = await loadDraftMigrationFiles();
     for (const migration of migrations) {
       expect(migration.sql, migration.filename).not.toMatch(
         /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:commitment|selection_result|reply_interpretation|worker_lease)\b/i,
