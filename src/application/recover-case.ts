@@ -22,6 +22,7 @@
  */
 
 import "server-only";
+import { RECOVERY_RETRY_MS } from "../config/mvp-policy";
 import { assertOutsideTransaction, withTransaction, type Tx } from "../adapters/db/transaction";
 import type { ScheduleReadRepository } from "../adapters/db/schedule-repository";
 import {
@@ -31,9 +32,9 @@ import {
   resolveReconcileStall,
   handoffReasonOf,
   ADOPTION_FACT,
-  STOP_CAUSE,
   type AdoptionFact,
   type CaseState,
+  type StopCause,
 } from "../contracts/case-state";
 import { ERROR_CODES, TaskcalError } from "../contracts/errors";
 import {
@@ -76,6 +77,8 @@ export interface RecoverCaseDeps {
   readonly operations: OperationResultStore;
   readonly gateway: Pick<ScheduleGateway, "capabilities" | "getUpdateResult" | "readBack">;
   readonly clock: Clock;
+  /** 進まなかった案件を次に見るまでの待ち。 */
+  readonly retryAfterMs?: number;
 }
 
 /** 照会の結果から採用事実へ。`lookupStillPossible` は別に返す——断定と可否は別。 */
@@ -97,7 +100,32 @@ function adoptionFactOf(finding: ReconcileFinding): AdoptionFact {
   }
 }
 
+/**
+ * 停止理由を必ず取り出す。
+ *
+ * **既定値で繕わない。** `handoffReasonOf` 自身が「黙って期限到達へ写すと、
+ * キャンセルを引き継ぎとして誤記録する」として `MANAGER_STOP` を弾いている。
+ * ここで `?? DEADLINE` を書くと、その検査を回避する経路を自分で作ることになる。
+ */
+function requireStopCause(snapshot: CaseSnapshot): StopCause {
+  if (!snapshot.stopCause) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      `案件 ${snapshot.caseId} に停止理由がありません。`,
+    );
+  }
+  return snapshot.stopCause;
+}
+
+/** 「進まなかった」ことの記録。次に拾うまでの待ちをこの時刻から測る。 */
+const DEFERRED_EVENT_KINDS = [
+  "RECOVER_UNRESOLVED",
+  "RECOVER_NOT_RESUMABLE",
+  "RECOVER_SKIPPED_IN_FLIGHT",
+] as const;
+
 export function recoverCase(deps: RecoverCaseDeps) {
+  const retryAfterMs = deps.retryAfterMs ?? RECOVERY_RETRY_MS;
   /**
    * 外部照会（A03／D09）。`adopt-plan.ts` の `lookUp` と同じ規則。
    *
@@ -178,20 +206,27 @@ export function recoverCase(deps: RecoverCaseDeps) {
 
     const { snapshot, artifactRef } = prepared;
 
+    // **採用済みでなければ読戻しを呼ばない。** `canResumeReporting` は
+    // `adoptionFact === ADOPTED` を要求するので、それ以外では読戻しの結果に
+    // かかわらず戻せない。外部を叩くだけ無駄になる。
+    const adopted = snapshot.adoptionFact === ADOPTION_FACT.ADOPTED;
+
     // 読戻しは外部作用。取引の外で行う。
-    const artifact = artifactRef
-      ? await (async () => {
-          assertOutsideTransaction("成果物の読戻し");
-          return verifyAdoptedArtifact({
-            gateway: deps.gateway,
-            connectionId: snapshot.connectionId,
-            artifactRef,
-            additions: prepared.additions ?? [],
-            absences: prepared.absences ?? [],
-            caseId: snapshot.caseId,
-          });
-        })()
-      : { matches: false as const, reason: "UNREADABLE" as const };
+    const artifact = !adopted
+      ? { matches: false as const, reason: "UNREADABLE" as const }
+      : artifactRef
+        ? await (async () => {
+            assertOutsideTransaction("成果物の読戻し");
+            return verifyAdoptedArtifact({
+              gateway: deps.gateway,
+              connectionId: snapshot.connectionId,
+              artifactRef,
+              additions: prepared.additions ?? [],
+              absences: prepared.absences ?? [],
+              caseId: snapshot.caseId,
+            });
+          })()
+        : { matches: false as const, reason: "UNREADABLE" as const };
 
     // **Q12：採用済みと確認でき、かつ読戻しが一致した場合だけ戻す。**
     // 読戻しが未確認のまま通知処理へ進まない。
@@ -340,8 +375,15 @@ export function recoverCase(deps: RecoverCaseDeps) {
           `案件 ${locked.caseId} に停止理由がありません。`,
         );
       }
+      // 停止していても、**照会が継続不能になったら要対応へ出す**（Q11 / ADR-025）。
+      // `resolvePreparingStop` は成否不明を `RECONCILE_REQUIRED` へ返すだけなので、
+      // これが無いと停止済みの案件が永久に非終端で残り、人が引き取る経路
+      // （Q12：`ATTENTION → HANDED_OFF`）にも届かない。ADR-022 が解こうとした
+      // 永久非終端を、停止済みに限って作り直すことになる。
+      const stalled =
+        found.finding === RECONCILE_FINDING.STILL_UNKNOWN && !found.lookupStillPossible;
       const to: CaseState =
-        locked.stoppedAt && stopCause
+        locked.stoppedAt && stopCause && !stalled
           ? resolvePreparingStop({ adoptionFact, cause: stopCause })
           : found.finding === RECONCILE_FINDING.STILL_UNKNOWN
             ? // Q11：照合が継続不能なら要対応へ。未採用とも採用済みとも断定しない。
@@ -368,7 +410,9 @@ export function recoverCase(deps: RecoverCaseDeps) {
         ...(to === "HANDED_OFF"
           ? {
               handoff: {
-                reason: handoffReasonOf(stopCause ?? STOP_CAUSE.DEADLINE),
+                // 停止印が無ければ `HANDED_OFF` へは来ない。既定値で繕うと、
+                // キャンセルを引き継ぎとして誤記録する余地を残す。
+                reason: handoffReasonOf(requireStopCause(locked)),
                 adoptionFact,
                 handedOffAt: now,
               },
@@ -400,13 +444,23 @@ export function recoverCase(deps: RecoverCaseDeps) {
 
   return async function runOnce(): Promise<RecoverCaseOutcome> {
     const picked = await withTransaction(async (tx: Tx) => {
+      // **進まなかった案件を毎tick触らない。**
+      // 復旧は進まないことが普通にある。戻らない案件を2秒ごとに拾うと、外部照会と
+      // 追記履歴が際限なく増え（1日約4万件）、他の案件の順番も回ってこない。
+      // 直前の見送りから `RECOVERY_RETRY_MS` 空ける。
       const { rows } = await tx.query<{ case_id: string; state: string }>(
-        `select case_id, state from absence_case
-          where state in ('RECONCILE_REQUIRED', 'ATTENTION')
-             or (state = 'PREPARING' and stopped_at is not null)
-          order by created_at
+        `select c.case_id, c.state from absence_case c
+          where (c.state in ('RECONCILE_REQUIRED', 'ATTENTION')
+                 or (c.state = 'PREPARING' and c.stopped_at is not null))
+            and not exists (
+              select 1 from case_processing_event e
+               where e.case_id = c.case_id
+                 and e.kind in ($2, $3, $4)
+                 and e.created_at > now() - make_interval(secs => $1::double precision / 1000))
+          order by c.created_at
           for update skip locked
           limit 1`,
+        [retryAfterMs, ...DEFERRED_EVENT_KINDS],
       );
       return rows[0];
     });

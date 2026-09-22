@@ -117,17 +117,19 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
   let caseId: string;
   let outreachId: string;
 
-  function reconcile() {
+  function reconcile(retryAfterMs = 0) {
     return reconcileOutbox({
       outbox: repos.outbox,
       outreaches: repos.outreaches,
       messaging,
       leaseMs: 60_000,
+      retryAfterMs,
     });
   }
 
-  function recover(gateway: RecoverGateway) {
+  function recover(gateway: RecoverGateway, retryAfterMs = 0) {
     return recoverCase({
+      retryAfterMs,
       cases: repos.cases,
       scheduleUpdates: repos.scheduleUpdates,
       selections: repos.selections,
@@ -693,6 +695,95 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
     const row = await caseRow();
     expect(row.state).toBe("PREPARING");
     expect(row.adoption_fact).toBe("UNKNOWN");
+  });
+
+  it("A13：照会できない通知が、後ろの結果不明を塞がない", async () => {
+    // 照会不能な項目を毎回最古として選び直すと、後続が永久に照合されない（先頭詰まり）。
+    const blocking = await unknownNotification({
+      operationId: `send:${outreachId}:INITIAL_OFFER`,
+      delivery: "UNKNOWN",
+      faultMode: "LOOKUP_UNAVAILABLE",
+    });
+    // 後から積まれた、照会すれば分かる通知。
+    const later = await unknownNotification({
+      operationId: `send:${outreachId}:CASE_CLOSED`,
+      delivery: "ACCEPTED",
+    });
+
+    const step = reconcile(60_000);
+    const seen: string[] = [];
+    for (let i = 0; i < 30; i += 1) {
+      const outcome = await step();
+      if (!outcome.handled) break;
+      if (outcome.outboxId === blocking || outcome.outboxId === later) seen.push(outcome.outboxId);
+      if (outcome.outboxId === later) break;
+    }
+
+    // 塞いでいる項目は動かないまま、後ろの項目まで到達する。
+    expect(seen).toContain(later);
+    expect((await outboxRow(blocking)).status).toBe("UNKNOWN");
+    expect((await outboxRow(later)).status).toBe("SENT");
+  });
+
+  it("進まなかった案件を、次のtickですぐ拾い直さない", async () => {
+    // 復旧は進まないことが普通にある。毎tick触ると外部照会と追記履歴が際限なく増える。
+    await adoptedCase("ATTENTION");
+    await withTransaction((tx) =>
+      tx.query("update absence_case set adoption_fact = 'UNKNOWN' where case_id = $1", [caseId]),
+    );
+    const gateway = stubGateway({ readBack: matchingReadBack() });
+    const step = recover(gateway, 60_000);
+
+    const first = await runUntilMine(step, (o) => "caseId" in o && o.caseId === caseId);
+    expect(first).toMatchObject({ to: "WAITING" });
+
+    // 2回目は自分の案件を拾わない。
+    const again = await runUntilMine(step, (o) => "caseId" in o && o.caseId === caseId);
+    expect(again).toBeUndefined();
+
+    // 見送りの記録は1件だけ。
+    const events = await query<{ n: string }>(
+      "select count(*)::text as n from case_processing_event where case_id = $1 and kind = 'RECOVER_NOT_RESUMABLE'",
+      [caseId],
+    );
+    expect(events[0].n).toBe("1");
+  });
+
+  it("Q12：採用済みでなければ、読戻しを呼ばずに見送る", async () => {
+    await adoptedCase("ATTENTION");
+    await withTransaction((tx) =>
+      tx.query("update absence_case set adoption_fact = 'NOT_ADOPTED' where case_id = $1", [
+        caseId,
+      ]),
+    );
+    const gateway = stubGateway({ readBack: matchingReadBack() });
+
+    const outcome = await runUntilMine(
+      recover(gateway),
+      (o) => "caseId" in o && o.caseId === caseId,
+    );
+    expect(outcome).toMatchObject({ to: "WAITING" });
+    // 戻せないと分かっている相手に外部を叩かない。
+    expect(gateway.calls.readBack).toBe(0);
+  });
+
+  it("Q11／ADR-025：停止済みでも、照会が継続不能になったら要対応へ出す", async () => {
+    // `resolvePreparingStop` は成否不明を RECONCILE_REQUIRED へ返すだけなので、
+    // これが無いと停止済みの案件が永久に非終端で残り、人が引き取る経路
+    // （Q12：ATTENTION → HANDED_OFF）にも届かない。
+    await preparedUpdate("RECONCILE_REQUIRED", { stopped: "DEADLINE" });
+    const gateway = stubGateway({ supportsResultLookup: false });
+
+    const outcome = await runUntilMine(
+      recover(gateway),
+      (o) => "caseId" in o && o.caseId === caseId,
+    );
+    expect(outcome).toMatchObject({ to: "ATTENTION" });
+    const row = await caseRow();
+    expect(row.state).toBe("ATTENTION");
+    // 未採用と断定しない。
+    expect(row.adoption_fact).toBe("UNKNOWN");
+    expect((await updateRow()).state).toBe("RECONCILE_REQUIRED");
   });
 
   /** 未決（PREPARED）の勤務表更新を持つ案件を作る。 */
