@@ -149,6 +149,50 @@ describe.skipIf(!connectionString)("PostgreSQL repository境界（DATABASE_URL �
     }
   });
 
+  it("IN_FLIGHTのcommit前に外部作用を開始できず、ロールバック後はNEWへ戻る", async () => {
+    const repository = new PgOutboundOperationRepository();
+    const operation = operationRef("outbound-commit-boundary");
+    const base = {
+      outboundOperationId: randomUUID(),
+      provider: "fake-gateway",
+      connectionId: "connection-commit-boundary",
+      operation,
+      operationKind: "SCHEDULE_UPDATE",
+    } as const;
+    await runTransaction(pool, schema, (tx) => repository.reserve(tx, base));
+
+    await expect(
+      runTransaction(pool, schema, async (tx) => {
+        const started = await repository.beginExternalAttempt(tx, {
+          provider: base.provider,
+          connectionId: base.connectionId,
+          operation,
+        });
+        expect(started.decision).toBe("START");
+        throw new Error("simulate process termination before commit");
+      }),
+    ).rejects.toThrow("simulate process termination before commit");
+
+    const afterRollback = await runTransaction(pool, schema, (tx) =>
+      repository.findByOperation(tx, {
+        provider: base.provider,
+        connectionId: base.connectionId,
+        operationId: operation.operationId,
+      }),
+    );
+    expect(afterRollback?.state).toBe("NEW");
+
+    const committed = await runTransaction(pool, schema, (tx) =>
+      repository.beginExternalAttempt(tx, {
+        provider: base.provider,
+        connectionId: base.connectionId,
+        operation,
+      }),
+    );
+    expect(committed.decision).toBe("START");
+    expect(committed.record.state).toBe("IN_FLIGHT");
+  });
+
   it("再起動相当のIN_FLIGHT／UNKNOWNは再送せず照合し、同じ結果はREPLAYする", async () => {
     const repository = new PgOutboundOperationRepository();
     const operation = operationRef("outbound-restart");
@@ -283,10 +327,18 @@ describe.skipIf(!connectionString)("PostgreSQL repository境界（DATABASE_URL �
       sourceRevisionAfter: "r2",
       revisionCheckEnforced: true,
       artifactRef: "artifact-1",
-      readBack: { status: "MATCHED" as const, sourceRevision: "r2", artifactRef: "artifact-1" },
+      readBack: { status: "NOT_ATTEMPTED" as const },
       adoptionFact: "ADOPTED" as const,
       resultMappings: [],
     };
+    await expect(
+      runTransaction(pool, schema, (tx) =>
+        repository.recordOutcome(tx, {
+          ...adoptedInput,
+          resultKind: "UNKNOWN",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: ERROR_CODES.INVALID_INPUT });
     const adopted = await runTransaction(pool, schema, (tx) =>
       repository.recordOutcome(tx, adoptedInput),
     );
@@ -295,6 +347,65 @@ describe.skipIf(!connectionString)("PostgreSQL repository境界（DATABASE_URL �
       repository.recordOutcome(tx, adoptedInput),
     );
     expect(replay.match).toBe("REPLAY");
+
+    const readBackMismatchInput = {
+      connectionId: base.connectionId,
+      operation,
+      readBack: { status: "MISMATCH" as const, detail: "正式版の読戻しが一致しない" },
+    };
+    const readBackMismatch = await runTransaction(pool, schema, (tx) =>
+      repository.recordReadBack(tx, readBackMismatchInput),
+    );
+    expect(readBackMismatch.match).toBe("APPLIED");
+    expect(readBackMismatch.record.state).toBe("ADOPTED");
+    expect(readBackMismatch.record.adoptionFact).toBe("ADOPTED");
+    expect(readBackMismatch.record.sourceRevisionAfter).toBe("r2");
+    expect(readBackMismatch.record.artifactRef).toBe("artifact-1");
+
+    const readBackReplay = await runTransaction(pool, schema, (tx) =>
+      repository.recordReadBack(tx, readBackMismatchInput),
+    );
+    expect(readBackReplay.match).toBe("REPLAY");
+    const adoptionReplayAfterReadBack = await runTransaction(pool, schema, (tx) =>
+      repository.recordOutcome(tx, adoptedInput),
+    );
+    expect(adoptionReplayAfterReadBack.match).toBe("REPLAY");
+    await expect(
+      runTransaction(pool, schema, (tx) =>
+        repository.recordReadBack(tx, {
+          connectionId: base.connectionId,
+          operation,
+          readBack: {
+            status: "MATCHED",
+            sourceRevision: "wrong-revision",
+            artifactRef: "wrong-artifact",
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: ERROR_CODES.INVALID_INPUT });
+    const afterRestart = await runTransaction(pool, schema, (tx) =>
+      repository.findByOperation(tx, {
+        connectionId: base.connectionId,
+        operationId: operation.operationId,
+      }),
+    );
+    expect(afterRestart).toMatchObject({
+      state: "ADOPTED",
+      adoptionFact: "ADOPTED",
+      sourceRevisionAfter: "r2",
+      artifactRef: "artifact-1",
+      readBack: { status: "MISMATCH", detail: "正式版の読戻しが一致しない" },
+    });
+
+    await expect(
+      runTransaction(pool, schema, (tx) =>
+        repository.recordReadBack(tx, {
+          connectionId: base.connectionId,
+          operation,
+          readBack: { status: "UNKNOWN", detail: "読戻しの結果不明" },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: ERROR_CODES.RECONCILE_REQUIRED });
 
     await expect(
       runTransaction(pool, schema, (tx) =>
@@ -326,6 +437,72 @@ describe.skipIf(!connectionString)("PostgreSQL repository境界（DATABASE_URL �
             "constraint",
             "invalid-hash",
             "not-a-hash",
+            "r1",
+          ],
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
+
+      await expect(
+        client.query(
+          `insert into schedule_update
+             (schedule_update_id, case_id, schedule_id, connection_id, operation_id,
+              request_hash, expected_source_revision, source_revision_after,
+              revision_check_enforced, artifact_ref, state, external_attempt_state,
+              result_kind, adoption_fact)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, 'ADOPTED',
+              'RESULT_RECORDED', 'UNKNOWN', 'ADOPTED')`,
+          [
+            randomUUID(),
+            randomUUID(),
+            randomUUID(),
+            "constraint",
+            "unknown-adopted",
+            "d".repeat(64),
+            "r1",
+            "r2",
+            "artifact-unknown",
+          ],
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
+
+      await expect(
+        client.query(
+          `insert into schedule_update
+             (schedule_update_id, case_id, schedule_id, connection_id, operation_id,
+              request_hash, expected_source_revision, source_revision_after,
+              revision_check_enforced, artifact_ref, state, external_attempt_state,
+              result_kind, read_back_status, read_back_source_revision,
+              read_back_artifact_ref, adoption_fact)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, 'ADOPTED',
+              'RESULT_RECORDED', 'APPLIED', 'MATCHED', 'wrong-revision',
+              'wrong-artifact', 'ADOPTED')`,
+          [
+            randomUUID(),
+            randomUUID(),
+            randomUUID(),
+            "constraint",
+            "mismatched-adopted-read-back",
+            "e".repeat(64),
+            "r1",
+            "r2",
+            "artifact-2",
+          ],
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
+
+      await expect(
+        client.query(
+          `insert into schedule_update
+             (schedule_update_id, case_id, schedule_id, connection_id, operation_id,
+              request_hash, expected_source_revision, state, adoption_fact)
+           values ($1, $2, $3, $4, $5, $6, $7, 'PREPARED', 'ADOPTED')`,
+          [
+            randomUUID(),
+            randomUUID(),
+            randomUUID(),
+            "constraint",
+            "adopted-fact-on-prepared",
+            "f".repeat(64),
             "r1",
           ],
         ),

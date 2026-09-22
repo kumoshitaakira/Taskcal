@@ -58,6 +58,9 @@ describe("migration files（静的検証）", () => {
     expect(scheduleUpdate?.sql).toContain("UNKNOWN");
     expect(scheduleUpdate?.sql).toMatch(/read_back_status\s*<>\s*'MATCHED'/i);
     expect(scheduleUpdate?.sql).toContain("schedule_update_adopted_evidence");
+    expect(scheduleUpdate?.sql).toContain("schedule_update_adopted_read_back_match");
+    expect(scheduleUpdate?.sql).toContain("schedule_update_adoption_fact_state");
+    expect(scheduleUpdate?.sql).toMatch(/result_kind\s+in\s*\(\s*'PREPARED',\s*'APPLIED'/i);
   });
 
   it("0003はprovider・connection・operationの範囲でoutbound操作を一意にする", async () => {

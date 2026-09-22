@@ -83,6 +83,12 @@ export interface RecordScheduleUpdateOutcomeInput {
   readonly resultDetail?: string;
 }
 
+export interface RecordScheduleUpdateReadBackInput {
+  readonly connectionId: string;
+  readonly operation: OperationRef;
+  readonly readBack: ReadBackObservation;
+}
+
 export interface OperationWrite<T> {
   readonly match: OperationMatch;
   readonly record: T;

@@ -5,6 +5,7 @@ import { isAllowedScheduleUpdateTransition } from "@/contracts/schedule-update";
 import { matchStoredRequest } from "./operation-match";
 import type {
   OperationWrite,
+  RecordScheduleUpdateReadBackInput,
   RecordScheduleUpdateOutcomeInput,
   RepositoryTx,
   ScheduleUpdateRecord,
@@ -77,6 +78,10 @@ export interface ScheduleUpdateRepository {
   recordOutcome(
     tx: RepositoryTx,
     input: RecordScheduleUpdateOutcomeInput,
+  ): Promise<ResultWrite<ScheduleUpdateRecord>>;
+  recordReadBack(
+    tx: RepositoryTx,
+    input: RecordScheduleUpdateReadBackInput,
   ): Promise<ResultWrite<ScheduleUpdateRecord>>;
 }
 
@@ -236,6 +241,68 @@ export class PgScheduleUpdateRepository implements ScheduleUpdateRepository {
     return { match: "APPLIED", record: toScheduleUpdateRecord(row) };
   }
 
+  async recordReadBack(
+    tx: RepositoryTx,
+    input: RecordScheduleUpdateReadBackInput,
+  ): Promise<ResultWrite<ScheduleUpdateRecord>> {
+    validateReadBackObservation(input.readBack);
+    const existing = await this.findByOperationForUpdate(tx, {
+      connectionId: input.connectionId,
+      operationId: input.operation.operationId,
+    });
+    if (!existing) {
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "保存済みのScheduleUpdateがありません。読戻し結果を新規操作として保存しません。",
+      );
+    }
+    matchStoredRequest(existing.operation.requestHash, input.operation.requestHash);
+    if (existing.state !== "ADOPTED" || existing.adoptionFact !== "ADOPTED") {
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "採用後の読戻し結果はADOPTEDのScheduleUpdateへだけ保存できます。",
+      );
+    }
+    validateReadBackAgainstAdoption(existing, input.readBack);
+    if (sameReadBack(existing.readBack, input.readBack)) {
+      return { match: "REPLAY", record: existing };
+    }
+    if (existing.readBack.status !== "NOT_ATTEMPTED" || input.readBack.status === "NOT_ATTEMPTED") {
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        `読戻し結果を${existing.readBack.status}から${input.readBack.status}へ変更できません。照合が必要です。`,
+      );
+    }
+
+    const { rows } = await tx.query<ScheduleUpdateRow>(
+      `update schedule_update
+          set read_back_status = $1,
+              read_back_source_revision = $2,
+              read_back_artifact_ref = $3,
+              read_back_detail = $4,
+              updated_at = now()
+        where connection_id = $5 and operation_id = $6
+          and state = 'ADOPTED' and adoption_fact = 'ADOPTED'
+        returning ${SCHEDULE_UPDATE_COLUMNS}`,
+      [
+        input.readBack.status,
+        input.readBack.sourceRevision ?? null,
+        input.readBack.artifactRef ?? null,
+        input.readBack.detail ?? null,
+        input.connectionId,
+        input.operation.operationId,
+      ],
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        "採用後の読戻し結果保存後の読出しを照合できません。",
+      );
+    }
+    return { match: "APPLIED", record: toScheduleUpdateRecord(row) };
+  }
+
   private async findByOperationForUpdate(
     tx: RepositoryTx,
     ref: { readonly connectionId: string; readonly operationId: string },
@@ -296,43 +363,80 @@ function toReadBackObservation(row: ScheduleUpdateRow): ScheduleUpdateRecord["re
 }
 
 function validateOutcomeEvidence(input: RecordScheduleUpdateOutcomeInput): void {
-  if (input.readBack.status === "MATCHED") {
-    if (!input.readBack.sourceRevision || !input.readBack.artifactRef) {
-      throw new TaskcalError(
-        ERROR_CODES.INVALID_INPUT,
-        "MATCHEDの読戻しにはsourceRevisionとartifactRefが必要です。",
-      );
-    }
-  }
+  validateReadBackObservation(input.readBack);
   if (input.state !== "ADOPTED") return;
   if (
+    (input.resultKind !== "PREPARED" && input.resultKind !== "APPLIED") ||
     !input.revisionCheckEnforced ||
-    input.readBack.status !== "MATCHED" ||
     !input.sourceRevisionAfter ||
     !input.artifactRef ||
-    input.sourceRevisionAfter !== input.readBack.sourceRevision ||
-    input.artifactRef !== input.readBack.artifactRef ||
     input.adoptionFact !== "ADOPTED"
   ) {
     throw new TaskcalError(
       ERROR_CODES.INVALID_INPUT,
-      "ADOPTEDにはrevision検査、読戻し証拠、artifact、採用事実が必要です。",
+      "ADOPTEDには既知の反映結果、revision検査、採用後のsourceRevision、artifact、採用事実が必要です。",
     );
   }
+  validateReadBackAgainstAdoption(input, input.readBack);
+}
+
+function validateReadBackObservation(input: RecordScheduleUpdateOutcomeInput["readBack"]): void {
+  if (input.status !== "MATCHED") return;
+  if (!input.sourceRevision || !input.artifactRef) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      "MATCHEDの読戻しにはsourceRevisionとartifactRefが必要です。",
+    );
+  }
+}
+
+function validateReadBackAgainstAdoption(
+  adoption: Pick<ScheduleUpdateRecord, "sourceRevisionAfter" | "artifactRef">,
+  readBack: ScheduleUpdateRecord["readBack"],
+): void {
+  if (
+    readBack.status === "MATCHED" &&
+    (adoption.sourceRevisionAfter !== readBack.sourceRevision ||
+      adoption.artifactRef !== readBack.artifactRef)
+  ) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      "MATCHEDの読戻しは採用時のsourceRevisionとartifactRefに一致する必要があります。",
+    );
+  }
+}
+
+function sameReadBack(
+  existing: ScheduleUpdateRecord["readBack"],
+  input: ScheduleUpdateRecord["readBack"],
+): boolean {
+  return (
+    computeRequestHash({
+      status: input.status,
+      sourceRevision: input.sourceRevision,
+      artifactRef: input.artifactRef,
+      detail: input.detail,
+    }) ===
+    computeRequestHash({
+      status: existing.status,
+      sourceRevision: existing.sourceRevision,
+      artifactRef: existing.artifactRef,
+      detail: existing.detail,
+    })
+  );
 }
 
 function sameOutcome(
   existing: ScheduleUpdateRecord,
   input: RecordScheduleUpdateOutcomeInput,
 ): boolean {
-  return (
+  const samePersistentOutcome =
     computeRequestHash({
       state: input.state,
       resultKind: input.resultKind,
       sourceRevisionAfter: input.sourceRevisionAfter,
       revisionCheckEnforced: input.revisionCheckEnforced,
       artifactRef: input.artifactRef,
-      readBack: input.readBack,
       adoptionFact: input.adoptionFact,
       resultMappings: input.resultMappings,
       resultDetail: input.resultDetail,
@@ -343,12 +447,14 @@ function sameOutcome(
       sourceRevisionAfter: existing.sourceRevisionAfter,
       revisionCheckEnforced: existing.revisionCheckEnforced,
       artifactRef: existing.artifactRef,
-      readBack: existing.readBack,
       adoptionFact: existing.adoptionFact,
       resultMappings: existing.resultMappings,
       resultDetail: existing.resultDetail,
-    })
-  );
+    });
+
+  if (!samePersistentOutcome) return false;
+  if (existing.state === "ADOPTED" && input.state === "ADOPTED") return true;
+  return sameReadBack(existing.readBack, input.readBack);
 }
 
 function parseResultMappings(value: unknown): readonly ResultMapping[] {

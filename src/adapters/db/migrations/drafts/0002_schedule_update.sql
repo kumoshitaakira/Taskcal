@@ -58,16 +58,22 @@ create table schedule_update (
         and char_length(read_back_artifact_ref) > 0)),
   constraint schedule_update_adoption_fact_values
     check (adoption_fact in ('NOT_ADOPTED', 'ADOPTED', 'UNKNOWN')),
+  constraint schedule_update_adoption_fact_state
+    check (adoption_fact <> 'ADOPTED' or state = 'ADOPTED'),
   constraint schedule_update_adopted_evidence
     check (state <> 'ADOPTED'
       or (adoption_fact = 'ADOPTED'
+        and result_kind in ('PREPARED', 'APPLIED')
+        and external_attempt_state = 'RESULT_RECORDED'
         and revision_check_enforced
-        and read_back_status = 'MATCHED'
         and source_revision_after is not null
         and artifact_ref is not null
         and char_length(source_revision_after) > 0
-        and char_length(artifact_ref) > 0
-        and source_revision_after = read_back_source_revision
+        and char_length(artifact_ref) > 0)),
+  constraint schedule_update_adopted_read_back_match
+    check (state <> 'ADOPTED'
+      or read_back_status <> 'MATCHED'
+      or (source_revision_after = read_back_source_revision
         and artifact_ref = read_back_artifact_ref)),
   constraint schedule_update_result_mappings_array
     check (jsonb_typeof(result_mappings) = 'array')
