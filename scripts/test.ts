@@ -17,22 +17,23 @@ async function main(): Promise<number> {
 
   if (mode === "local-skip") {
     process.stderr.write(
-      "[integration] SKIP: ローカルでDATABASE_URLが未設定のため、統合テストを実行しません。\n",
+      "[integration] SKIP: ローカルでDATABASE_URLが未設定のため、integration本体はskipします。\n",
     );
-    process.stderr.write(
-      "[integration] RESULT: DATABASE_URL未設定のため、ローカルの統合テストは未実行です。\n",
+  } else {
+    process.stdout.write(
+      "[integration] RUN: DATABASE_URLが設定されているため、PostgreSQL統合テストを実行します。\n",
     );
-    return 0;
   }
 
-  process.stdout.write(
-    "[integration] RUN: DATABASE_URLが設定されているため、PostgreSQL統合テストを実行します。\n",
-  );
-  const result = await runVitest(["run", "tests/integration", ...process.argv.slice(2)]);
+  const result = await runVitest(["run", ...process.argv.slice(2)]);
   if (result.kind !== "exit" || result.exitCode !== 0) {
-    reportVitestFailure("[integration]", result);
+    reportVitestFailure("[test]", result);
+  } else if (mode === "local-skip") {
+    process.stderr.write(
+      "[integration] RESULT: unitは実行済み、DATABASE_URL未設定のためintegration本体は未実行です。\n",
+    );
   } else {
-    process.stdout.write("[integration] RESULT: PostgreSQL統合テストが完了しました。\n");
+    process.stdout.write("[integration] RESULT: unit + PostgreSQL統合テストが完了しました。\n");
   }
   return exitCodeOf(result);
 }
@@ -43,7 +44,7 @@ main()
   })
   .catch((error: unknown) => {
     process.stderr.write(
-      `[integration] ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
+      `[test] ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
     );
     process.exitCode = 1;
   });
