@@ -95,11 +95,18 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   // 作ったが繋いでいない状態を止める。検査を足しても呼ばなければ効かない。
   {
     name: "assertOutsideTransaction",
-    from: ["src/application/interpret-reply.ts", "src/application/send-outbox.ts"],
+    from: [
+      "src/application/interpret-reply.ts",
+      "src/application/send-outbox.ts",
+      "src/application/reconcile-outbox.ts",
+      "src/application/recover-case.ts",
+    ],
   },
-  { name: "isAllowedOutreachTransition", from: ["src/adapters/db/outreach-repository.ts"] },
-  { name: "isAllowedCommitmentTransition", from: ["src/adapters/db/commitment-repository.ts"] },
-  { name: "resolveOutreachAfterSend", from: ["src/application/send-outbox.ts"] },
+  {
+    name: "resolveOutreachAfterSend",
+    // 照合経路も同じ解決関数を通す。別の規則で動かすと遷移表が二重になる（A13）。
+    from: ["src/application/send-outbox.ts", "src/application/reconcile-outbox.ts"],
+  },
   { name: "resolveOutreachAfterInbound", from: ["src/application/receive-inbound-event.ts"] },
   {
     name: "computeRequestHash",
@@ -115,10 +122,41 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   },
   // 定義して呼ばない状態を止める。円換算は表示経路だけが呼ぶ（RFC-004 §7）。
   { name: "toJpyForDisplay", from: ["src/application/model-usage-view.ts"] },
-  { name: "resolveReconcile", from: ["src/application/adopt-plan.ts"] },
-  { name: "resolveCaseReconcile", from: ["src/application/adopt-plan.ts"] },
+  {
+    name: "resolveReconcile",
+    from: ["src/application/adopt-plan.ts", "src/application/recover-case.ts"],
+  },
+  {
+    name: "resolveCaseReconcile",
+    from: ["src/application/adopt-plan.ts", "src/application/recover-case.ts"],
+  },
   // Q13／ADR-022：`PREPARING` 中の停止は行き先が変わる。期限検知だけで引き継がない。
-  { name: "resolvePreparingStop", from: ["src/application/adopt-plan.ts"] },
+  {
+    name: "resolvePreparingStop",
+    from: [
+      "src/application/adopt-plan.ts",
+      "src/application/stop-case.ts",
+      "src/application/recover-case.ts",
+    ],
+  },
+  // Q11：照合が継続不能なときの行き先。定義だけして呼んでいなかった型。
+  { name: "resolveReconcileStall", from: ["src/application/recover-case.ts"] },
+  // Q12：`ATTENTION` から戻せるかの判定。読戻し未確認のまま通知処理へ進めない。
+  { name: "canResumeReporting", from: ["src/application/recover-case.ts"] },
+  // 停止は打診・承諾を閉じる。遷移表を通さずに書くと、終端の打診まで動かす（A18）。
+  {
+    name: "isAllowedOutreachTransition",
+    from: ["src/adapters/db/outreach-repository.ts", "src/application/stop-case.ts"],
+  },
+  {
+    name: "isAllowedCommitmentTransition",
+    from: ["src/adapters/db/commitment-repository.ts", "src/application/stop-case.ts"],
+  },
+  // A18：停止理由から引き継ぎ理由へ写す唯一の経路。店長停止はここで弾く。
+  {
+    name: "handoffReasonOf",
+    from: ["src/application/adopt-plan.ts", "src/application/stop-case.ts"],
+  },
   {
     name: "isAllowedScheduleUpdateTransition",
     from: ["src/adapters/db/schedule-update-repository.ts"],

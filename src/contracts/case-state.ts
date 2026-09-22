@@ -217,3 +217,26 @@ export function resolvePreparingStop(input: {
       return "RECONCILE_REQUIRED";
   }
 }
+
+/**
+ * 停止理由から引き継ぎ理由へ写す。
+ *
+ * `HANDED_OFF` は理由と時刻を必ず持つ（`absence_case_handoff_reason` 制約）。
+ * 店長停止は `resolvePreparingStop` が `CANCELLED` へ落とすので、ここへ来ない。
+ * 黙って期限到達へ写すと、キャンセルを運用上の引き継ぎとして誤記録する。
+ */
+export function handoffReasonOf(cause: StopCause): HandoffReason {
+  switch (cause) {
+    case STOP_CAUSE.DEADLINE:
+      return HANDOFF_REASON.DEADLINE_REACHED;
+    case STOP_CAUSE.LIMIT:
+      return HANDOFF_REASON.LIMIT_REACHED;
+    case STOP_CAUSE.CANDIDATES_EXHAUSTED:
+      return HANDOFF_REASON.CANDIDATES_EXHAUSTED;
+    case STOP_CAUSE.MANAGER_STOP:
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "店長停止は引き継ぎではなくキャンセルです。",
+      );
+  }
+}

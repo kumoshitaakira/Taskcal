@@ -160,3 +160,53 @@ export async function adoptPlanAction(formData: FormData): Promise<void> {
       : NOTICE.ADOPT_ADOPTED;
   back("/manager", code, result.adopted);
 }
+
+/**
+ * 停止の結果を通知コードへ写す。
+ *
+ * **「停止した」と「停止を記録して行き先を保留した」を同じ文言に畳まない。**
+ * 畳むと、並行する正式採用がまだ決着していない案件を終了済みとして読ませる（Q13）。
+ */
+function stopNoticeOf(to: string): NoticeCode {
+  switch (to) {
+    case "CANCELLED":
+      return NOTICE.STOP_CANCELLED;
+    case "HANDED_OFF":
+      return NOTICE.STOP_HANDED_OFF;
+    case "COMMITTED":
+      return NOTICE.STOP_COMMITTED;
+    case "RECONCILE_REQUIRED":
+      return NOTICE.STOP_RECONCILE;
+    default:
+      return NOTICE.STOP_DEFERRED;
+  }
+}
+
+export async function stopCaseAction(formData: FormData): Promise<void> {
+  const operationId = String(formData.get("operationId") ?? "");
+  const caseId = String(formData.get("caseId") ?? "");
+  if (!operationId || !caseId) back("/manager", NOTICE.INPUT_MISSING);
+
+  const services = buildAppServices();
+  let result;
+  try {
+    // 画面からの停止は店長の明示的な意思。期限・上限による停止は worker が行う。
+    result = await services.stopCase({ operationId, caseId, cause: "MANAGER_STOP" });
+  } catch (error) {
+    if (error instanceof TaskcalError) {
+      revalidatePath("/manager");
+      back("/manager", NOTICE.FAILED);
+    }
+    throw error;
+  }
+
+  revalidatePath("/manager");
+  revalidatePath("/staff");
+  if (!result.ok) {
+    back(
+      "/manager",
+      result.code === ERROR_CODES.CASE_STOPPED ? NOTICE.STOP_ALREADY : NOTICE.STOP_NOT_ALLOWED,
+    );
+  }
+  back("/manager", stopNoticeOf(result.to), result.notified);
+}

@@ -37,13 +37,12 @@ import { assertOutsideTransaction, withTransaction, type Tx } from "../adapters/
 import type { ScheduleReadRepository } from "../adapters/db/schedule-repository";
 import {
   ADOPTION_FACT,
-  HANDOFF_REASON,
+  handoffReasonOf,
   isAllowedCaseTransition,
   resolveCaseReconcile,
   resolvePreparingStop,
   type CaseState,
   type Handoff,
-  type StopCause,
 } from "../contracts/case-state";
 import { isSelectableCommitment, type Commitment } from "../contracts/commitment";
 import { ERROR_CODES, TaskcalError, type ErrorCode } from "../contracts/errors";
@@ -203,25 +202,6 @@ function isRefusedBeforeEffect(error: unknown): error is TaskcalError {
     error instanceof TaskcalError &&
     (error.code === ERROR_CODES.NOT_IMPLEMENTED || error.code === ERROR_CODES.NOT_CONFIGURED)
   );
-}
-
-/** 停止理由から引き継ぎ理由へ。店長停止は `CANCELLED` なのでここへ来ない。 */
-function handoffReasonOf(cause: StopCause) {
-  switch (cause) {
-    case "DEADLINE":
-      return HANDOFF_REASON.DEADLINE_REACHED;
-    case "LIMIT":
-      return HANDOFF_REASON.LIMIT_REACHED;
-    case "CANDIDATES_EXHAUSTED":
-      return HANDOFF_REASON.CANDIDATES_EXHAUSTED;
-    case "MANAGER_STOP":
-      // 店長停止は `resolvePreparingStop` が `CANCELLED` へ落とすので、引き継ぎ理由へ
-      // 写す経路は無い。黙って期限到達へ写すと、キャンセルを引き継ぎとして誤記録する。
-      throw new TaskcalError(
-        ERROR_CODES.INVALID_INPUT,
-        "店長停止は引き継ぎではなくキャンセルです。",
-      );
-  }
 }
 
 /**

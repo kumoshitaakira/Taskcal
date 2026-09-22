@@ -1,5 +1,78 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：Day 3（担当A）— 停止・期限・復旧を本番経路へ通した
+
+ADR-022 で確定した三つの経路（Q11・Q12・Q13）は、判定関数が `src/contracts/case-state.ts`
+に**定義済みで、どこからも呼ばれていなかった**。停止を起こす経路そのものが無く、
+`stop_cause` / `stopped_at` 列も `applyTransition` の `stop` 引数も使われていなかった。
+これが A18（店長停止・期限到達）と A13（通知失敗からの復旧）を本番経路で再現できない
+理由だった。RFC-012 §4 の Day 3 方針「新機能凍結。事故試験を優先」に沿い、機能は
+増やさず事故経路だけを通した。
+
+### 停止（A18 / D10 / Q13）
+
+- `stopCase` を追加した。店長停止・期限・上限・枯渇を同じ入口で扱い、**行き先だけが
+  理由と状態で変わる**。`COORDINATING` からは `CANCELLED`（店長停止）または
+  `HANDED_OFF`（それ以外、引き継ぎ理由と時刻つき）。
+- **`PREPARING` 中に未決の `ScheduleUpdate` があれば状態を動かさない**（Q13）。停止の
+  事実だけを確定させ、行き先は並行する正式採用の結果を見てから決める。期限を検知した
+  だけで引き継ぐと、外部へ適用済みかもしれない計画を未採用と断定する。
+  そのための `AbsenceCaseRepository.recordStop` を足した（版は進める。進めないと並行する
+  採用の直前再検査が変更に気付かない／D08）。
+- `COMMITTED` 以降は停止しない。**確定済みの事実を消さない**（D10）。取消は別の変更操作。
+- 停止と同じ取引で、非終端の打診と `ACTIVE`/`HELD` の承諾を `EXPIRED` にし、
+  **届いたと確認できた相手にだけ**募集終了を積む（Q07）。送信待ちのままの相手へは
+  積まず、理由を `CASE_CLOSED_SKIPPED` として記録する。
+- **停止後に古い打診が送られる穴を塞いだ**（D10）。`claimNext` は、停止済みの案件の
+  `INITIAL_OFFER`／`CLARIFICATION` を取り出さない。募集終了・非選定・確定は送る。
+- `detectDeadline` を worker の1ステップとして足した。期限到達の案件を
+  `for update skip locked` で1件取り、**同じ取引の中で** `stopCase` を呼ぶ。判定と実行を
+  分けない——分けると、判定後・実行前に正式採用が通った案件まで止める。
+- `/manager` に「調整を停止する」を足した。停止が取り消せないことを文面に出す。
+
+### 復旧（A13 / Q11 / Q12）
+
+- `reconcileOutbox` を worker の1ステップとして足した。`UNKNOWN` の通知だけを取り出し、
+  **再送せず** `getSendResult` で照合する。受け付けられたと確認できたら `SENT`、
+  送信の記録が無いと確認できたら `PENDING`。`LOOKUP_UNAVAILABLE`／`CONFLICT` は
+  **動かさない。未送信と読み替えない。**
+- `recoverCase` を worker の1ステップとして足した。`resolveReconcileStall`（Q11）と
+  `canResumeReporting`（Q12）の呼出し元がここで初めてできた。
+  `RECONCILE_REQUIRED` は照会して `resolveReconcile` と `resolveCaseReconcile` を対で
+  進め、照合が継続不能なら `ATTENTION` へ。`ATTENTION` は成果物を読み直し、
+  **採用済みかつ読戻し一致のときだけ** `REPORTING` へ戻す。戻せない場合は
+  `ATTENTION` のまま残し、**自動で終端へ落とさない**。
+- `settle-reporting.ts` は触っていない。あちらは全体を1取引で回しており、外部照会を
+  足すと外部待ちの間ロックを保持する。復旧は `send-outbox.ts` と同じ3取引の形で別に書いた。
+
+### 入れなかったもの（理由つき）
+
+- **配送に失敗（`FAILED`）した通知の自動再送。** 同じ `operation_id` での再送は
+  `operation_result` に保存済みの失敗を `REPLAY` で返すだけで結果が変わらない。本当の
+  再送には attempt を含む操作IDが要り、これは新機能にあたる。README と `runtime-status`
+  に未実装として残した。
+- **`EligibilityChecker` への実装差し替え。** PR #9 の `evaluateCandidateEligibility` は
+  入ったが、`EligibilityRecheckInput`（`src/contracts/selection.ts`）が持つのは
+  `monthlyCompleteness` と `missingDates` だけで、月内の実割当・可能時間を渡せない。
+  繋ぐには `src/contracts/` の変更が要り、ADR-021 により担当Bの確認が必須。
+- **実CSV `ScheduleGateway`。** `main` にも開いているPRにも無い。
+  `createUnimplementedScheduleGateway` は残した。
+
+### 文書の追随
+
+- RFC-011 §5 の状態図に ADR-022 の三つの経路を追加した。ADR-022 の「更新範囲」が
+  この図を名指ししているのに未追随だった。**ADR-022 の本文は書き換えていない。**
+- README の「動かないもの」と受入状況表、`runtime-status` の `notImplemented` を
+  実態に合わせた。**動くようになった行だけ**を書き換え、それ以外は減らしていない。
+
+### 機械的検査
+
+`MUST_BE_CALLED` へ `resolveReconcileStall`・`canResumeReporting`・`handoffReasonOf` を
+追加し、`resolvePreparingStop`・`resolveReconcile`・`resolveCaseReconcile`・
+`assertOutsideTransaction`・`resolveOutreachAfterSend`・`isAllowedOutreachTransition`・
+`isAllowedCommitmentTransition` の呼出し元を増やした。対称性規則を4件追加した。
+いずれも、守るべき語を落とすと実際に落ちることを確認している。
+
 ## 2026-09-22：Day 2（担当A）— 最新mainへ rebase した
 
 担当Bの #8・#9・#10 がmainへ入ったので rebase した。**コードの衝突は無く、
@@ -29,6 +102,7 @@ gitが検知した衝突は文書2件**（`docs/CHANGELOG.md`・`tests/README.md
 
 migrationは衝突しなかった（Bは追加していない）。`0014_schedule_update_case_version.sql`
 のままで、`0013` → `0014` の順に適用できることを確認した。
+
 
 ## 2026-09-22：Day 2（担当A）— PR #12 のレビュー指摘を直した
 

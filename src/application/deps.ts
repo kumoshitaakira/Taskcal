@@ -28,9 +28,12 @@ import type { Clock, IdGenerator } from "../contracts/repository";
 import { createModelGateway } from "../adapters/orca";
 import { adoptPlan } from "./adopt-plan";
 import { createAbsenceCase } from "./create-absence-case";
+import { detectDeadline } from "./detect-deadline";
 import { interpretPending } from "./interpret-pending";
 import { interpretReply } from "./interpret-reply";
 import { receiveInboundEvent } from "./receive-inbound-event";
+import { reconcileOutbox } from "./reconcile-outbox";
+import { recoverCase } from "./recover-case";
 import {
   createRosterEligibility,
   createUnimplementedEligibilityRecheck,
@@ -39,6 +42,7 @@ import {
 import { sendOutbox } from "./send-outbox";
 import { settleReporting } from "./settle-reporting";
 import { startOutreach } from "./start-outreach";
+import { stopCase } from "./stop-case";
 
 const clock: Clock = { now: () => new Date().toISOString() };
 const idGenerator: IdGenerator = { next: () => randomUUID() };
@@ -70,6 +74,17 @@ export function buildAppServices() {
   const gateway = createUnimplementedScheduleGateway();
   const planner = createUnimplementedSelectionPlanner();
   const eligibility = createUnimplementedEligibilityRecheck();
+  const stop = stopCase({
+    cases,
+    outreaches,
+    commitments,
+    outbox,
+    scheduleUpdates,
+    operations,
+    stores,
+    clock,
+    ids: idGenerator,
+  });
   const interpret = interpretReply({
     model,
     cases,
@@ -120,6 +135,18 @@ export function buildAppServices() {
       ids: idGenerator,
     }),
     sendOutbox: sendOutbox({ outbox, outreaches, messaging }),
+    reconcileOutbox: reconcileOutbox({ outbox, outreaches, messaging }),
+    stopCase: stop,
+    detectDeadline: detectDeadline({ stopCase: stop, clock }),
+    recoverCase: recoverCase({
+      cases,
+      scheduleUpdates,
+      selections,
+      schedules,
+      authoritative,
+      gateway,
+      clock,
+    }),
     settleReporting: settleReporting({
       cases,
       outbox,

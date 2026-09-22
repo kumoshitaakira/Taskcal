@@ -198,6 +198,24 @@ export function createPgAbsenceCaseRepository(): AbsenceCaseRepository {
       return rowCount === 1 ? "UPDATED" : "VERSION_CONFLICT";
     },
 
+    async recordStop(handle: TxHandle, input) {
+      const tx = handle as Tx;
+      const { rowCount } = await tx.query(
+        `update absence_case
+            set version = version + 1,
+                stop_cause = $3,
+                stopped_at = $4
+          where case_id = $1 and version = $2 and stopped_at is null`,
+        [input.caseId, input.expectedVersion, input.stop.cause, input.stop.at],
+      );
+      if (rowCount === 1) return "UPDATED";
+      // 0行の理由を区別する。「先に誰かが停止した」を版の食い違いとして返すと、
+      // 呼出し元が再試行して同じ結果を延々と繰り返す。
+      const current = await fetch(tx, input.caseId, false);
+      if (current !== "NOT_FOUND" && current.stoppedAt) return "ALREADY_STOPPED";
+      return "VERSION_CONFLICT";
+    },
+
     async recordEvent(handle: TxHandle, input) {
       const tx = handle as Tx;
       await tx.query(
