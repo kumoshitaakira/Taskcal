@@ -1,5 +1,12 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：受入fixtureレビューコメントとmain競合の対応
+
+- 正式採用前の`input.schedule.assignmentIds`を最後に確認した正式版の既存勤務だけに限定し、
+  `operations[].requestPayload.additions`の計画中勤務と重複しないfixtureへ修正した。
+- この境界をfixture検証テストで機械的に検査し、正式採用後に操作履歴と既存集合が重なるシナリオだけを
+  明示的に許容する。最新`origin/main`の契約草案と実装状況に合わせ、Q14の説明と未実行範囲を更新した。
+
 ## 2026-09-22：Day 2（担当A）— 案件・打診・受信・承諾を実装
 
 動くようになった範囲は、**欠勤の登録 → 適格候補への同時打診 → 模擬受信箱への送信 →
@@ -76,13 +83,39 @@
   テストが見ている判定と実際に走る判定が別物だった。
 - `date` 列を `Date` で受けると、JSTでは `toISOString()` が前日になり営業日が1日ずれた。
   SQL側で `to_char` して文字列で受ける形に統一し、対称性検査へ規則を追加した。
-
 ## 2026-09-22：Q03の可能時間窓の扱いを明確化
 
 - 独立した複数の可能時間窓は、候補時間がいずれか1つへ完全に収まる場合に許可する。
 - 既存勤務の差し引きで1つの可能時間窓が分断された場合は、従来どおり`OUT_OF_SCOPE`で拒否する。
 - 月次CSVからdomain snapshotへの変換と完全性検証をapplication層へ置き、`sourceRevision`を保持する。
 - これはQ03の高位の「分断を丸めず拒否する」判断を置換せず、適用対象を明確化する変更である。
+
+## 2026-09-22：受入fixtureの独立レビュー反映
+
+- A03／A08へ照合不能な結果と`handoffReason`・回復経路を追加し、A07は正式採用前の作業成果物
+  読戻し不一致を`NOT_ADOPTED`／`REJECTED`として固定した。元CSVへ黙って戻す期待は置いていない。
+- A04は勝者IDを固定せず、実行順を反転した同一旧版CAS競合でも正式採用1件・競合1件・版更新1件を
+  保つ期待へ変更した。A18はUNKNOWNの操作結果証拠を追加し、`PREPARING`中は
+  `RECONCILE_REQUIRED`で保持するADR-022の条件を明示した。
+- fixture検証テストは操作種別、ScheduleGateway／MessagingGateway相当の必須入力、受信順、
+  `HANDED_OFF`の理由、状態回復経路、観測結果と操作の対応を検査する。これは構造検証であり、
+  application・DB・Gatewayの結合受入は引き続き未実行である。
+- A04／A08／A18の結合時に確認する前提をfixture READMEへQuestionとして残した。共通契約不足の
+  Q14および`src/contracts/`は変更していない。
+
+## 2026-09-22：Bの決定的な受入fixtureを追加
+
+- A02、A03、A04、A07、A08、A14、A15、A18の入力、期待終状態、採用事実、最後に確認した
+  `sourceRevision`、禁止する外部作用、操作ID・`requestHash`・接続範囲を`fixtures/eval/`へ追加した。
+- `UNKNOWN`、`PARTIAL`、`CONFLICT`、`EXPORTED_ONLY`、`PREPARED`を正式採用や確定失敗へ
+  黙って丸めない期待値を固定した。A15では`provider`・`connectionId`・`endpointVersion`を
+  メッセージ契約に合わせて記録した。
+- `tests/unit/eval-fixtures.test.ts`はJSONの構造と既存契約の値を検査するだけで、fake Gateway
+  やfixture検証の成功をapplication全体の受入合格とは扱わない。案件状態機械、Commitment／
+  SelectionResult永続化、正式採用transaction、模擬受信箱の結合は未実行として各fixtureへ記録した。
+- 共通契約に未定義のCommitment、SelectionResult、ReplyInterpretation、worker lease/fenceは
+  `src/contracts/`へ追加していない。Q14として、結合時にA側と決める必要がある条件を
+  `docs/OPEN-QUESTIONS.md`へ記録し、各fixtureの未実行理由にも残した。
 
 ## 2026-09-22：mainへのSquash merge運用を明文化
 

@@ -202,6 +202,13 @@ npx vitest run tests/unit/monthly-csv.test.ts
 既存の単体テストも含める場合は`npm run test:unit`を使います。
 変更確認には上記の`npm run format:check`、`npm run typecheck`、`npm run lint`も実行します。
 
+受入fixtureの構造だけを確認する場合は次を実行します。application、DB、Gatewayを接続
+しない決定的な検証であり、A02〜A18の受入合格を意味しません。
+
+```bash
+npx vitest run tests/unit/eval-fixtures.test.ts
+```
+
 [架空の月内fixture](fixtures/dev/month-2026-09/README.md)を読み、
 `var/csv-check/<sourceRevision>/schedule.csv`へ正規化CSVを保存して読戻します。
 同じ入力の再実行は既存出力と照合し、不一致なら上書きせず止まります。

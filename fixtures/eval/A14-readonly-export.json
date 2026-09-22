@@ -1,0 +1,82 @@
+{
+  "fixtureVersion": 1,
+  "caseId": "A14",
+  "title": "読取専用接続からファイル出力",
+  "scenarios": [
+    {
+      "scenarioId": "A14-readonly-export-only",
+      "boundary": "NO_FORMAL_ADOPTION_READ_ONLY_SOURCE",
+      "input": {
+        "caseId": "case-a14",
+        "caseVersion": 18,
+        "caseState": "PREPARING",
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "readonly-source-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": ["shift-absent-a14"]
+        },
+        "sourceCapabilities": {
+          "canReadRevision": true,
+          "canConditionalUpdate": false,
+          "supportsIdempotencyKey": false,
+          "supportsResultLookup": false,
+          "supportsAtomicBatch": false
+        }
+      },
+      "operations": [
+        {
+          "kind": "SCHEDULE_UPDATE",
+          "operationId": "op-a14-readonly-export",
+          "connectionId": "csv-readonly-source",
+          "requestPayload": {
+            "connectionId": "csv-readonly-source",
+            "scheduleId": "schedule-demo-2026-09",
+            "expectedSourceRevision": "readonly-source-r1",
+            "additions": [
+              {
+                "shiftAssignmentId": "shift-replacement-a14",
+                "commitmentId": "commitment-a14",
+                "staffId": "staff-04",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-26T18:00:00+09:00",
+                "endAt": "2026-09-26T22:00:00+09:00",
+                "sourceCaseId": "case-a14"
+              }
+            ],
+            "absences": [
+              {
+                "shiftAssignmentId": "shift-absent-a14",
+                "startAt": "2026-09-26T18:00:00+09:00",
+                "endAt": "2026-09-26T22:00:00+09:00"
+              }
+            ]
+          },
+          "requestHash": "e443953cc22be956e2ed7848c387c34f40c2346a52645a8aedeb67a60fb77469"
+        }
+      ],
+      "expected": {
+        "caseState": "PREPARING",
+        "scheduleUpdateState": "REJECTED",
+        "adoptionFact": "NOT_ADOPTED",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": ["EXPORTED_ONLY"],
+        "formalAdoptionOccurred": false,
+        "exportedArtifactOnly": true
+      },
+      "forbiddenExternalEffects": [
+        "FORMAL_SCHEDULE_ADOPTION",
+        "FORMAL_VERSION_POINTER_CHANGE",
+        "DISPLAY_EXPORTED_AS_CONFIRMED_WORK"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "読取専用接続の出力と正式版参照・画面表示を接続していないため",
+        "requires": [
+          "SourceCapabilitiesを確認してEXPORTED_ONLYを返すadapter",
+          "出力成果物と正式採用済み勤務を別表示するapplication/UI"
+        ]
+      }
+    }
+  ]
+}

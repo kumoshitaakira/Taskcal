@@ -1,0 +1,116 @@
+{
+  "fixtureVersion": 1,
+  "caseId": "A04",
+  "title": "同じ旧版に対する二つの正式採用",
+  "scenarios": [
+    {
+      "scenarioId": "A04-two-operations-one-old-revision",
+      "boundary": "FORMAL_ADOPTION_COMPETITION",
+      "input": {
+        "caseId": "case-a04",
+        "caseVersion": 11,
+        "caseState": "PREPARING",
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": ["shift-absent-a04"]
+        },
+        "race": {
+          "mode": "SAME_OLD_REVISION_COMPARE_AND_SET",
+          "executionOrders": [
+            ["op-a04-winner", "op-a04-loser"],
+            ["op-a04-loser", "op-a04-winner"]
+          ],
+          "winnerSelection": "FIRST_SUCCESSFUL_COMPARE_AND_SET",
+          "adoptedOperationIdDependsOnExecutionOrder": true
+        }
+      },
+      "operations": [
+        {
+          "kind": "SCHEDULE_UPDATE",
+          "operationId": "op-a04-winner",
+          "connectionId": "csv-demo-write",
+          "requestPayload": {
+            "connectionId": "csv-demo-write",
+            "scheduleId": "schedule-demo-2026-09",
+            "expectedSourceRevision": "demo-schedule-r1",
+            "additions": [
+              {
+                "shiftAssignmentId": "shift-replacement-a04-a",
+                "commitmentId": "commitment-a04-a",
+                "staffId": "staff-04",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-23T18:00:00+09:00",
+                "endAt": "2026-09-23T22:00:00+09:00",
+                "sourceCaseId": "case-a04"
+              }
+            ],
+            "absences": [
+              {
+                "shiftAssignmentId": "shift-absent-a04",
+                "startAt": "2026-09-23T18:00:00+09:00",
+                "endAt": "2026-09-23T22:00:00+09:00"
+              }
+            ]
+          },
+          "requestHash": "2c311e82263cc400e6d5c6d271d837023a61860a3d976e36f8312e7f38fb9177"
+        },
+        {
+          "kind": "SCHEDULE_UPDATE",
+          "operationId": "op-a04-loser",
+          "connectionId": "csv-demo-write",
+          "requestPayload": {
+            "connectionId": "csv-demo-write",
+            "scheduleId": "schedule-demo-2026-09",
+            "expectedSourceRevision": "demo-schedule-r1",
+            "additions": [
+              {
+                "shiftAssignmentId": "shift-replacement-a04-b",
+                "commitmentId": "commitment-a04-b",
+                "staffId": "staff-05",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-23T18:00:00+09:00",
+                "endAt": "2026-09-23T22:00:00+09:00",
+                "sourceCaseId": "case-a04"
+              }
+            ],
+            "absences": [
+              {
+                "shiftAssignmentId": "shift-absent-a04",
+                "startAt": "2026-09-23T18:00:00+09:00",
+                "endAt": "2026-09-23T22:00:00+09:00"
+              }
+            ]
+          },
+          "requestHash": "c737a963c48d2c89cdc4e0a44950ebe4ae90153937e50f52aba4539711b630a9"
+        }
+      ],
+      "expected": {
+        "caseState": "COMMITTED",
+        "winnerScheduleUpdateState": "ADOPTED",
+        "loserScheduleUpdateState": "REJECTED",
+        "adoptionFact": "ADOPTED",
+        "authoritativeSourceRevision": "demo-schedule-r2-a04",
+        "resultKinds": ["PREPARED", "CONFLICT"],
+        "adoptedOperationIdChoices": ["op-a04-winner", "op-a04-loser"],
+        "formalAdoptionCount": 1,
+        "conflictOperationCount": 1,
+        "formalRevisionUpdateCount": 1
+      },
+      "forbiddenExternalEffects": [
+        "SECOND_FORMAL_SCHEDULE_ADOPTION",
+        "FORMAL_ADOPTION_FROM_STALE_REVISION",
+        "DUPLICATE_ASSIGNMENT_FROM_LOSER"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "期待版付き正式採用とDBの競合transactionを接続していないため",
+        "requires": [
+          "同じ旧sourceRevisionを期待する操作のcompare-and-set",
+          "案件ごとに正式採用計画を一つへ制限する一括保存"
+        ]
+      }
+    }
+  ]
+}

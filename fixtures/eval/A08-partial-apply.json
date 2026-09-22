@@ -1,0 +1,97 @@
+{
+  "fixtureVersion": 1,
+  "caseId": "A08",
+  "title": "全割当の一部の保存・適用で失敗",
+  "scenarios": [
+    {
+      "scenarioId": "A08-partial-apply-must-not-adopt-one-assignment",
+      "boundary": "FORMAL_ADOPTION_WITH_PARTIAL_RESULT",
+      "input": {
+        "caseId": "case-a08",
+        "caseVersion": 15,
+        "caseState": "PREPARING",
+        "lookupStillPossible": false,
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": ["shift-absent-a08"]
+        },
+        "plannedAssignmentCount": 2,
+        "externallySavedAssignmentCount": 1
+      },
+      "operations": [
+        {
+          "kind": "SCHEDULE_UPDATE",
+          "operationId": "op-a08-schedule-update",
+          "connectionId": "csv-demo-write",
+          "requestPayload": {
+            "connectionId": "csv-demo-write",
+            "scheduleId": "schedule-demo-2026-09",
+            "expectedSourceRevision": "demo-schedule-r1",
+            "additions": [
+              {
+                "shiftAssignmentId": "shift-replacement-a08-a",
+                "commitmentId": "commitment-a08-a",
+                "staffId": "staff-02",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-25T18:00:00+09:00",
+                "endAt": "2026-09-25T20:00:00+09:00",
+                "sourceCaseId": "case-a08"
+              },
+              {
+                "shiftAssignmentId": "shift-replacement-a08-b",
+                "commitmentId": "commitment-a08-b",
+                "staffId": "staff-03",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-25T20:00:00+09:00",
+                "endAt": "2026-09-25T22:00:00+09:00",
+                "sourceCaseId": "case-a08"
+              }
+            ],
+            "absences": [
+              {
+                "shiftAssignmentId": "shift-absent-a08",
+                "startAt": "2026-09-25T18:00:00+09:00",
+                "endAt": "2026-09-25T22:00:00+09:00"
+              }
+            ]
+          },
+          "requestHash": "c9d5d0431876db81b40873b03875faec64567b39f718adb5e74fa848c5c4fec0"
+        }
+      ],
+      "observedUpdateResult": {
+        "operationId": "op-a08-schedule-update",
+        "connectionId": "csv-demo-write",
+        "kind": "PARTIAL",
+        "lookup": "LOOKUP_UNAVAILABLE"
+      },
+      "expected": {
+        "caseState": "HANDED_OFF",
+        "scheduleUpdateState": "RECONCILE_REQUIRED",
+        "adoptionFact": "UNKNOWN",
+        "handoffReason": "RECONCILE_STALLED",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": ["PARTIAL"],
+        "allAssignmentsFormallyAdopted": false,
+        "internalFormalAdoptionCount": 0,
+        "externalPartialMayHaveOccurred": true,
+        "formalAdoptionOccurred": "UNKNOWN",
+        "recoveryTrace": ["PREPARING", "RECONCILE_REQUIRED", "ATTENTION", "HANDED_OFF"]
+      },
+      "forbiddenExternalEffects": [
+        "INDIVIDUAL_ASSIGNMENT_ADOPTION",
+        "PARTIAL_PLAN_AS_FORMAL_SCHEDULE",
+        "TREAT_PARTIAL_AS_SUCCESS"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "一括保存・外部結果照合・部分作用後の復旧をapplicationへ接続していないため",
+        "requires": [
+          "全割当を一つの採用計画として保存するDB transaction",
+          "PARTIALをUNKNOWNとして保持し、個別勤務を正式化しない照合処理"
+        ]
+      }
+    }
+  ]
+}

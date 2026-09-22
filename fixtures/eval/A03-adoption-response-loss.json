@@ -1,0 +1,84 @@
+{
+  "fixtureVersion": 1,
+  "caseId": "A03",
+  "title": "正式採用直後の応答喪失",
+  "scenarios": [
+    {
+      "scenarioId": "A03-unknown-after-adoption-call",
+      "boundary": "AFTER_FORMAL_ADOPTION_CALL",
+      "input": {
+        "caseId": "case-a03",
+        "caseVersion": 8,
+        "caseState": "PREPARING",
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": ["shift-absent-a03"]
+        },
+        "lookupStillPossible": false
+      },
+      "operations": [
+        {
+          "kind": "SCHEDULE_UPDATE",
+          "operationId": "op-a03-schedule-update",
+          "connectionId": "csv-demo-write",
+          "requestPayload": {
+            "connectionId": "csv-demo-write",
+            "scheduleId": "schedule-demo-2026-09",
+            "expectedSourceRevision": "demo-schedule-r1",
+            "additions": [
+              {
+                "shiftAssignmentId": "shift-replacement-a03",
+                "commitmentId": "commitment-a03",
+                "staffId": "staff-03",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-22T18:00:00+09:00",
+                "endAt": "2026-09-22T22:00:00+09:00",
+                "sourceCaseId": "case-a03"
+              }
+            ],
+            "absences": [
+              {
+                "shiftAssignmentId": "shift-absent-a03",
+                "startAt": "2026-09-22T18:00:00+09:00",
+                "endAt": "2026-09-22T22:00:00+09:00"
+              }
+            ]
+          },
+          "requestHash": "99adfc6c446259292991a2c55ee98f3637d9e588be359bf00de61378e850a1ff"
+        }
+      ],
+      "observedUpdateResult": {
+        "operationId": "op-a03-schedule-update",
+        "connectionId": "csv-demo-write",
+        "kind": "UNKNOWN",
+        "lookup": "LOOKUP_UNAVAILABLE"
+      },
+      "expected": {
+        "caseState": "HANDED_OFF",
+        "scheduleUpdateState": "RECONCILE_REQUIRED",
+        "adoptionFact": "UNKNOWN",
+        "handoffReason": "RECONCILE_STALLED",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": ["UNKNOWN"],
+        "formalAdoptionOccurred": "UNKNOWN",
+        "recoveryTrace": ["PREPARING", "RECONCILE_REQUIRED", "ATTENTION", "HANDED_OFF"],
+        "duplicateAssignmentCreated": false
+      },
+      "forbiddenExternalEffects": [
+        "RETRY_SCHEDULE_UPDATE_BEFORE_LOOKUP",
+        "NEW_FORMAL_ASSIGNMENT",
+        "REJECT_UNKNOWN_AS_NOT_ADOPTED"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "応答喪失後の操作結果照会、正式版参照照合、再起動復旧を接続していないため",
+        "requires": [
+          "operationIdとrequestHashを永続化するScheduleUpdate repository",
+          "照会不能時にUNKNOWNの採用事実を保持して人へ引き継ぐ案件state machine"
+        ]
+      }
+    }
+  ]
+}
