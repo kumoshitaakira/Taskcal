@@ -48,7 +48,7 @@ interface Fixture {
 const RUN_ID = `check-orca-call:${new Date().toISOString().slice(0, 10)}`;
 
 async function main(): Promise<void> {
-  const fixturePath = path.join(process.cwd(), "fixtures/eval/reply-accept-full.json");
+  const fixturePath = path.join(process.cwd(), "fixtures/orca/reply-accept-full.json");
   const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as Fixture;
 
   const { getServerEnv } = await import("@/config/env");

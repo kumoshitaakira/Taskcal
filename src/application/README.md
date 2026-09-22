@@ -5,7 +5,12 @@
 ドメイン規則・adapter・画面から分けて、「どの手順を取引の中でやるか」をここで決める。
 
 `monthly-schedule.ts` に、CSV adapterの結果を完全性検証済みのdomain snapshotへ変換する
-application責務を置く。業務のuse case本体、状態遷移、正式採用の進行制御は未実装。
+application責務を置く（担当B）。
+
+**正式採用の進行制御は実装済み**（`adopt-plan.ts`、下記）。ただし候補選定と
+CSVの生成・読戻しが未実装のため、**本番経路では `NOT_IMPLEMENTED` で断る**。
+`monthly-schedule.ts` と `src/domain/interval/` の適格性検査は、まだ
+`adopt-plan.ts` へ繋いでいない（`src/contracts/README.md` の「まだ契約に無いもの」を参照）。
 
 ## use case
 

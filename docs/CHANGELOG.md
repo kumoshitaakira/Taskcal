@@ -1,5 +1,35 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：Day 2（担当A）— 最新mainへ rebase した
+
+担当Bの #8・#9・#10 がmainへ入ったので rebase した。**コードの衝突は無く、
+gitが検知した衝突は文書2件**（`docs/CHANGELOG.md`・`tests/README.md`）だった。
+ただし**gitが検知しない食い違いが3件**あり、次のとおり直した。
+
+- **受入fixtureの検証が落ちていた。** `tests/unit/eval-fixtures.test.ts` は
+  `fixtures/eval/` の**全JSON**を走査し、`caseId`／`scenarios`／`applicationAcceptance`
+  を要求する。こちらが置いた `reply-accept-full.json` は**実接続の疎通確認の入力**で
+  受入ケースの期待値ではないため、形が合わず3件落ちていた。`fixtures/orca/` へ移し、
+  READMEで用途の違いを書いた。Bの形式へ寄せてはいない——用途が違う。
+- **`src/application/README.md` の「正式採用の進行制御は未実装」が古くなっていた。**
+  自動マージは通るが、このPRで実装したので実態と食い違う。直した。
+- **適格性検査が二重になっている。** Bは `src/domain/interval/` に
+  `evaluateCandidateEligibility` を実装したが、契約 `EligibilityChecker` は実装して
+  いない。こちらの `adopt-plan.ts` は契約経由で呼ぶので、**繋がっていない**。
+  しかもBの `CandidateEligibilityInput` は `monthlySchedule` を取るので、
+  「`recheck` へ最新の月内割当を渡せない」という積み残しはBの形では解けている。
+  どちらへ寄せるかは契約の変更で、ADR-021によりBの確認が要る。**合流は別PR**とし、
+  `src/contracts/README.md` へ経緯を記録した。合流するまで `recheck` は
+  `NOT_IMPLEMENTED` を投げ続ける（検査していないものを通ったことにしないため）。
+
+繋いでいないものがもう1件ある。Bの `tests/stubs/fake-gateways.ts`（`FakeScheduleGateway`）
+と、こちらの `tests/fakes/schedule-gateway.ts` が重複している。こちらの台は `lookup` の
+種別合成・`readBackOverride`・呼出し回数の記録を持ち、`adopt-plan.test.ts` の23件が
+依存しているため、今回は両方残した。統合は別PRにする。
+
+migrationは衝突しなかった（Bは追加していない）。`0014_schedule_update_case_version.sql`
+のままで、`0013` → `0014` の順に適用できることを確認した。
+
 ## 2026-09-22：Day 2（担当A）— PR #12 のレビュー指摘を直した
 
 `chatgpt-codex-connector` の指摘5件（P1×4・P2×1）を確認し、すべて直した。

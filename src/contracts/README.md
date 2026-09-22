@@ -77,12 +77,22 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 そのため実装側は**採用直前の最新状態を自分で読めません**。現状、呼出し側は選定時に
 固定した入力版と選択済み承諾しか渡せず、月内割当そのものは渡していません。
 アプリ側では採用の直前に `loadSchedule` を呼び直して版と完全性を照合していますが、
-月次上限・勤務重複・在籍条件を実際に検査するには**この契約を変える必要があります**
-（担当Bの確認事項）。
+月次上限・勤務重複・在籍条件を実際に検査するには**この契約を変える必要があります**。
+
+**2026-09-22：担当Bが別の形で実装しました。** `src/domain/interval/index.ts` の
+`evaluateCandidateEligibility` は `CandidateEligibilityInput` を取り、その中に
+`monthlySchedule: MonthlyScheduleSnapshot` を含みます。つまり**最新の月内割当を渡せる形**で、
+上に書いた不足はそちらでは解けています。ただし `EligibilityChecker` を実装しては
+いないため、`adopt-plan.ts` からは**繋がっていません**。
+
+どちらの形に寄せるかは契約の変更であり、ADR-021により変更者でない側の確認が要ります。
+合流させるまで `roster-eligibility.ts` の `recheck` は `NOT_IMPLEMENTED` を投げ続けます
+（検査していないものを通ったことにしないため）。
 
 `schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
 を指します。`selection.ts` の `SelectionPlanner` と `EligibilityChecker` は**担当Bが
-`src/domain/` で実装する口**で、実装はまだありません。呼び出し側は未実装を成功として
+`src/domain/` で実装する口**です。適格性の計算は `src/domain/interval/` に入りましたが
+（上記）、この2つの契約を実装したものはまだありません。呼び出し側は未実装を成功として
 扱わず、`NOT_IMPLEMENTED` を返します。
 
 `worker_heartbeat`（migration 0001）は生存確認だけで、二重処理を防ぐ仕組みではありません。
