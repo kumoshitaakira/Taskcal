@@ -64,7 +64,7 @@ RFC-010 §4 の手順1〜7（選定の固定 → 作業用成果物 → 読戻�
 - `src/contracts/schedule-gateway.ts` に**例外の意味の例外**を明記した。Gatewayの例外は
   原則「成否不明」だが、`NOT_IMPLEMENTED` と `NOT_CONFIGURED` は「外部作用の前に断った」。
   区別しないと、まだ繋がっていない案件が全て照合待ちになり、本当の結果不明と混ざる。
-- migration `0013` を追加。`schedule_update.case_version`（準備開始**後**の案件版）。
+- migration `0014` を追加。`schedule_update.case_version`（準備開始**後**の案件版）。
   `selection_result.case_version` は検査時点の版で、準備開始の遷移で1つ進むため、
   そのままではD08の直前再検査に使えなかった。
 - `settle-reporting.ts` を追加し、workerのループへ入れた。Q07の完了境界（正式採用・
