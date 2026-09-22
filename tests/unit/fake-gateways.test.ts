@@ -46,7 +46,10 @@ const absence = {
 function scheduleCommand(
   operationId: string,
   overrides: Partial<
-    Pick<ApplyUpdateCommand, "connectionId" | "scheduleId" | "expectedSourceRevision" | "additions" | "absences">
+    Pick<
+      ApplyUpdateCommand,
+      "connectionId" | "scheduleId" | "expectedSourceRevision" | "additions" | "absences"
+    >
   > = {},
 ): ApplyUpdateCommand {
   const commandWithoutHash = {
@@ -284,7 +287,12 @@ describe("FakeMessagingGateway", () => {
 
     const first = await gateway.send(sendCommand("send-provider-scope"));
     const second = await gateway.send(
-      sendCommand("send-provider-scope", "同じ操作IDだが別provider", "INITIAL_OFFER", alternateEndpoint),
+      sendCommand(
+        "send-provider-scope",
+        "同じ操作IDだが別provider",
+        "INITIAL_OFFER",
+        alternateEndpoint,
+      ),
     );
 
     expect(first).toMatchObject({ state: "ACCEPTED", match: "NEW" });

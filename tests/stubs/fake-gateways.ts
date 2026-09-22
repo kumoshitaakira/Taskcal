@@ -185,8 +185,10 @@ export class FakeScheduleGateway implements ScheduleGateway {
       }
     }
 
-    if (!this.capabilities.supportsAtomicBatch &&
-        command.additions.length + command.absences.length > 1) {
+    if (
+      !this.capabilities.supportsAtomicBatch &&
+      command.additions.length + command.absences.length > 1
+    ) {
       throw new Error("fake atomic batch is unavailable");
     }
 
@@ -384,7 +386,11 @@ export class FakeMessagingGateway implements MessagingGateway {
 
   async send(command: SendCommand): Promise<SendResult | SendRefused> {
     this.sendCalls.push(cloneCommand(command));
-    const key = sendKey(command.to.provider, command.to.connectionId, command.operation.operationId);
+    const key = sendKey(
+      command.to.provider,
+      command.to.connectionId,
+      command.operation.operationId,
+    );
     const previous = this.sent.get(key);
     if (previous) {
       if (previous.operation.requestHash !== command.operation.requestHash) {
