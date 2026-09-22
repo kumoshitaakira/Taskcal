@@ -23,6 +23,10 @@ export function migrationsDir(): string {
   return path.join(process.cwd(), "src", "adapters", "db", "migrations");
 }
 
+export function draftMigrationsDir(): string {
+  return path.join(migrationsDir(), "drafts");
+}
+
 /** 改行コード差で別内容と判定しないよう正規化する。 */
 export function checksumOf(sql: string): string {
   return createHash("sha256").update(sql.replace(/\r\n/g, "\n")).digest("hex");
@@ -34,7 +38,15 @@ export function checksumOf(sql: string): string {
  * 辞書順に依存するため。
  */
 export async function loadMigrationFiles(): Promise<MigrationFile[]> {
-  const dir = migrationsDir();
+  return loadMigrationFilesFrom(migrationsDir());
+}
+
+/** A確認前のmigration下書き。通常のrunnerからは読み込まない。 */
+export async function loadDraftMigrationFiles(): Promise<MigrationFile[]> {
+  return loadMigrationFilesFrom(draftMigrationsDir());
+}
+
+async function loadMigrationFilesFrom(dir: string): Promise<MigrationFile[]> {
   const entries = await readdir(dir);
   const files = entries.filter((name) => name.endsWith(".sql")).sort();
   const migrations: MigrationFile[] = [];
