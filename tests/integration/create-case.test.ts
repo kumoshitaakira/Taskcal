@@ -50,12 +50,14 @@ describe.skipIf(!connectionString)("欠勤案件の作成（DATABASE_URL 必須�
     ({ closePool } = await import("@/adapters/db/pool"));
     const { createAbsenceCase } = await import("@/application/create-absence-case");
     const { createPgAbsenceCaseRepository } = await import("@/adapters/db/case-repository");
+    const { createPgStoreRepository } = await import("@/adapters/db/store-repository");
     const { createPgScheduleReadRepository } = await import("@/adapters/db/schedule-repository");
     const { createPgOperationResultStore } = await import("@/adapters/db/operation-result-store");
 
     run = createAbsenceCase({
       cases: createPgAbsenceCaseRepository(),
       schedules: createPgScheduleReadRepository(),
+      stores: createPgStoreRepository(),
       operations: createPgOperationResultStore(),
       clock: { now: () => now },
       ids: { next: () => randomUUID() },

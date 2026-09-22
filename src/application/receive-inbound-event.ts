@@ -43,7 +43,10 @@ export interface ReceiveInboundEventDeps {
   readonly outreaches: OutreachRepository;
 }
 
-function summarize(stored: PersistInboundResult, identity: SenderIdentity) {
+function summarize(
+  stored: Exclude<PersistInboundResult, { match: "CONFLICT" }>,
+  identity: SenderIdentity,
+) {
   return stored.linked
     ? {
         ok: true as const,
@@ -107,6 +110,16 @@ export function receiveInboundEvent(deps: ReceiveInboundEventDeps) {
         outreachId: outreach === "NOT_FOUND" ? undefined : outreach.outreachId,
         senderIdentity: identity,
       });
+
+      // D07：同じIDで内容が違う。保存済みの事実と食い違う結果を返さない。
+      // 受信していないので、案件も受信順も動かさない。
+      if (stored.match === "CONFLICT") {
+        return {
+          ok: false,
+          code: ERROR_CODES.OPERATION_CONFLICT,
+          detail: "同じ受信イベントIDで内容が異なります。",
+        };
+      }
 
       // 重複は採番も状態も動かさない。二度目の返信として数えない。
       if (stored.match === "DUPLICATE" || outreach === "NOT_FOUND") {

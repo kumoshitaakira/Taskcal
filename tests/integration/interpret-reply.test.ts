@@ -149,6 +149,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
     const { createPgInboundEventRepository } = await import("@/adapters/db/inbound-repository");
     const { createPgOutreachRepository } = await import("@/adapters/db/outreach-repository");
     const { createPgAbsenceCaseRepository } = await import("@/adapters/db/case-repository");
+    const { createPgStoreRepository } = await import("@/adapters/db/store-repository");
     const { createPgCommitmentRepository } = await import("@/adapters/db/commitment-repository");
     const { createPgReplyInterpretationRepository } =
       await import("@/adapters/db/interpretation-repository");
@@ -172,6 +173,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
         inbound,
         interpretations: createPgReplyInterpretationRepository(),
         commitments: createPgCommitmentRepository(),
+        stores: createPgStoreRepository(),
         outbox: createPgOutboxRepository(),
         clock: { now: () => now },
         ids: { next: () => randomUUID() },
@@ -184,6 +186,7 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
         inbound,
         interpretations: createPgReplyInterpretationRepository(),
         commitments: createPgCommitmentRepository(),
+        stores: createPgStoreRepository(),
         outbox: createPgOutboxRepository(),
         clock: { now: () => now },
         ids: { next: () => randomUUID() },
@@ -480,6 +483,32 @@ describe.skipIf(!connectionString)("返信の解釈（DATABASE_URL 必須）", (
       expect(result, label).toMatchObject({ applied: "REJECTED_BY_CHECK" });
     }
     expect(await commitments()).toHaveLength(0);
+  });
+
+  it("CONDITIONAL は未解決条件が空でも承諾にしない（契約上の意味を優先する）", async () => {
+    const id = await reply("その時間なら行けると思います");
+    const result = await makeInterpret(
+      createFakeModelGateway({
+        // 区間は一つ、未解決条件も空。抽出条件だけ見れば承諾にできてしまう。
+        // しかし CONDITIONAL は契約上「一意に決まらないため追加確認が必要」。
+        fallback: replyOutput({
+          intent: "CONDITIONAL",
+          ranges: [{ startAt: OFFER_START, endAt: OFFER_END }],
+        }),
+      }),
+    )({ inboundEventId: id });
+
+    expect(result).toMatchObject({ applied: "REJECTED_BY_CHECK", intent: "CONDITIONAL" });
+    expect(await commitments()).toHaveLength(0);
+    expect(await outreachState()).toBe("CLARIFYING");
+
+    // 曖昧なので追加確認へ回す（範囲外の明示的な拒否とは別）。
+    const outbox = await withTransaction((tx) =>
+      tx.query<{ kind: string }>("select kind from notification_outbox where case_id = $1", [
+        caseId,
+      ]),
+    );
+    expect(outbox.rows.map((r) => r.kind)).toEqual(["CLARIFICATION"]);
   });
 
   it("未解決の条件が残る返信は承諾にしない（自己申告を同意の証拠にしない）", async () => {

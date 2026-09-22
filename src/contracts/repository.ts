@@ -177,6 +177,13 @@ export interface OutreachRepository {
  */
 export type PersistInboundResult =
   | {
+      /**
+       * D07：同じ `eventId` で内容が異なる。保存済みの事実と食い違う結果を返さない。
+       * 受信していないので、案件も受信順も動かさない。
+       */
+      readonly match: "CONFLICT";
+    }
+  | {
       readonly linked: true;
       readonly match: "NEW" | "DUPLICATE";
       readonly stored: PersistedInboundEvent;
@@ -190,6 +197,33 @@ export type PersistInboundResult =
       readonly inboundEventId: string;
       readonly senderIdentity: SenderIdentity;
     };
+
+/** 店舗の文脈。表示と月境界は `timezone` に従う（RFC-009 §5）。 */
+export interface StoreSnapshot {
+  readonly storeId: string;
+  readonly name: string;
+  readonly timezone: string;
+  /** MVPは職種1種類（RFC-009 §2）。 */
+  readonly roleCode: string;
+}
+
+export interface StoreRepository {
+  findById(tx: TxHandle, storeId: string): Promise<StoreSnapshot | "NOT_FOUND">;
+}
+
+/**
+ * 保存済みの受信イベントと、そこから決まる参照。
+ *
+ * use case が `inbound_event` を直接引かなくて済むようにする。決定的なロジックを
+ * 永続化の形から切り離し、SQLを触らずに検証できるようにするため。
+ */
+export interface StoredInboundEvent extends PersistedInboundEvent {
+  readonly inboundEventId: string;
+  /** 案件へ結び付いた受信が持つ不変のMessage。 */
+  readonly messageId: string;
+  /** 受信時に確定した打診。宛先から逆引きしない（RFC-011 §3）。 */
+  readonly outreachId: string;
+}
 
 export interface InboundEventRepository {
   /**
@@ -206,7 +240,7 @@ export interface InboundEventRepository {
     event: InboundEvent,
     resolved: { caseId?: string; outreachId?: string; senderIdentity: SenderIdentity },
   ): Promise<PersistInboundResult>;
-  findById(tx: TxHandle, inboundEventId: string): Promise<PersistedInboundEvent | "NOT_FOUND">;
+  findById(tx: TxHandle, inboundEventId: string): Promise<StoredInboundEvent | "NOT_FOUND">;
   /** D04：この打診に、まだ解釈を適用していない受信があるか。 */
   hasUnprocessed(tx: TxHandle, outreachId: string): Promise<boolean>;
   /**

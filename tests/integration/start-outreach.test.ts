@@ -83,6 +83,7 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
     const { sendOutbox } = await import("@/application/send-outbox");
     const { createRosterEligibility } = await import("@/application/roster-eligibility");
     const { createPgAbsenceCaseRepository } = await import("@/adapters/db/case-repository");
+    const { createPgStoreRepository } = await import("@/adapters/db/store-repository");
     const { createPgOutreachRepository } = await import("@/adapters/db/outreach-repository");
     const { createPgOutboxRepository } = await import("@/adapters/db/outbox-repository");
     const { createPgOperationResultStore } = await import("@/adapters/db/operation-result-store");
@@ -98,6 +99,7 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
       outbox,
       operations,
       roster: createRosterEligibility(),
+      stores: createPgStoreRepository(),
       clock: { now: () => now },
       ids: { next: () => randomUUID() },
     });

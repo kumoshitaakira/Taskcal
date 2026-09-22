@@ -5,9 +5,23 @@
  * 要るため：curl・統合テスト・デモの再現から同じ経路を通す。とくに A15
  * （接続違いの同じ eventId）は HTTP 経路で再現できることに意味がある。
  *
- * **これは模擬環境の入口であり、本番のwebhookではない。** 署名検証は無い。
- * `channelVerified` は経路の検証結果であって本人確認ではない（RFC-011 §6）。
+ * **これは模擬環境の入口であり、本番のwebhookではない。**
+ *
+ * 署名検証・認証は無い。`channelVerified` は経路の検証結果であって本人確認では
+ * ない（RFC-011 §6）。この入口を叩ける者は、架空スタッフの返信を任意に投入できる。
+ * MVPは架空データだけを扱い、ローカルのデモでしか動かさない前提なのでこれで足りる。
+ *
+ * **前提をコードでも守る。** `NODE_ENV === "production"` のときは、明示的に
+ * `MOCK_CHANNEL_ENABLED=1` を置かない限り 404 を返す。文書だけの前提は、公開環境へ
+ * 置いたときに誰も止められない。本物の連絡経路（LINE等）を繋ぐ場合は、この入口では
+ * なく署名検証と認証境界を持つ別の経路を作る。
  */
+
+/** 模擬受信箱の入口を有効にしてよいか。 */
+function mockChannelEnabled(): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  return process.env.MOCK_CHANNEL_ENABLED === "1";
+}
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -35,6 +49,11 @@ const bodySchema = z.strictObject({
 });
 
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!mockChannelEnabled()) {
+    // 無効な入口の存在を知らせない。設定の不足ではなく「無い」として返す。
+    return new NextResponse(null, { status: 404 });
+  }
+
   let payload: unknown;
   try {
     payload = await request.json();

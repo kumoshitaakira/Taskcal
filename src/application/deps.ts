@@ -18,6 +18,7 @@ import { createPgModelCallStore } from "../adapters/db/model-call-store";
 import { createPgOutboxRepository } from "../adapters/db/outbox-repository";
 import { createPgOutreachRepository } from "../adapters/db/outreach-repository";
 import { createPgScheduleReadRepository } from "../adapters/db/schedule-repository";
+import { createPgStoreRepository } from "../adapters/db/store-repository";
 import type { Clock, IdGenerator } from "../contracts/repository";
 import { createModelGateway } from "../adapters/orca";
 import { createAbsenceCase } from "./create-absence-case";
@@ -46,6 +47,7 @@ export function buildAppServices() {
   });
   const operations = createPgOperationResultStore();
   const schedules = createPgScheduleReadRepository();
+  const stores = createPgStoreRepository();
   const roster = createRosterEligibility();
   const messaging = createDefaultMessagingGateway({ operations });
   const interpret = interpretReply({
@@ -55,6 +57,7 @@ export function buildAppServices() {
     inbound,
     interpretations,
     commitments,
+    stores,
     outbox,
     clock,
     ids: idGenerator,
@@ -67,18 +70,27 @@ export function buildAppServices() {
     inbound,
     interpretations,
     commitments,
+    stores,
     model,
     operations,
     schedules,
     messaging,
     clock,
-    createAbsenceCase: createAbsenceCase({ cases, schedules, operations, clock, ids: idGenerator }),
+    createAbsenceCase: createAbsenceCase({
+      cases,
+      schedules,
+      stores,
+      operations,
+      clock,
+      ids: idGenerator,
+    }),
     startOutreach: startOutreach({
       cases,
       outreaches,
       outbox,
       operations,
       roster,
+      stores,
       clock,
       ids: idGenerator,
     }),

@@ -136,6 +136,18 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["FAILED", "UNKNOWN", "DELIVERY_NOT_SENT"],
   },
   {
+    label: "同じIDの再投入は内容を照合する（D07 / ADR-006）",
+    members: [
+      { name: "export interface OperationResultStore", file: "src/contracts/repository.ts" },
+      { name: "export type PersistInboundResult", file: "src/contracts/repository.ts" },
+    ],
+    // 外部作用の操作は requestHash、受信は内容ハッシュで照合する。IDだけを見て
+    // 重複と決めると、同じIDで内容の違う要求に保存済みの事実を返してしまう。
+    // 操作側は OperationMatch（CONFLICT を含む）、受信側は match: "CONFLICT" で表す。
+    mode: "any",
+    mustContain: ["OperationMatch", '"CONFLICT"'],
+  },
+  {
     label: "返信は対象の不変参照から打診を引く（RFC-011 §3 / D03）",
     members: [
       {
@@ -229,10 +241,10 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
         file: "src/contracts/repository.ts",
       },
     ],
-    // 受信側は PersistedInboundEvent（caseId と receivedSeq を必須にした型）で、
-    // 解釈側は receivedSeq を直接受け取る。表現が違うため any。
+    // 受信側は StoredInboundEvent / PersistedInboundEvent（caseId と receivedSeq を
+    // 必須にした型）で、解釈側は receivedSeq を直接受け取る。表現が違うため any。
     mode: "any",
-    mustContain: ["receivedSeq", "PersistedInboundEvent"],
+    mustContain: ["receivedSeq", "PersistedInboundEvent", "StoredInboundEvent"],
   },
 ];
 

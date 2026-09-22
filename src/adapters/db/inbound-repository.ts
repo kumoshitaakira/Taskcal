@@ -13,6 +13,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import type { InboundEvent, PersistedInboundEvent } from "../../contracts/messaging-gateway";
+import { computeRequestHash, type RequestHash } from "../../contracts/operation";
 import type {
   InboundEventRepository,
   PersistInboundResult,
@@ -25,11 +26,29 @@ interface ExistingRow {
   readonly case_id: string | null;
   readonly received_seq: string | null;
   readonly message_id: string | null;
+  readonly event_hash: string | null;
+}
+
+/**
+ * 受信内容のハッシュ（D07）。
+ *
+ * **識別子（provider / connectionId / eventId）は含めない。** 同じIDで内容が違うことを
+ * 検出するのが目的なので、IDを含めると常に一致してしまう。送信元・返信対象・本文・
+ * 送信側の時刻・経路検証の結果を含める——どれが変わっても「別の内容」。
+ */
+function inboundEventHash(event: InboundEvent): RequestHash {
+  return computeRequestHash({
+    from: event.from,
+    inReplyToMessageId: event.inReplyToMessageId?.toLowerCase() ?? null,
+    body: event.body ?? null,
+    occurredAt: event.occurredAt,
+    channelVerified: event.channelVerified,
+  });
 }
 
 async function findExisting(tx: Tx, event: InboundEvent): Promise<ExistingRow | undefined> {
   const { rows } = await tx.query<ExistingRow>(
-    `select inbound_event_id, case_id, received_seq, message_id
+    `select inbound_event_id, case_id, received_seq, message_id, event_hash
        from inbound_event
       where provider = $1 and connection_id = $2 and provider_event_id = $3`,
     [event.provider, event.connectionId, event.eventId],
@@ -61,9 +80,17 @@ export function createPgInboundEventRepository(): InboundEventRepository {
     async persist(handle: TxHandle, event: InboundEvent, resolved) {
       const tx = handle as Tx;
 
+      const hash = inboundEventHash(event);
+
       // 1. 先に重複を確かめる。採番を消費しないため（欠番を出さない）。
       const existing = await findExisting(tx, event);
       if (existing) {
+        // D07：同じIDで内容が違えば拒否する。保存済みの事実と食い違う結果を返さない。
+        // 0013 より前に保存した行はハッシュを持たない。無い行を偽の一致にしない
+        // ——照合できないので重複として扱う（当時の内容は記録していない）。
+        if (existing.event_hash && existing.event_hash !== hash) {
+          return { match: "CONFLICT" };
+        }
         if (existing.case_id && existing.received_seq && existing.message_id) {
           return linked(
             event,
@@ -116,8 +143,8 @@ export function createPgInboundEventRepository(): InboundEventRepository {
            (inbound_event_id, case_id, outreach_id, received_seq, provider, connection_id,
             provider_event_id, occurred_at, received_at, from_provider, from_connection_id,
             from_endpoint_key, from_endpoint_version, body, channel_verified, sender_identity,
-            message_id, in_reply_to_message_ref)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+            message_id, in_reply_to_message_ref, event_hash)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
         [
           inboundEventId,
           resolved.caseId ?? null,
@@ -139,6 +166,7 @@ export function createPgInboundEventRepository(): InboundEventRepository {
           // 保存する値は小文字へ揃える。UUIDは大文字でも同じ値だが、text列に
           // 書き方の違いのまま残すと、後から突き合わせるときに揺れる。
           event.inReplyToMessageId?.toLowerCase() ?? null,
+          hash,
         ],
       );
 
@@ -163,6 +191,8 @@ export function createPgInboundEventRepository(): InboundEventRepository {
       const { rows } = await tx.query<{
         case_id: string | null;
         received_seq: string | null;
+        message_id: string | null;
+        outreach_id: string | null;
         provider: string;
         connection_id: string;
         provider_event_id: string;
@@ -175,15 +205,23 @@ export function createPgInboundEventRepository(): InboundEventRepository {
         body: string | null;
         channel_verified: boolean;
       }>(
-        `select case_id, received_seq, provider, connection_id, provider_event_id,
+        `select case_id, received_seq, message_id, outreach_id,
+                provider, connection_id, provider_event_id,
                 occurred_at, received_at, from_provider, from_connection_id,
                 from_endpoint_key, from_endpoint_version, body, channel_verified
            from inbound_event where inbound_event_id = $1`,
         [inboundEventId],
       );
       const row = rows[0];
-      if (!row || !row.case_id || !row.received_seq) return "NOT_FOUND";
+      // 案件・受信順・Message・打診のどれかが欠けている受信は、解釈の対象にしない。
+      // 本人と確認できなかった受信がこれにあたる（記録は残す）。
+      if (!row || !row.case_id || !row.received_seq || !row.message_id || !row.outreach_id) {
+        return "NOT_FOUND";
+      }
       return {
+        inboundEventId,
+        messageId: row.message_id,
+        outreachId: row.outreach_id,
         event: {
           provider: row.provider,
           connectionId: row.connection_id,

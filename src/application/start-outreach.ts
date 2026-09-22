@@ -25,8 +25,9 @@ import type {
   IdGenerator,
   OperationResultStore,
   OutboxRepository,
-  TxHandle,
   OutreachRepository,
+  StoreRepository,
+  TxHandle,
 } from "../contracts/repository";
 import { withTransaction } from "../adapters/db/transaction";
 import type { RosterEligibility } from "./roster-eligibility";
@@ -47,6 +48,7 @@ export interface StartOutreachDeps {
   readonly outbox: OutboxRepository;
   readonly operations: OperationResultStore;
   readonly roster: RosterEligibility;
+  readonly stores: StoreRepository;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -165,12 +167,8 @@ export function startOutreach(deps: StartOutreachDeps) {
         );
       }
 
-      const store = await tx.query<{ name: string; timezone: string }>(
-        "select name, timezone from store where store_id = $1",
-        [snapshot.storeId],
-      );
-      const storeRow = store.rows[0];
-      if (!storeRow) {
+      const store = await deps.stores.findById(tx, snapshot.storeId);
+      if (store === "NOT_FOUND") {
         return refuse(
           deps,
           tx,
@@ -212,9 +210,9 @@ export function startOutreach(deps: StartOutreachDeps) {
       }
 
       const body = buildOfferBody({
-        storeName: storeRow.name,
+        storeName: store.name,
         roleLabel: snapshot.roleCode,
-        timeZone: storeRow.timezone,
+        timeZone: store.timezone,
         startAt: snapshot.requiredStartAt,
         endAt: snapshot.requiredEndAt,
         deadlineAt: snapshot.deadlineAt,

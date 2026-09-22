@@ -74,6 +74,7 @@ describe.skipIf(!connectionString)("未処理の返信の取り出し（DATABASE
     const { createPgInboundEventRepository } = await import("@/adapters/db/inbound-repository");
     const { createPgOutreachRepository } = await import("@/adapters/db/outreach-repository");
     const { createPgAbsenceCaseRepository } = await import("@/adapters/db/case-repository");
+    const { createPgStoreRepository } = await import("@/adapters/db/store-repository");
     const { createPgCommitmentRepository } = await import("@/adapters/db/commitment-repository");
     const { createPgReplyInterpretationRepository } =
       await import("@/adapters/db/interpretation-repository");
@@ -93,6 +94,7 @@ describe.skipIf(!connectionString)("未処理の返信の取り出し（DATABASE
           inbound,
           interpretations: createPgReplyInterpretationRepository(),
           commitments: createPgCommitmentRepository(),
+          stores: createPgStoreRepository(),
           outbox: createPgOutboxRepository(),
           clock: { now: () => "2026-09-29T09:00:00+09:00" },
           ids: { next: () => randomUUID() },

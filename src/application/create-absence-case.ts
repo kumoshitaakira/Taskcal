@@ -20,6 +20,7 @@ import type {
   Clock,
   IdGenerator,
   OperationResultStore,
+  StoreRepository,
   TxHandle,
 } from "../contracts/repository";
 import type { ConnectionId, ShiftAssignmentId } from "../contracts/schedule-gateway";
@@ -43,6 +44,7 @@ export type CreateAbsenceCaseResult =
 export interface CreateAbsenceCaseDeps {
   readonly cases: AbsenceCaseRepository;
   readonly schedules: ScheduleReadRepository;
+  readonly stores: StoreRepository;
   readonly operations: OperationResultStore;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -128,12 +130,8 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
         );
       }
 
-      const store = await tx.query<{ timezone: string; role_code: string }>(
-        "select timezone, role_code from store where store_id = $1",
-        [command.storeId],
-      );
-      const storeRow = store.rows[0];
-      if (!storeRow) {
+      const store = await deps.stores.findById(tx, command.storeId);
+      if (store === "NOT_FOUND") {
         return refuse(
           deps,
           tx,
@@ -201,7 +199,7 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
           `予定済みの勤務ではありません（現在: ${shift.status}）。`,
         );
       }
-      if (shift.role_code !== storeRow.role_code) {
+      if (shift.role_code !== store.roleCode) {
         return refuse(
           deps,
           tx,
@@ -216,8 +214,8 @@ export function createAbsenceCase(deps: CreateAbsenceCaseDeps) {
 
       // Q05：日跨ぎは範囲外。黙って同一営業日へ丸めない。
       if (
-        businessDateOf(startAt, storeRow.timezone) !== businessDate ||
-        businessDateOf(endAt, storeRow.timezone) !== businessDate
+        businessDateOf(startAt, store.timezone) !== businessDate ||
+        businessDateOf(endAt, store.timezone) !== businessDate
       ) {
         return refuse(
           deps,

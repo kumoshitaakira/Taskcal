@@ -33,6 +33,16 @@
 外部作用の入口で `assertOutsideTransaction()` を呼ぶ。`check:consistency` の
 `MUST_BE_CALLED` が、この呼出しが残っていることを見る。
 
+## 判断する use case は repository だけを見る
+
+`create-absence-case` / `start-outreach` / `interpret-reply` は、DBを直接引かず
+repository 越しに読む。決定的なロジックを永続化の形から切り離し、SQLを触らずに
+検証できるようにするため。
+
+`case-view.ts` / `staff-view.ts` は**読み取りモデル**なので、この規則の対象外。
+画面のための射影であり、判断を持たない。repository を経由させると、画面の都合が
+ドメイン側の口に漏れる。
+
 ## 「適用していない」と「進められない」を分ける
 
 解釈が失敗しても受信順（`outreach.last_applied_seq`）は進めない。適用していないものを

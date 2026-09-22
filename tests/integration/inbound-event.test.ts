@@ -202,6 +202,32 @@ describe.skipIf(!connectionString)("受信イベントの取り込み（DATABASE
     expect(state.rows[0]?.state).toBe("ANSWERED");
   });
 
+  it("D07：同じイベントIDで内容が違えば拒否する（保存済みの事実と食い違わせない）", async () => {
+    const eventId = `evt-${randomUUID()}`;
+    const first = await receive(event({ eventId, body: "大丈夫です" }));
+    expect(first).toMatchObject({ ok: true, match: "NEW" });
+
+    // 同じIDで本文だけ違う。重複として保存済みの内容を返してはいけない。
+    const changed = await receive(event({ eventId, body: "やっぱり無理です" }));
+    expect(changed).toMatchObject({ ok: false, code: "OPERATION_CONFLICT" });
+
+    // 受信していないので採番も進まない。
+    const next = await receive(event({ body: "行けます" }));
+    expect(next).toMatchObject({ receivedSeq: 2 });
+  });
+
+  it("D07：同じイベントIDで送信元が違えば拒否する", async () => {
+    const eventId = `evt-${randomUUID()}`;
+    await receive(event({ eventId }));
+    const changed = await receive(
+      event({
+        eventId,
+        from: { provider: "mock", connectionId: CONNECTION, endpointKey, endpointVersion: 2 },
+      }),
+    );
+    expect(changed).toMatchObject({ ok: false, code: "OPERATION_CONFLICT" });
+  });
+
   it("受信順は案件内で1から単調に増える", async () => {
     await receive(event());
     await receive(event());

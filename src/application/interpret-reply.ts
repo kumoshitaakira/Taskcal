@@ -33,6 +33,7 @@ import type {
   OutboxRepository,
   OutreachRepository,
   ReplyInterpretationRepository,
+  StoreRepository,
 } from "../contracts/repository";
 import { INTERPRETATION_APPLICATION, type TxHandle } from "../contracts/repository";
 import { TERMINAL_OUTREACH_STATES } from "../contracts/outreach-state";
@@ -64,6 +65,7 @@ export interface InterpretReplyDeps {
   readonly inbound: InboundEventRepository;
   readonly interpretations: ReplyInterpretationRepository;
   readonly commitments: CommitmentRepository;
+  readonly stores: StoreRepository;
   readonly outbox: OutboxRepository;
   readonly clock: Clock;
   readonly ids: IdGenerator;
@@ -176,20 +178,11 @@ export function interpretReply(deps: InterpretReplyDeps) {
       // 受信時に確定した打診をそのまま使う。宛先から逆引きしない——同じ宛先が
       // 複数の案件に現れると別案件の打診を引き当てるし、受信後に宛先の版が
       // 上がると引けなくなって前へ進めなくなる（D03、A15）。
-      const message = await tx.query<{ message_id: string; outreach_id: string | null }>(
-        "select message_id, outreach_id from inbound_event where inbound_event_id = $1",
-        [input.inboundEventId],
-      );
-      const outreachId = message.rows[0]?.outreach_id;
-      if (!outreachId) return undefined;
-      const outreach = await deps.outreaches.findById(tx, outreachId);
+      const outreach = await deps.outreaches.findById(tx, stored.outreachId);
       if (outreach === "NOT_FOUND" || outreach.caseId !== stored.caseId) return undefined;
       const caseSnapshot = await deps.cases.findById(tx, stored.caseId);
       if (caseSnapshot === "NOT_FOUND") return undefined;
-      const store = await tx.query<{ name: string; timezone: string }>(
-        "select name, timezone from store where store_id = $1",
-        [caseSnapshot.storeId],
-      );
+      const store = await deps.stores.findById(tx, caseSnapshot.storeId);
       return {
         stored,
         outreach,
@@ -198,8 +191,8 @@ export function interpretReply(deps: InterpretReplyDeps) {
         current: await latestOpenCommitment(deps, tx, stored.caseId, outreach.staffId),
         // 正式採用が済んでいるか。確定前後で返信の扱いが変わる（Q09）。
         afterCommit: caseSnapshot.adoptionFact === "ADOPTED",
-        messageId: message.rows[0]?.message_id,
-        store: store.rows[0],
+        messageId: stored.messageId,
+        store: store === "NOT_FOUND" ? undefined : store,
       };
     });
 
@@ -270,8 +263,14 @@ export function interpretReply(deps: InterpretReplyDeps) {
     // 4. 決定的検査。モデルの提案をそのまま採用しない。
     const now = deps.clock.now();
     const intent = response.output.interpretation.intent;
+    // **CONDITIONAL を承諾の候補にしない。**
+    // `model-output.ts` の契約では CONDITIONAL は「元打診と併せても一意に決まらない
+    // ため追加確認が必要」。抽出された区間が一つで未解決条件が空でも、モデルが
+    // 「一意に決まらない」と言っている以上、意思が一意だとは扱えない
+    // （AGENTS.md：意思が一意で全ての決定的検査を通るまで承諾として扱わない）。
+    // intent と抽出条件が食い違うモデル出力を、抽出条件の側だけで承諾にしない。
     const check =
-      intent === "ACCEPT" || intent === "CONDITIONAL" || intent === "CORRECTION"
+      intent === "ACCEPT" || intent === "CORRECTION"
         ? checkOfferedRange({
             output: response.output,
             offeredStartAt: outreach.offeredStartAt,
@@ -279,7 +278,9 @@ export function interpretReply(deps: InterpretReplyDeps) {
             deadlineAt: caseSnapshot.deadlineAt,
             now,
           })
-        : ({ ok: false, reason: CHECK_REJECTION.NOT_AN_ACCEPT, detail: "" } as const);
+        : intent === "CONDITIONAL"
+          ? ({ ok: false, reason: CHECK_REJECTION.AMBIGUOUS, detail: "CONDITIONAL" } as const)
+          : ({ ok: false, reason: CHECK_REJECTION.NOT_AN_ACCEPT, detail: "" } as const);
 
     // 5. 適用。**順序が重要。**
     //    案件をロックして版を照合してから、受信順を進める。逆にすると、案件版が
