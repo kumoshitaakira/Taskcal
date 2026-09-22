@@ -70,7 +70,15 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 | 不足 | 必要になる時点 | 関連 |
 |---|---|---|
 | worker の lease / fence token | 同じイベントの二重処理を防ぐ時 | ADR-006 |
+| `EligibilityChecker.recheck` へ最新の月内割当を渡す口 | 正式採用の直前に月次上限・重複を実際に検査する時 | D08、Q06、A09 |
 | 採用済み勤務の取消・変更 | 確定後の変更を扱う時（D10：別の変更操作にする） | RFC-009 D10 |
+
+`EligibilityChecker.recheck` は同期interfaceで、repositoryも取引ハンドルも取りません。
+そのため実装側は**採用直前の最新状態を自分で読めません**。現状、呼出し側は選定時に
+固定した入力版と選択済み承諾しか渡せず、月内割当そのものは渡していません。
+アプリ側では採用の直前に `loadSchedule` を呼び直して版と完全性を照合していますが、
+月次上限・勤務重複・在籍条件を実際に検査するには**この契約を変える必要があります**
+（担当Bの確認事項）。
 
 `schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
 を指します。`selection.ts` の `SelectionPlanner` と `EligibilityChecker` は**担当Bが

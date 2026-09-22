@@ -12,6 +12,7 @@ import type {
   LoadedAssignment,
   PlannedAbsence,
   PlannedAssignment,
+  ScheduleGateway,
 } from "../contracts/schedule-gateway";
 import type { SelectionResult } from "../contracts/selection";
 
@@ -84,7 +85,10 @@ export function matchesExpected(
       found.staffId !== addition.staffId ||
       found.roleCode !== addition.roleCode ||
       !sameInstant(found.startAt, addition.startAt) ||
-      !sameInstant(found.endAt, addition.endAt)
+      !sameInstant(found.endAt, addition.endAt) ||
+      // **状態も見る。** ID・担当・区間が合っていても、読戻しが `CANCELLED` や
+      // `ABSENT` を返していれば必要枠は埋まっていない。件数だけでは気付けない。
+      found.status !== "SCHEDULED"
     ) {
       return false;
     }
@@ -98,4 +102,40 @@ export function matchesExpected(
     if (!found || found.status !== "ABSENT") return false;
   }
   return true;
+}
+
+/**
+ * 手順7の照合：**正式版の成果物**を読み直して突き合わせる（RFC-010 §4 手順7）。
+ *
+ * 内部の `shift_assignment` を読むだけでは足りない。採用取引で自分が書いた行を
+ * 読み直しているだけなので、直前の読戻しの後にCSVが消えても・壊れても・書き換え
+ * られても一致扱いになる。正式版参照が指す成果物をGatewayから取り直して比べる。
+ *
+ * 読めないこと（例外）は不一致と同じ扱いにする。**確定した勤務は消さない**——
+ * 呼出し元が要対応へ回す（D09）。
+ */
+export async function verifyAdoptedArtifact(input: {
+  gateway: Pick<ScheduleGateway, "readBack">;
+  connectionId: string;
+  artifactRef: string;
+  additions: readonly PlannedAssignment[];
+  absences: readonly PlannedAbsence[];
+  caseId: string;
+}): Promise<{ readonly matches: boolean; readonly reason?: "UNREADABLE" | "MISMATCH" }> {
+  try {
+    const back = await input.gateway.readBack({
+      connectionId: input.connectionId,
+      artifactRef: input.artifactRef,
+    });
+    const matches = matchesExpected(
+      back.assignments,
+      input.additions,
+      input.absences,
+      input.caseId,
+    );
+    return matches ? { matches: true } : { matches: false, reason: "MISMATCH" };
+  } catch {
+    // 成果物が読めない。未採用と断定しない——採用は済んでいる（D09）。
+    return { matches: false, reason: "UNREADABLE" };
+  }
 }

@@ -126,6 +126,7 @@ export function buildAppServices() {
       scheduleUpdates,
       selections,
       schedules,
+      gateway,
     }),
     adoptPlan: adoptPlan({
       cases,

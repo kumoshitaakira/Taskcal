@@ -87,7 +87,12 @@ import type {
   SelectionPlanner,
   SelectionResult,
 } from "../contracts/selection";
-import { matchesExpected, plannedAbsences, plannedAdditions } from "./adoption-check";
+import {
+  matchesExpected,
+  plannedAbsences,
+  plannedAdditions,
+  verifyAdoptedArtifact,
+} from "./adoption-check";
 import {
   buildCaseClosedBody,
   buildConfirmationBody,
@@ -1112,7 +1117,20 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           };
         }
       }
-      // IN_PROGRESS / UNKNOWN は作り直さない。下の再開経路へ落とす。
+      if (stored?.status === "IN_PROGRESS") {
+        // **同じ操作を二重に走らせない。** 操作IDは描画ごとに作るので、同じIDが
+        // 再び来るのは同一描画からの二重クリックだけ。ここで再開経路へ落とすと、
+        // 1本目が `applyUpdate` を待っている間に2本目が照会して未解決を得て、
+        // 案件と更新を照合待ちへ落とす。戻ってきた1本目は版競合で成果物を捨てる。
+        //
+        // プロセスが落ちた後の再開は**別の操作ID**で来る（描画し直すため）ので、
+        // ここで断っても復旧経路は塞がらない。
+        return fail(
+          ERROR_CODES.RECONCILE_REQUIRED,
+          "同じ操作が進行中です。結果を確認してから再実行してください。",
+        );
+      }
+      // UNKNOWN（結果不明として閉じた操作）は作り直さない。下の再開経路で照合する。
     }
 
     // 進行中の更新があれば、作り直さずそこから再開する（RFC-010 §7）。
@@ -1222,6 +1240,28 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           update,
           operationId: command.operationId,
           detail: "勤務表の更新結果を照合できません。再実行せず、人の対応を待ちます。",
+        });
+      }
+      if (outcome.kind === "EXPORTED_ONLY") {
+        // RFC-010 §7 / A14：出力のみモード。**元原本には反映されていない。**
+        // 成果物はできているので保持するが、正式採用はしない。ここで止めないと、
+        // 反映していない出力を内部勤務・正式版参照ごと「確定」にしてしまう。
+        await withTransaction((tx) =>
+          deps.operations.complete(tx, {
+            operationId: update.operationId,
+            status: "SUCCEEDED",
+            result: { kind: outcome.kind, artifactRef: outcome.artifactRef },
+          }),
+        );
+        return settleNotAdopted({
+          update,
+          operationId: command.operationId,
+          code: ERROR_CODES.OUT_OF_SCOPE,
+          detail:
+            "出力のみモードの成果物です。元原本へ反映されていないため正式採用しません（A14）。",
+          resultKind: outcome.kind,
+          artifactRef: outcome.artifactRef,
+          revisionCheckEnforced: outcome.revisionCheckEnforced,
         });
       }
       if (outcome.kind === "NOT_APPLIED" || outcome.kind === "CONFLICT") {
@@ -1349,6 +1389,61 @@ export function adoptPlan(deps: AdoptPlanDeps) {
       });
     }
 
+    // --- 手順5の前段：月内入力を**取り直して**照合する（D08） ---
+    // 選定時に固定した `inputs` をそのまま再検査に使わない。それは「検査した時点の
+    // 値」で、その後に別営業日の勤務やスタッフ条件が変わっても気付けない。
+    // RFC-010 §4 手順5 は「参照した入力版」を再検査せよと言っている。
+    assertOutsideTransaction("月内入力の再取得");
+    try {
+      const reloaded = await deps.gateway.loadSchedule({
+        connectionId: update.connectionId,
+        scheduleId: update.scheduleId,
+        authoritative: await withTransaction(async (tx) => {
+          const ref = await deps.authoritative.get(tx, {
+            connectionId: update.connectionId,
+            scheduleId: update.scheduleId,
+          });
+          return ref === "NOT_FOUND" ? undefined : ref;
+        }),
+      });
+      if (reloaded.sourceRevision !== selection.inputs.sourceRevision) {
+        return settleNotAdopted({
+          update,
+          operationId: command.operationId,
+          code: ERROR_CODES.REVISION_CONFLICT,
+          detail: "選定してから勤務表の版が変わっています。採用しません。",
+          artifactRef,
+        });
+      }
+      if (reloaded.completeness !== "COMPLETE") {
+        // Q06／A09：欠けた日を0と推定しない。完全でなければ月次上限を検査できない。
+        return settleNotAdopted({
+          update,
+          operationId: command.operationId,
+          code: ERROR_CODES.INVALID_INPUT,
+          detail: `月内入力が完全ではありません（${reloaded.completeness}）。採用しません。`,
+          artifactRef,
+        });
+      }
+    } catch (error) {
+      if (isRefusedBeforeEffect(error)) {
+        return settleNotAdopted({
+          update,
+          operationId: command.operationId,
+          code: error.code,
+          detail: error.message,
+          artifactRef,
+        });
+      }
+      // 読めないだけで未採用と断定しない。採用はまだしていないが、前提を
+      // 確かめられていないので照合待ちへ回す。
+      return markReconcileRequired({
+        update,
+        operationId: command.operationId,
+        detail: "採用の直前に月内入力を取り直せません。前提を確かめるまで採用しません。",
+      });
+    }
+
     // --- 手順5-6：直前再検査と一括保存 ---
     const adopted = await adopt({
       update: { ...update, artifactRef, newSourceRevision },
@@ -1377,10 +1472,11 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     }
     if (!adopted.ok) return adopted;
 
-    // --- 手順7：正式版参照から読み直して照合する（D11／A01） ---
+    // --- 手順7：正式版を再取得して整合を確認する（RFC-010 §4 手順7、D11／A01） ---
     const snapshot = await withTransaction((tx) => deps.cases.findById(tx, command.caseId));
     let matches = false;
     if (snapshot !== "NOT_FOUND") {
+      // 内部の勤務表。正式版参照を経由して読む（D11）。
       const loaded = await withTransaction((tx) =>
         deps.schedules.loadByDate(tx, {
           connectionId: snapshot.connectionId,
@@ -1388,9 +1484,23 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           businessDate: snapshot.businessDate,
         }),
       );
-      matches =
+      const internalMatches =
         loaded !== "NOT_ADOPTED" &&
         matchesExpected(loaded.assignments, additions, absences, snapshot.caseId);
+
+      // **成果物も読み直す。** 内部表だけでは、採用取引で自分が書いた行を読み返して
+      // いるだけで、読戻しの後にCSVが消失・破損・改変されても一致扱いになる。
+      assertOutsideTransaction("正式版の再取得");
+      const artifact = await verifyAdoptedArtifact({
+        gateway: deps.gateway,
+        connectionId: update.connectionId,
+        artifactRef,
+        additions,
+        absences,
+        caseId: snapshot.caseId,
+      });
+      matches = internalMatches && artifact.matches;
+
       await withTransaction(async (tx) => {
         const current = await deps.cases.lockForUpdate(tx, command.caseId);
         if (current === "NOT_FOUND" || current.state !== "COMMITTED") return;
@@ -1403,6 +1513,8 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         await deps.cases.recordEvent(tx, {
           caseId: current.caseId,
           kind: matches ? "ADOPTION_VERIFIED" : "ADOPTION_READBACK_MISMATCH",
+          // どちらが合わなかったかを残す。内部表と成果物で対処が違う。
+          detail: matches ? undefined : { internal: internalMatches, artifact: artifact.reason },
         });
       });
     }

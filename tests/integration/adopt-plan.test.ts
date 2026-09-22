@@ -21,6 +21,7 @@ import { config as loadDotenv } from "dotenv";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ScheduleGateway } from "@/contracts/schedule-gateway";
 import type { ShiftAssignmentRepository } from "@/contracts/repository";
+import { computeRequestHash } from "@/contracts/operation";
 import { createFakeScheduleGateway } from "../fakes/schedule-gateway";
 import { createFakeEligibilityRecheck, createFakeSelectionPlanner } from "../fakes/selection";
 
@@ -92,13 +93,15 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   }
 
   /** worker の1ステップ（採用の後始末）。 */
-  function settle() {
+  function settle(gateway?: ScheduleGateway) {
     return settleReporting({
       cases: repos.cases,
       outbox: repos.outbox,
       scheduleUpdates: repos.scheduleUpdates,
       selections: repos.selections,
       schedules: repos.schedules,
+      // 手順7は成果物も読み直す。台を渡さない場合は要求どおり返す台を使う。
+      gateway: gateway ?? createFakeScheduleGateway({ sourceRevision: REVISION }),
     });
   }
 
@@ -672,6 +675,123 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     expect(await caseRow()).toMatchObject({ state: "COMPLETED", adoption_fact: "ADOPTED" });
   });
 
+  it("A14：出力のみモードの成果物を正式採用しない（元原本へ未反映）", async () => {
+    // 読取専用の接続からファイル出力しただけ。成果物はできているが、元原本には
+    // 反映されていない。ここで採用すると「勤務確定済み」と誤表示する。
+    const gateway = createFakeScheduleGateway({
+      sourceRevision: REVISION,
+      applyKind: "EXPORTED_ONLY",
+    });
+    const result = await build({ gateway })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "OUT_OF_SCOPE", outcome: "REJECTED" });
+    expect(await additionalShifts()).toHaveLength(0);
+    expect(await refRow()).toMatchObject({ version: 1, source_revision: REVISION });
+    // 成果物は保持する。未採用として残し、勤務照会に混ぜない。
+    expect(await updateRow()).toMatchObject({ state: "REJECTED", result_kind: "EXPORTED_ONLY" });
+    expect(await caseRow()).toMatchObject({ state: "COORDINATING", adoption_fact: "NOT_ADOPTED" });
+  });
+
+  it("同じ操作IDが進行中のあいだ、2本目を再開経路へ入れない", async () => {
+    const operationId = `adopt:${caseId}:${randomUUID()}`;
+    // 1本目が進行中（IN_PROGRESS）の状態を作る。
+    await withTransaction((tx) =>
+      repos.operations.begin(tx, {
+        operation: { operationId, requestHash: computeRequestHash({ caseId }) },
+        kind: "ADOPT_PLAN",
+        caseId,
+      }),
+    );
+
+    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    const second = await build({ gateway })({ operationId, caseId });
+
+    // 2本目は断る。再開経路へ落とすと、1本目の待機中に照会して案件を
+    // 照合待ちへ落とし、戻ってきた1本目が版競合で成果物を捨てる。
+    expect(second).toMatchObject({ ok: false, code: "RECONCILE_REQUIRED" });
+    expect(gateway.calls.applyUpdate).toBe(0);
+    expect(gateway.calls.getUpdateResult).toBe(0);
+    expect(await caseRow()).toMatchObject({ state: "COORDINATING" });
+  });
+
+  it("D08：採用の直前に月内入力を取り直し、完全でなければ採用しない（Q06 / A09）", async () => {
+    // 選定時は COMPLETE。読戻しの後（採用の直前）に取り直すと INCOMPLETE になる。
+    let loads = 0;
+    const base = createFakeScheduleGateway({ sourceRevision: REVISION });
+    const drifting: ScheduleGateway = {
+      ...base,
+      loadSchedule: async (ref) => {
+        loads += 1;
+        const loaded = await base.loadSchedule(ref);
+        // 2回目（採用直前の取り直し）で月内入力が欠ける。
+        return loads === 1
+          ? loaded
+          : { ...loaded, completeness: "INCOMPLETE" as const, missingDates: ["2026-09-10"] };
+      },
+    };
+
+    const result = await build({ gateway: drifting })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    // 選定時の値を再利用していたら、この経路は素通りしていた。
+    expect(loads).toBeGreaterThan(1);
+    expect(await additionalShifts()).toHaveLength(0);
+    expect(await refRow()).toMatchObject({ version: 1 });
+  });
+
+  it("A07：読戻しが追加勤務を取消・欠勤として返したら採用しない（状態も照合する）", async () => {
+    // ID・担当・区間・件数は合っているが、状態が SCHEDULED でない。これを通すと
+    // 必要枠が実際には埋まっていないのに正式採用してしまう。
+    const gateway = createFakeScheduleGateway({
+      sourceRevision: REVISION,
+      readBackOverride: (expected) =>
+        expected.map((a) => (a.sourceCaseId ? { ...a, status: "CANCELLED" as const } : a)),
+    });
+    const result = await build({ gateway })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    expect(await additionalShifts()).toHaveLength(0);
+    expect(await refRow()).toMatchObject({ version: 1 });
+  });
+
+  it("手順7で成果物が読めなければ、採用を保持したまま要対応にする（D09）", async () => {
+    // 手順4（採用前の読戻し）は通し、手順7（採用後の再取得）だけ失敗させる。
+    // 内部表は一致したままなので、成果物を読み直していなければ気付けない。
+    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    let readBacks = 0;
+    const vanishing: ScheduleGateway = {
+      ...gateway,
+      readBack: (ref) => {
+        readBacks += 1;
+        return readBacks > 1
+          ? Promise.reject(new Error("成果物が消えました"))
+          : gateway.readBack(ref);
+      },
+    };
+
+    const result = await build({ gateway: vanishing })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    // 採用は成立している。**取り消さない**（D09）。
+    expect(result).toMatchObject({ ok: true, outcome: "ADOPTED", adopted: 2 });
+    expect(result.ok && result.outcome === "ADOPTED" && result.readBackMatches).toBe(false);
+    expect(await additionalShifts()).toHaveLength(2);
+    expect(await updateRow()).toMatchObject({ state: "ADOPTED" });
+    // A07：一致していないので完了へ進めない。要対応にする。
+    expect(await caseRow()).toMatchObject({ state: "ATTENTION", adoption_fact: "ADOPTED" });
+  });
+
   it("A16の入口：実行可能な計画が無くても、選定結果を残して調整中のまま据え置く", async () => {
     const planner = createFakeSelectionPlanner({ notFeasible: "NOT_COVERED" });
     const result = await build({ planner })({
@@ -780,17 +900,42 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("手順7の前に落ちた案件を、workerが読み直して進める（RFC-010 §4 手順7）", async () => {
-    await build({})({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    await build({ gateway })({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     // 採用取引は commit したが、手順7の前に落ちた状態を作る。
     await withTransaction((tx) =>
       tx.query("update absence_case set state = 'COMMITTED' where case_id = $1", [caseId]),
     );
 
-    const outcome = await settle()();
+    const outcome = await settle(gateway)();
     expect(outcome).toMatchObject({ handled: true, to: "VERIFIED" });
     expect(await caseRow()).toMatchObject({ state: "REPORTING", adoption_fact: "ADOPTED" });
     // 確定済みの勤務は触らない。
     expect(await additionalShifts()).toHaveLength(2);
+    // **内部表だけでなく成果物も読み直している**（RFC-010 §4 手順7）。
+    expect(gateway.calls.readBack).toBeGreaterThan(1);
+  });
+
+  it("採用後に成果物が読めなくなったら、勤務を残したまま要対応にする（D09）", async () => {
+    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    await build({ gateway })({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+    await withTransaction((tx) =>
+      tx.query("update absence_case set state = 'COMMITTED' where case_id = $1", [caseId]),
+    );
+
+    // 採用後にCSVが消えた状態を作る。内部表は一致したままなので、成果物を
+    // 読み直していなければ気付けない。
+    const brokenGateway: ScheduleGateway = {
+      ...gateway,
+      readBack: () => Promise.reject(new Error("成果物がありません")),
+    };
+    const outcome = await settle(brokenGateway)();
+
+    expect(outcome).toMatchObject({ handled: true, to: "ATTENTION" });
+    // D09：確定した勤務と採用事実は消さない。
+    expect(await additionalShifts()).toHaveLength(2);
+    expect(await caseRow()).toMatchObject({ state: "ATTENTION", adoption_fact: "ADOPTED" });
+    expect(await updateRow()).toMatchObject({ state: "ADOPTED" });
   });
 
   it("Q07：非選定の相手と、返信の無かった相手にも通知を積む", async () => {

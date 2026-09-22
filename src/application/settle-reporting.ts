@@ -25,6 +25,7 @@
 import "server-only";
 import { withTransaction, type Tx } from "../adapters/db/transaction";
 import type { ScheduleReadRepository } from "../adapters/db/schedule-repository";
+import type { ScheduleGateway } from "../contracts/schedule-gateway";
 import { COMPLETION_REQUIRES_NOTIFICATION_ACCEPTED } from "../config/mvp-policy";
 import type {
   AbsenceCaseRepository,
@@ -33,7 +34,12 @@ import type {
   ScheduleUpdateRepository,
   SelectionResultRepository,
 } from "../contracts/repository";
-import { matchesExpected, plannedAbsences, plannedAdditions } from "./adoption-check";
+import {
+  matchesExpected,
+  plannedAbsences,
+  plannedAdditions,
+  verifyAdoptedArtifact,
+} from "./adoption-check";
 
 export type SettleReportingOutcome =
   | { readonly handled: false }
@@ -56,6 +62,8 @@ export interface SettleReportingDeps {
   readonly scheduleUpdates: ScheduleUpdateRepository;
   readonly selections: SelectionResultRepository;
   readonly schedules: ScheduleReadRepository;
+  /** 正式版の成果物を読み直すために要る（RFC-010 §4 手順7）。 */
+  readonly gateway: Pick<ScheduleGateway, "readBack">;
 }
 
 export function settleReporting(deps: SettleReportingDeps) {
@@ -93,15 +101,27 @@ export function settleReporting(deps: SettleReportingDeps) {
       businessDate: snapshot.businessDate,
     });
 
-    const matches =
+    const additions = selection === "NOT_FOUND" ? [] : plannedAdditions(selection, snapshot);
+    const absences = plannedAbsences(snapshot);
+    const internalMatches =
       selection !== "NOT_FOUND" &&
       loaded !== "NOT_ADOPTED" &&
-      matchesExpected(
-        loaded.assignments,
-        plannedAdditions(selection, snapshot),
-        plannedAbsences(snapshot),
-        snapshot.caseId,
-      );
+      matchesExpected(loaded.assignments, additions, absences, snapshot.caseId);
+
+    // **成果物も読み直す。** 内部表だけでは、採用取引で書いた行を読み返しているだけで、
+    // 採用後にCSVが消失・破損・改変されても一致扱いになる（RFC-010 §4 手順7）。
+    const artifactRef = stored === "NOT_FOUND" ? undefined : stored.artifactRef;
+    const artifact = artifactRef
+      ? await verifyAdoptedArtifact({
+          gateway: deps.gateway,
+          connectionId: snapshot.connectionId,
+          artifactRef,
+          additions,
+          absences,
+          caseId: snapshot.caseId,
+        })
+      : { matches: false as const, reason: "UNREADABLE" as const };
+    const matches = internalMatches && artifact.matches;
 
     // D09：一致しなくても確定済みの勤務と採用事実は消さない。要対応にする（A07）。
     await deps.cases.applyTransition(tx, {
@@ -112,6 +132,7 @@ export function settleReporting(deps: SettleReportingDeps) {
     await deps.cases.recordEvent(tx, {
       caseId: snapshot.caseId,
       kind: matches ? "ADOPTION_VERIFIED" : "ADOPTION_READBACK_MISMATCH",
+      detail: matches ? undefined : { internal: internalMatches, artifact: artifact.reason },
     });
     return { handled: true, caseId: snapshot.caseId, to: matches ? "VERIFIED" : "ATTENTION" };
   }

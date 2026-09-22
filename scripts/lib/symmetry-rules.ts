@@ -238,14 +238,27 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["assertOutsideTransaction"],
   },
   {
-    label: "採用結果の照合は勤務ID・担当者・役割・区間・件数を見る（RFC-010 §4 手順4 / A07）",
+    label: "採用後の照合は内部表と成果物の両方を見る（RFC-010 §4 手順7 / D09）",
+    members: [
+      {
+        name: "export async function verifyAdoptedArtifact",
+        file: "src/application/adoption-check.ts",
+      },
+    ],
+    // 内部表だけでは、採用取引で自分が書いた行を読み返しているだけ。採用後に
+    // 成果物が消えても壊れても一致扱いになる。読めないことも不一致として扱う。
+    mustContain: ["readBack", "matchesExpected", "UNREADABLE"],
+  },
+  {
+    label: "採用結果の照合は勤務ID・担当者・役割・区間・件数・状態を見る（RFC-010 §4 手順4 / A07）",
     // 正式採用の進行と、落ちた後の復旧（settle-reporting）が**同じ関数**を使う。
     // 別々に書くと、片方だけが件数を見る、といった食い違いができる。
     members: [
       { name: "export function matchesExpected", file: "src/application/adoption-check.ts" },
     ],
     // IDごとの一致だけでは、余分な代替勤務が生えていても気付けない。
-    mustContain: ["staffId", "roleCode", "sameInstant", "length", "ABSENT"],
+    // 状態を落とすと、取消・欠勤で返ってきた追加勤務を「埋まっている」と読む。
+    mustContain: ["staffId", "roleCode", "sameInstant", "length", "ABSENT", "SCHEDULED"],
   },
   {
     label: "モデル呼出しは取引の外で行い、受信順のガードを通す（A12 / RFC-010 §5）",
