@@ -1232,13 +1232,21 @@ export function adoptPlan(deps: AdoptPlanDeps) {
       const resumed = await withTransaction(async (tx) => {
         const stored = await deps.selections.findById(tx, open.selectionId);
         const snapshot = await deps.cases.findById(tx, command.caseId);
-        return { stored, snapshot };
+        const ref = await deps.authoritative.get(tx, {
+          connectionId: open.connectionId,
+          scheduleId: open.scheduleId,
+        });
+        return { stored, snapshot, ref };
       });
       if (resumed.stored === "NOT_FOUND" || resumed.snapshot === "NOT_FOUND") {
         return fail(ERROR_CODES.INVALID_INPUT, "再開に必要な選定結果または案件がありません。");
       }
       selection = resumed.stored;
-      baseArtifactRef = selection.inputs.baseArtifactRef;
+      // 既存selection_resultにはbaseArtifactRef列がないため、再開時は採用準備中の
+      // 正式版参照から復元する。参照自体が無ければハッシュを再現できず安全に停止する。
+      baseArtifactRef =
+        selection.inputs.baseArtifactRef ??
+        (resumed.ref === "NOT_FOUND" ? undefined : resumed.ref.artifactRef);
       additions = plannedAdditions(selection, resumed.snapshot);
       absences = plannedAbsences(resumed.snapshot);
       applyHash = computeRequestHash({
