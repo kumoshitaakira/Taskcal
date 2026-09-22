@@ -1,6 +1,12 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ADOPTION_FACT, caseStateSchema, HANDOFF_REASON, STOP_CAUSE } from "@/contracts/case-state";
+import {
+  ADOPTION_FACT,
+  caseStateSchema,
+  HANDOFF_REASON,
+  isAllowedCaseTransition,
+  STOP_CAUSE,
+} from "@/contracts/case-state";
 import { ENDPOINT_CHECK, SEND_REFUSAL } from "@/contracts/messaging-gateway";
 import { computeRequestHash, operationRefSchema, requestHashSchema } from "@/contracts/operation";
 import { scheduleUpdateStateSchema, updateResultKindSchema } from "@/contracts/schedule-update";
@@ -22,6 +28,7 @@ interface AcceptanceScenario {
   readonly boundary: string;
   readonly input: JsonObject;
   readonly operations: readonly FixtureOperation[];
+  readonly observedUpdateResult?: JsonObject;
   readonly expected: JsonObject;
   readonly forbiddenExternalEffects: readonly string[];
   readonly applicationAcceptance: {
@@ -40,6 +47,7 @@ interface AcceptanceFixture {
 
 const EVAL_DIR = new URL("../../fixtures/eval/", import.meta.url);
 const EXPECTED_CASE_IDS = ["A02", "A03", "A04", "A07", "A08", "A14", "A15", "A18"];
+const OPERATION_KINDS = ["MESSAGE_SEND", "SCHEDULE_UPDATE"];
 
 function readFixtures(): readonly AcceptanceFixture[] {
   return readdirSync(EVAL_DIR)
@@ -73,6 +81,16 @@ describe("決定的な受入fixtureの構造", () => {
   it("既存契約の状態値と操作ID・requestHashを検査する", () => {
     const operationIds = new Set<string>();
     for (const scenario of scenarios) {
+      expect(scenario.scenarioId.length).toBeGreaterThan(0);
+      expect(scenario.boundary.length).toBeGreaterThan(0);
+      expect(scenario.input).toBeTypeOf("object");
+      expect(Array.isArray(scenario.operations)).toBe(true);
+      expect(Object.keys(scenario.expected).length).toBeGreaterThan(0);
+      expect(scenario.applicationAcceptance.status).toBe("UNEXECUTED");
+      expect(scenario.applicationAcceptance.reason.length).toBeGreaterThan(0);
+      expect(scenario.applicationAcceptance.requires.length).toBeGreaterThan(0);
+      expect(scenario.forbiddenExternalEffects.length).toBeGreaterThan(0);
+
       const expected = scenario.expected;
       for (const key of ["caseState", "winnerCaseState", "loserCaseState"]) {
         const value = expected[key];
@@ -100,23 +118,63 @@ describe("決定的な受入fixtureの構造", () => {
       const handoffReason = expected.handoffReason;
       if (typeof handoffReason === "string")
         expect(Object.values(HANDOFF_REASON)).toContain(handoffReason);
+      if (expected.caseState === "HANDED_OFF") {
+        expect(typeof handoffReason).toBe("string");
+      }
+
+      const recoveryTrace = expected.recoveryTrace;
+      if (recoveryTrace !== undefined) {
+        expect(Array.isArray(recoveryTrace)).toBe(true);
+        const states = getArray(expected, "recoveryTrace").map((state) =>
+          caseStateSchema.parse(state),
+        );
+        expect(states.length).toBeGreaterThan(1);
+        for (let index = 1; index < states.length; index += 1) {
+          expect(isAllowedCaseTransition(states[index - 1], states[index])).toBe(true);
+        }
+      }
 
       for (const operation of scenario.operations) {
         expect(operationIds.has(operation.operationId)).toBe(false);
         operationIds.add(operation.operationId);
+        expect(OPERATION_KINDS).toContain(operation.kind);
         expect(() => operationRefSchema.parse(operation)).not.toThrow();
         expect(requestHashSchema.safeParse(operation.requestHash).success).toBe(true);
         expect(computeRequestHash(operation.requestPayload)).toBe(operation.requestHash);
-        expect(operation.connectionId).toEqual(
-          (operation.requestPayload as JsonObject).connectionId ?? operation.connectionId,
-        );
+        const payload = operation.requestPayload as JsonObject;
         if (operation.kind === "MESSAGE_SEND") {
-          const payload = operation.requestPayload as JsonObject;
           const to = payload.to as JsonObject;
+          expect(to).toBeTypeOf("object");
+          expect(typeof payload.kind).toBe("string");
+          expect(typeof payload.body).toBe("string");
           expect(operation.provider).toBe(to.provider);
           expect(operation.connectionId).toBe(to.connectionId);
           expect(operation.endpointVersion).toBe(to.endpointVersion);
+        } else {
+          expect(payload.connectionId).toBe(operation.connectionId);
+          expect(typeof payload.connectionId).toBe("string");
+          expect(typeof payload.scheduleId).toBe("string");
+          expect(typeof payload.expectedSourceRevision).toBe("string");
+          expect(Array.isArray(payload.additions)).toBe(true);
+          expect(Array.isArray(payload.absences)).toBe(true);
         }
+      }
+
+      const observedUpdateResult = scenario.observedUpdateResult;
+      if (observedUpdateResult !== undefined) {
+        expect(typeof observedUpdateResult.operationId).toBe("string");
+        expect(typeof observedUpdateResult.connectionId).toBe("string");
+        expect(() => updateResultKindSchema.parse(observedUpdateResult.kind)).not.toThrow();
+        expect(
+          scenario.operations.some(
+            (operation) => operation.operationId === observedUpdateResult.operationId,
+          ),
+        ).toBe(true);
+        expect(
+          scenario.operations.some(
+            (operation) => operation.connectionId === observedUpdateResult.connectionId,
+          ),
+        ).toBe(true);
       }
     }
   });
@@ -135,15 +193,27 @@ describe("決定的な受入fixtureの構造", () => {
     expect(scenario.expected.caseState).toBe("HANDED_OFF");
     expect(scenario.expected.scheduleUpdateState).toBe("RECONCILE_REQUIRED");
     expect(scenario.expected.adoptionFact).toBe(ADOPTION_FACT.UNKNOWN);
+    expect(scenario.expected.handoffReason).toBe(HANDOFF_REASON.RECONCILE_STALLED);
     expect(scenario.expected.duplicateAssignmentCreated).toBe(false);
     expect(scenario.expected.resultKinds).toEqual(["UNKNOWN"]);
+    expect(scenario.expected.formalAdoptionOccurred).toBe("UNKNOWN");
   });
 
   it("A04: 同じ旧版の競合は一方だけを採用する", () => {
     const scenario = fixtures.find((fixture) => fixture.caseId === "A04")!.scenarios[0];
     expect(scenario.operations).toHaveLength(2);
-    expect(scenario.expected.adoptedOperationId).toBe("op-a04-winner");
+    const race = scenario.input.race as JsonObject;
+    expect(race.mode).toBe("SAME_OLD_REVISION_COMPARE_AND_SET");
+    expect(race.executionOrders).toEqual([
+      ["op-a04-winner", "op-a04-loser"],
+      ["op-a04-loser", "op-a04-winner"],
+    ]);
+    expect(race.winnerSelection).toBe("FIRST_SUCCESSFUL_COMPARE_AND_SET");
+    expect(race.adoptedOperationIdDependsOnExecutionOrder).toBe(true);
+    expect(scenario.expected.adoptedOperationIdChoices).toEqual(["op-a04-winner", "op-a04-loser"]);
     expect(scenario.expected.formalAdoptionCount).toBe(1);
+    expect(scenario.expected.conflictOperationCount).toBe(1);
+    expect(scenario.expected.formalRevisionUpdateCount).toBe(1);
     expect(scenario.expected.resultKinds).toEqual(["PREPARED", "CONFLICT"]);
     expect(scenario.expected.winnerScheduleUpdateState).toBe("ADOPTED");
     expect(scenario.expected.loserScheduleUpdateState).toBe("REJECTED");
@@ -152,21 +222,30 @@ describe("決定的な受入fixtureの構造", () => {
   it("A07/A08: 読戻し不一致と一部作用を成功へ畳まない", () => {
     const readBack = fixtures.find((fixture) => fixture.caseId === "A07")!.scenarios[0];
     expect(readBack.expected.readBackMatches).toBe(false);
-    expect(readBack.expected.adoptionFact).toBe(ADOPTION_FACT.UNKNOWN);
+    expect(readBack.expected.caseState).toBe("COORDINATING");
+    expect(readBack.expected.scheduleUpdateState).toBe("REJECTED");
+    expect(readBack.expected.adoptionFact).toBe(ADOPTION_FACT.NOT_ADOPTED);
+    expect(readBack.expected.resultKinds).toEqual(["PREPARED"]);
+    expect(readBack.expected.formalAdoptionOccurred).toBe(false);
     expect(readBack.expected.completed).toBe(false);
 
     const partial = fixtures.find((fixture) => fixture.caseId === "A08")!.scenarios[0];
     expect(partial.expected.resultKinds).toEqual(["PARTIAL"]);
     expect(partial.expected.allAssignmentsFormallyAdopted).toBe(false);
-    expect(partial.expected.individualFormalAdoptionCount).toBe(0);
+    expect(partial.expected.internalFormalAdoptionCount).toBe(0);
+    expect(partial.expected.externalPartialMayHaveOccurred).toBe(true);
     expect(partial.expected.adoptionFact).toBe(ADOPTION_FACT.UNKNOWN);
+    expect(partial.expected.handoffReason).toBe(HANDOFF_REASON.RECONCILE_STALLED);
+    expect(partial.expected.formalAdoptionOccurred).toBe("UNKNOWN");
   });
 
   it("A14: 読取専用接続はEXPORTED_ONLYとして正式採用と分ける", () => {
     const scenario = fixtures.find((fixture) => fixture.caseId === "A14")!.scenarios[0];
+    const schedule = scenario.input.schedule as JsonObject;
     expect(scenario.expected.resultKinds).toEqual(["EXPORTED_ONLY"]);
     expect(scenario.expected.exportedArtifactOnly).toBe(true);
     expect(scenario.expected.formalAdoptionOccurred).toBe(false);
+    expect(schedule.formalSourceRevision).toBe(scenario.expected.authoritativeSourceRevision);
     expect(scenario.input.sourceCapabilities).toMatchObject({
       canReadRevision: true,
       canConditionalUpdate: false,
@@ -193,7 +272,21 @@ describe("決定的な受入fixtureの構造", () => {
     expect(duplicate.expected.persistedEventCount).toBe(2);
     expect(new Set(events.map((event) => event.connectionId)).size).toBe(2);
     expect(events[0].eventId).toBe(events[1].eventId);
+    for (const event of events) {
+      expect(event.provider).toBe("mock-inbox");
+      expect(typeof event.connectionId).toBe("string");
+      expect(typeof event.eventId).toBe("string");
+      expect(typeof event.receivedAt).toBe("string");
+      expect(event.from).toMatchObject({ provider: "mock-inbox" });
+      expect(typeof event.body).toBe("string");
+      expect(event.channelVerified).toBe(true);
+    }
     expect(duplicate.expected.deduplicationKey).toEqual(["provider", "connectionId", "eventId"]);
+    expect(duplicate.expected.receivedOrderSource).toBe("receivedSeq");
+    expect(duplicate.expected.receivedSeqByEvent).toEqual([
+      { connectionId: "mock-connection-a", eventId: "event-a15-same-id", receivedSeq: 1 },
+      { connectionId: "mock-connection-b", eventId: "event-a15-same-id", receivedSeq: 2 },
+    ]);
 
     const identity = fixture.scenarios.find(
       (item) => item.scenarioId === "A15-reply-from-another-person",
@@ -220,6 +313,13 @@ describe("決定的な受入fixtureの構造", () => {
     expect(unknown.expected.adoptionFact).toBe(ADOPTION_FACT.UNKNOWN);
     expect(unknown.expected.mustResolveAdoptionBeforeHandoff).toBe(true);
     expect(unknown.expected.resultKinds).toEqual(["UNKNOWN"]);
+    expect(unknown.operations).toHaveLength(1);
+    expect(unknown.observedUpdateResult).toMatchObject({
+      operationId: "op-a18-unknown-schedule-update",
+      connectionId: "csv-demo-write",
+      kind: "UNKNOWN",
+      lookup: "LOOKUP_UNAVAILABLE",
+    });
 
     const adopted = scenarios.find(
       (item) => item.scenarioId === "A18-preparing-limit-after-adopted",
@@ -227,5 +327,12 @@ describe("決定的な受入fixtureの構造", () => {
     expect(adopted.expected.caseState).toBe("COMMITTED");
     expect(adopted.expected.adoptionFact).toBe(ADOPTION_FACT.ADOPTED);
     expect(adopted.expected.formalAdoptionOccurred).toBe(true);
+    expect(adopted.operations).toHaveLength(1);
+    expect(adopted.observedUpdateResult).toMatchObject({
+      operationId: "op-a18-adopted-schedule-update",
+      connectionId: "csv-demo-write",
+      kind: "APPLIED",
+      lookup: "CONFIRMED",
+    });
   });
 });

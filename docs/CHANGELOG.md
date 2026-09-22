@@ -83,6 +83,19 @@
 - 月次CSVからdomain snapshotへの変換と完全性検証をapplication層へ置き、`sourceRevision`を保持する。
 - これはQ03の高位の「分断を丸めず拒否する」判断を置換せず、適用対象を明確化する変更である。
 
+## 2026-09-22：受入fixtureの独立レビュー反映
+
+- A03／A08へ照合不能な結果と`handoffReason`・回復経路を追加し、A07は正式採用前の作業成果物
+  読戻し不一致を`NOT_ADOPTED`／`REJECTED`として固定した。元CSVへ黙って戻す期待は置いていない。
+- A04は勝者IDを固定せず、実行順を反転した同一旧版CAS競合でも正式採用1件・競合1件・版更新1件を
+  保つ期待へ変更した。A18はUNKNOWNの操作結果証拠を追加し、`PREPARING`中は
+  `RECONCILE_REQUIRED`で保持するADR-022の条件を明示した。
+- fixture検証テストは操作種別、ScheduleGateway／MessagingGateway相当の必須入力、受信順、
+  `HANDED_OFF`の理由、状態回復経路、観測結果と操作の対応を検査する。これは構造検証であり、
+  application・DB・Gatewayの結合受入は引き続き未実行である。
+- A04／A08／A18の結合時に確認する前提をfixture READMEへQuestionとして残した。共通契約不足の
+  Q14および`src/contracts/`は変更していない。
+
 ## 2026-09-22：Bの決定的な受入fixtureを追加
 
 - A02、A03、A04、A07、A08、A14、A15、A18の入力、期待終状態、採用事実、最後に確認した
