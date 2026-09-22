@@ -88,6 +88,164 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     members: [{ name: "async interpretReply", file: "src/adapters/orca/orca-client.ts" }],
     mustContain: ["budget.reserve", "budget.settle"],
   },
+  {
+    label: "状態機械は遷移表と終端状態を対で持つ（ADR-017 / RFC-011 §5）",
+    members: [
+      { name: "export const ALLOWED_CASE_TRANSITIONS", file: "src/contracts/case-state.ts" },
+      {
+        name: "export const ALLOWED_OUTREACH_TRANSITIONS",
+        file: "src/contracts/outreach-state.ts",
+      },
+      {
+        name: "export const ALLOWED_SCHEDULE_UPDATE_TRANSITIONS",
+        file: "src/contracts/schedule-update.ts",
+      },
+      { name: "export const ALLOWED_COMMITMENT_TRANSITIONS", file: "src/contracts/commitment.ts" },
+    ],
+    // prettier が折り返すため、1行に収まる前提の語を使わない。
+    mustContain: ["Readonly<", "Record<"],
+  },
+  {
+    label: "各状態機械が終端状態を宣言する（RFC-011 §5 / A11）",
+    members: [
+      { name: "export const TERMINAL_CASE_STATES", file: "src/contracts/case-state.ts" },
+      { name: "export const TERMINAL_OUTREACH_STATES", file: "src/contracts/outreach-state.ts" },
+      {
+        name: "export const TERMINAL_SCHEDULE_UPDATE_STATES",
+        file: "src/contracts/schedule-update.ts",
+      },
+      {
+        name: "export const TERMINAL_COMMITMENT_STATUSES",
+        file: "src/contracts/commitment.ts",
+      },
+    ],
+    mustContain: ["readonly"],
+  },
+  {
+    label: "選定可否を status 単独で決めない（D04 / A05）",
+    members: [
+      { name: "export function isSelectableCommitment", file: "src/contracts/commitment.ts" },
+    ],
+    mustContain: ["hasUnprocessedReply", "supersededBy", "deadlineAt"],
+  },
+  {
+    label: "配送状態で打診状態を動かさない（A11 / RFC-011 §6）",
+    members: [
+      { name: "export function resolveOutreachAfterSend", file: "src/contracts/outreach-state.ts" },
+    ],
+    mustContain: ["FAILED", "UNKNOWN", "DELIVERY_NOT_SENT"],
+  },
+  {
+    label: "同じIDの再投入は内容を照合する（D07 / ADR-006）",
+    members: [
+      { name: "export interface OperationResultStore", file: "src/contracts/repository.ts" },
+      { name: "export type PersistInboundResult", file: "src/contracts/repository.ts" },
+    ],
+    // 外部作用の操作は requestHash、受信は内容ハッシュで照合する。IDだけを見て
+    // 重複と決めると、同じIDで内容の違う要求に保存済みの事実を返してしまう。
+    // 操作側は OperationMatch（CONFLICT を含む）、受信側は match: "CONFLICT" で表す。
+    mode: "any",
+    mustContain: ["OperationMatch", '"CONFLICT"'],
+  },
+  {
+    label: "返信は対象の不変参照から打診を引く（RFC-011 §3 / D03）",
+    members: [
+      {
+        name: "export function receiveInboundEvent",
+        file: "src/application/receive-inbound-event.ts",
+      },
+    ],
+    // 宛先だけで逆引きすると、同じ相手への過去の打診と現在の打診を区別できない。
+    // 対象が引けても、宛先が丸ごと一致しなければ本人とみなさない（A15）。
+    mustContain: ["inReplyToMessageId", "sameEndpoint"],
+  },
+  {
+    label: "解釈できない受信は取り出し対象から外す（A12 / RFC-011 §4）",
+    members: [
+      { name: "export function interpretPending", file: "src/application/interpret-pending.ts" },
+    ],
+    // 受信順は進めない（適用していないため）が、取り出し続けると後続の返信を
+    // 処理できない。理由を残して外す。
+    mustContain: ["markBlocked", "findNextInterpretable"],
+  },
+  {
+    label: "本人と確認できない受信で状態を動かさない（A15 / RFC-011 §6）",
+    members: [
+      {
+        name: "export function resolveOutreachAfterInbound",
+        file: "src/contracts/outreach-state.ts",
+      },
+    ],
+    mustContain: ["VERIFIED_OUTREACH_TARGET", "hasBody"],
+  },
+  {
+    label: "repository の全操作が取引ハンドルを取る（RFC-010 §4 手順6 / D06）",
+    members: [
+      { name: "export interface AbsenceCaseRepository", file: "src/contracts/repository.ts" },
+      { name: "export interface OutreachRepository", file: "src/contracts/repository.ts" },
+      { name: "export interface CommitmentRepository", file: "src/contracts/repository.ts" },
+      { name: "export interface InboundEventRepository", file: "src/contracts/repository.ts" },
+      {
+        name: "export interface ReplyInterpretationRepository",
+        file: "src/contracts/repository.ts",
+      },
+      { name: "export interface OperationResultStore", file: "src/contracts/repository.ts" },
+      { name: "export interface OutboxRepository", file: "src/contracts/repository.ts" },
+    ],
+    mustContain: ["tx: TxHandle"],
+  },
+  {
+    label: "モデル呼出しは取引の外で行い、受信順のガードを通す（A12 / RFC-010 §5）",
+    members: [
+      { name: "export function interpretReply", file: "src/application/interpret-reply.ts" },
+    ],
+    // 取引の内側から呼ぶとHTTP待ちの間ロックを持つ。受信順のガードが無いと、
+    // 遅れて返った古い結果が新しい承諾を戻す。
+    mustContain: ["assertOutsideTransaction", "tryAdvanceAppliedSeq"],
+  },
+  {
+    label: "承諾にできない返信も状態へ反映する（Q09 / RFC-011 §4）",
+    members: [
+      { name: "export function interpretReply", file: "src/application/interpret-reply.ts" },
+    ],
+    // 「承諾として採用しない」と「返信を無視する」は別。辞退・撤回・保留を扱う。
+    mustContain: ["DECLINE", "WITHDRAW", "HELD", "CLARIFYING"],
+  },
+  {
+    label: "営業日を date 型のまま受け取らない（RFC-009 §5：表示と月境界は店舗timezone）",
+    members: [
+      { name: "const COLUMNS", file: "src/adapters/db/case-repository.ts" },
+      {
+        name: "export function createPgScheduleReadRepository",
+        file: "src/adapters/db/schedule-repository.ts",
+      },
+      { name: "export function createAbsenceCase", file: "src/application/create-absence-case.ts" },
+    ],
+    // node-pg は date 列をローカル深夜の Date にする。JST では toISOString() が
+    // 前日になり、営業日が1日ずれる。SQL側で文字列にして受け取る。
+    mustContain: ["to_char("],
+  },
+  {
+    label: "送信は未送信（SendRefused）と配送失敗を区別する（A15 / RFC-011 §6）",
+    members: [{ name: "async send", file: "src/adapters/channel/mock-inbox.ts" }],
+    // 3つの拒否理由をすべて扱う。いずれも外部作用が起きていないので、
+    // DeliveryState.FAILED と同じ扱いにしない。
+    mustContain: ["ENDPOINT_CHANGED", "NOT_PERMITTED", "CONFLICT"],
+  },
+  {
+    label: "受信の永続化と解釈が案件内の受信順を持つ（A12 / RFC-011 §4）",
+    members: [
+      { name: "export interface InboundEventRepository", file: "src/contracts/repository.ts" },
+      {
+        name: "export interface ReplyInterpretationRepository",
+        file: "src/contracts/repository.ts",
+      },
+    ],
+    // 受信側は StoredInboundEvent / PersistedInboundEvent（caseId と receivedSeq を
+    // 必須にした型）で、解釈側は receivedSeq を直接受け取る。表現が違うため any。
+    mode: "any",
+    mustContain: ["receivedSeq", "PersistedInboundEvent", "StoredInboundEvent"],
+  },
 ];
 
 /**

@@ -49,7 +49,7 @@ describe("computeRequestHash", () => {
     expect(() => computeRequestHash(circular)).toThrow();
   });
 
-  it("A06: 安定IDで整列した割当は、CSV行順が変わっても同じhashになる", () => {
+  it("A06の前提: 安定IDで整列した割当は、CSV行順が変わっても同じhashになる", () => {
     const a = { shiftAssignmentId: "sa-001", staffId: "s1" };
     const b = { shiftAssignmentId: "sa-002", staffId: "s2" };
     const sortById = (items: (typeof a)[]) =>

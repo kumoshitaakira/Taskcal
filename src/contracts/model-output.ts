@@ -175,6 +175,8 @@ export interface PersistedReplyInterpretation {
   readonly interpretationId: string;
   /** 解釈の対象になった不変のMessage。 */
   readonly messageId: string;
+  /** 元の受信イベント。順序の権威はこちらにある（RFC-011 §4）。 */
+  readonly inboundEventId: string;
   /** 案件内の受信順。モデル処理の完了順ではない。 */
   readonly receivedSeq: number;
   /** 解釈した時点の案件版。古い結果を新しい状態へ適用しないため。 */

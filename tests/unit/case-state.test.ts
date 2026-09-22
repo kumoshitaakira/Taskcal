@@ -49,17 +49,17 @@ describe("案件状態の遷移（RFC-011 §5）", () => {
     expect(isAllowedCaseTransition("COMMITTED", "PREPARING")).toBe(false);
   });
 
-  it("読戻しや通知の失敗は要対応であり、未確定へ落とさない（A13）", () => {
+  it("読戻しや通知の失敗は要対応であり、未確定へ落とさない（A13の前提）", () => {
     expect(isAllowedCaseTransition("COMMITTED", "ATTENTION")).toBe(true);
     expect(isAllowedCaseTransition("ATTENTION", "REPORTING")).toBe(true);
     expect(isAllowedCaseTransition("ATTENTION", "COORDINATING")).toBe(false);
   });
 
-  it("復旧しない要対応から終端へ引き継げる（Q12 / A13）", () => {
+  it("復旧しない要対応から終端へ引き継げる（Q12 / A13の前提）", () => {
     expect(isAllowedCaseTransition("ATTENTION", "HANDED_OFF")).toBe(true);
   });
 
-  it("照合が必要な状態から要対応へ回せる（Q11 / A03）", () => {
+  it("照合が必要な状態から要対応へ回せる（Q11 / A03の前提）", () => {
     expect(isAllowedCaseTransition("RECONCILE_REQUIRED", "ATTENTION")).toBe(true);
   });
 
