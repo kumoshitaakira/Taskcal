@@ -93,6 +93,8 @@ jobs:
           - 5433:5432
 
     env:
+      # GitHub ActionsでもDATABASE_URL欠落をskipとして成功させない。
+      CI: "true"
       # CI専用のローカルDB。秘密値ではない。
       DATABASE_URL: postgres://taskcal:taskcal_dev@127.0.0.1:5433/taskcal_dev
 
@@ -117,15 +119,7 @@ jobs:
             exit 1
           }
 
-      # 統合テストは DATABASE_URL が無いとskipする。CIでskipさせない。
-      - name: 統合テストが実行されたことを確かめる
-        run: |
-          out=$(npm run test:integration 2>&1)
-          echo "$out"
-          if echo "$out" | grep -q 'skipped'; then
-            echo "::error::統合テストがskipされました。DATABASE_URL を確認してください"
-            exit 1
-          fi
-
-      - name: テスト
+      # service containerはhealthcheckがhealthyになってからjob stepを開始する。
+      # npm testがunit + integrationの正式なCI入口で、DATABASE_URL欠落時はskipせず失敗する。
+      - name: テスト（unit + PostgreSQL統合）
         run: npm test
