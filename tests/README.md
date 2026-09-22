@@ -20,6 +20,16 @@
 同じ理由で、接続範囲を持たない口を叩くテストは**自分の案件・通知で絞る**こと
 （`stop-case.test.ts` の `claimNext`、`recover.test.ts` の `runUntilMine`）。
 
+**途中で落ちた実行は、次の実行を巻き込む。** 各テストの片付けはFKの向きに沿った順で
+消すので、途中で止まると参照が残り、次の実行の片付けが外部キー違反で落ちる。無関係な
+テストが大量に落ち始めたら、まずDBを作り直すこと。
+
+```bash
+docker exec taskcal-db psql -U taskcal -d postgres -c "drop database taskcal_dev with (force)"
+docker exec taskcal-db psql -U taskcal -d postgres -c "create database taskcal_dev owner taskcal"
+npm run migrate && npm run seed:dev
+```
+
 ## 受入ケースIDの付け方
 
 実行していない受入ケースを合格と読ませない（AGENTS.md「品質と証拠」）。

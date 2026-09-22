@@ -12,10 +12,17 @@ function fakeSpawn(child: ChildProcess): SpawnProcess {
   return (() => child) as unknown as SpawnProcess;
 }
 
+/**
+ * `DATABASE_URL` が無い状態を、子プロセスから見て作る。
+ *
+ * **消すのではなく空文字にする。** 子プロセスの `scripts/test.ts` は判定の前に
+ * `.env.local` を読む。消すだけだと開発者の `.env.local` が値を入れ直し、
+ * 「未設定」を再現できずに本体のテストがまるごと走ってしまう（タイムアウトする）。
+ * dotenv は既にあるキーを上書きしないので、空文字なら残る。判定側は `trim()` で
+ * 空を未設定として扱う。
+ */
 function cleanEnvironment(overrides: Environment = {}): NodeJS.ProcessEnv {
-  const env = { ...process.env, ...overrides };
-  delete env.DATABASE_URL;
-  return env;
+  return { ...process.env, DATABASE_URL: "", ...overrides };
 }
 
 describe("integration test process gate", () => {
