@@ -28,6 +28,7 @@ const KEYS = [
   "ORCA_OUTPUT_MICRO_USD_PER_KTOK",
   "ORCA_MAX_REPLY_CHARS",
   "ORCA_MAX_OUTPUT_TOKENS",
+  "ORCA_TIMEOUT_MS",
 ] as const;
 
 // OrcaRouter関連だけを見る。DATABASE_URL の有無で結果を変えない。

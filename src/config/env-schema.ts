@@ -101,6 +101,14 @@ export const serverEnvSchema = z.object({
   ORCA_MAX_REPLY_CHARS: optionalPositiveInt,
   ORCA_MAX_OUTPUT_TOKENS: optionalPositiveInt,
   /**
+   * 1呼出しのタイムアウト（ミリ秒）。未設定ならADR-007の初期値20秒。
+   *
+   * **推論モデルでは20秒では足りない。** 推論トークンの生成に時間がかかり、
+   * タイムアウトすると結果不明（`UNKNOWN_CHARGE`）として予約が残る。短すぎる値は
+   * 「課金されたか分からない呼出し」を量産するので、接続先の実測に合わせる。
+   */
+  ORCA_TIMEOUT_MS: optionalPositiveInt,
+  /**
    * 表示用の円換算レート（1 USD あたりの円）。**記録には使わない。**
    *
    * 未設定なら換算しない。既定値を置かない——持っていないレートを作ると、
@@ -129,6 +137,7 @@ export const orcaEnvSchema = serverEnvSchema.pick({
   ORCA_OUTPUT_MICRO_USD_PER_KTOK: true,
   ORCA_MAX_REPLY_CHARS: true,
   ORCA_MAX_OUTPUT_TOKENS: true,
+  ORCA_TIMEOUT_MS: true,
 });
 
 export type OrcaEnv = z.infer<typeof orcaEnvSchema>;

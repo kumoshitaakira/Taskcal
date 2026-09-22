@@ -45,6 +45,9 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
     baseUrl: env.ORCA_BASE_URL,
     apiKey: env.ORCA_API_KEY,
     model: env.ORCA_MODEL,
+    // 未設定ならADR-007の初期値（クライアント側の既定）。推論モデルでは
+    // 20秒で足りず、結果不明の呼出しを量産するため設定できるようにしている。
+    timeoutMs: env.ORCA_TIMEOUT_MS,
     budget: new BudgetGuard(
       {
         caseSpendLimitMicroUsd: env.ORCA_CASE_SPEND_LIMIT_MICRO_USD,

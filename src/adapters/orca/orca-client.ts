@@ -457,6 +457,13 @@ export class OrcaRouterClient implements ModelGateway {
     // 通すと、costFromTokens が不正な費用を出し、台帳と後続の予算判定を壊す。
     const inputTokens = asTokenCount(usage.prompt_tokens);
     const outputTokens = asTokenCount(usage.completion_tokens);
+    // 推論モデルは `completion_tokens` に推論分を含める。`max_tokens` は本文だけを
+    // 縛り、推論トークンには効かない接続がある（OrcaRouter経由のDeepSeekで観測）。
+    const details = (usage.completion_tokens_details ?? {}) as Record<string, unknown>;
+    const reasoningTokens = asTokenCount(details.reasoning_tokens);
+    // 見積りの前提（出力上限）が守られたか。**守られなければ予約は実費を下回り得る。**
+    const outputLimitExceeded =
+      outputTokens === undefined ? undefined : outputTokens > this.options.bounds.maxOutputTokens;
 
     return {
       requestId: input.requestId,
@@ -474,6 +481,8 @@ export class OrcaRouterClient implements ModelGateway {
       rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
       inputTokens,
       outputTokens,
+      reasoningTokens,
+      outputLimitExceeded,
       tokenMeasurement:
         inputTokens !== undefined && outputTokens !== undefined
           ? MEASUREMENT.MEASURED

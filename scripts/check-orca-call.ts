@@ -120,8 +120,16 @@ async function main(): Promise<void> {
     process.stdout.write(`  選択主体     : ${usage.routingSource}\n`);
     process.stdout.write(
       `  トークン     : 入力 ${usage.inputTokens ?? "—"} / 出力 ${usage.outputTokens ?? "—"}` +
+        (usage.reasoningTokens === undefined ? "" : `（うち推論 ${usage.reasoningTokens}）`) +
         ` （${usage.tokenMeasurement}）\n`,
     );
+    if (usage.outputLimitExceeded) {
+      // RFC-004 §7 は出力上限を見積りの前提にしている。崩れたら黙って通さない。
+      process.stdout.write(
+        "  ⚠ 出力上限   : 要求した上限を実測が超えました。**予約が実費を下回り得ます。**\n" +
+          "                 推論モデルでは推論トークンが max_tokens の対象外になります。\n",
+      );
+    }
     process.stdout.write(
       `  費用         : ${usage.costMicroUsd ?? "—"} microUSD （${usage.costKind}）\n`,
     );

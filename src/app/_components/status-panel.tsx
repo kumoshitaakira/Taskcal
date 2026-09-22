@@ -43,6 +43,11 @@ export function StatusPanel({ status }: { status: RuntimeStatus }) {
           <dd>
             <StatusTag status={status.orcaRouter.status} />{" "}
             {status.orcaRouter.budgetConfigured ? "金額予算あり" : "金額予算 未設定"}
+            {/* 設定の有無と、実際に通ったかを分けて出す（AGENTS.md「品質と証拠」）。 */}
+            ／実呼出し {status.orcaRouter.succeededCalls} 件成功
+            {status.orcaRouter.unknownCalls > 0
+              ? `・${status.orcaRouter.unknownCalls} 件は結果不明（費用は0にしていません）`
+              : ""}
           </dd>
         </div>
       </dl>

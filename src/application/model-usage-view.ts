@@ -42,7 +42,11 @@ export interface ModelCallView {
   readonly promptVersion: string;
   readonly rulesVersion: string;
   readonly inputTokens?: number;
+  /** 推論トークンを含む出力トークン。 */
   readonly outputTokens?: number;
+  readonly reasoningTokens?: number;
+  /** 要求した出力上限を実測が超えたか。超えていれば予約が実費を下回り得る。 */
+  readonly outputLimitExceeded?: boolean;
   readonly tokenMeasurement: Measurement;
   readonly costMicroUsd?: MicroUsd;
   readonly costKind: CostKind;
@@ -58,6 +62,11 @@ export interface ModelSpendView {
   readonly reservedMicroUsd: MicroUsd;
   /** 結果不明として予約額を残している件数。 */
   readonly unknownChargeCount: number;
+  /**
+   * 要求した出力上限を実測が超えた件数。
+   * **0でなければ、予約が実費を下回り得る**（RFC-004 §7の前提が崩れている）。
+   */
+  readonly outputLimitExceededCount: number;
   readonly callCount: number;
   /** 表示用の円換算。レート未設定なら undefined（換算しない）。 */
   readonly jpy?: JpyDisplay;
@@ -115,6 +124,8 @@ export async function getModelUsageView(caseId: string): Promise<ModelUsageView>
         settledMicroUsd,
         reservedMicroUsd,
         unknownChargeCount: row?.unknown_charges ?? 0,
+        outputLimitExceededCount: calls.rows.filter((c) => c.usage.outputLimitExceeded === true)
+          .length,
         callCount: calls.rows.length,
         // レートが無ければ換算しない。持っていないレートを作らない（RFC-004 §7）。
         jpy:
@@ -134,6 +145,8 @@ export async function getModelUsageView(caseId: string): Promise<ModelUsageView>
         rulesVersion: call.usage.rulesVersion,
         inputTokens: call.usage.inputTokens,
         outputTokens: call.usage.outputTokens,
+        reasoningTokens: call.usage.reasoningTokens,
+        outputLimitExceeded: call.usage.outputLimitExceeded,
         tokenMeasurement: call.usage.tokenMeasurement,
         costMicroUsd: call.usage.costMicroUsd,
         costKind: call.usage.costKind,

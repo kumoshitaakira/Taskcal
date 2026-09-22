@@ -109,6 +109,18 @@ export function UsagePanel({ usage }: { usage: ModelUsageView }) {
             <dt>呼出し回数</dt>
             <dd>{spend.callCount} 件</dd>
           </div>
+          {spend.outputLimitExceededCount > 0 ? (
+            <div className="row">
+              <dt>
+                <span className="tag tag-warn">出力上限を超過</span>
+              </dt>
+              <dd>
+                {spend.outputLimitExceededCount} 件。要求した出力上限が接続先で効いていません。
+                <strong>予約額が実費を下回り得ます</strong>（RFC-004 §7の前提が崩れています）。
+                推論モデルでは推論トークンが <code>max_tokens</code> の対象外になることがあります。
+              </dd>
+            </div>
+          ) : null}
           {spend.jpy ? (
             <div className="row">
               <dt>円換算（表示のみ）</dt>
@@ -167,6 +179,8 @@ export function UsagePanel({ usage }: { usage: ModelUsageView }) {
                     </span>
                   </span>{" "}
                   {call.inputTokens ?? "—"} / {call.outputTokens ?? "—"}
+                  {call.reasoningTokens === undefined ? "" : `（うち推論 ${call.reasoningTokens}）`}
+                  {call.outputLimitExceeded ? " ⚠ 上限超過" : ""}
                 </td>
                 <td>
                   <span className="tags">

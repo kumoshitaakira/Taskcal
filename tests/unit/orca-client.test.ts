@@ -543,3 +543,71 @@ describe("モデルを選んだ主体の記録（RFC-004 §8）", () => {
     expect(isRouterAlias("orcarouterish/model")).toBe(false);
   });
 });
+
+describe("出力上限と推論トークンの記録（RFC-004 §7・§8）", () => {
+  /** 推論モデルの応答。`completion_tokens` に推論分を含む。 */
+  function respondWith(completionTokens: number, reasoningTokens: number) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: "deepseek-v4-flash",
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: completionTokens,
+                completion_tokens_details: { reasoning_tokens: reasoningTokens },
+              },
+              choices: [{ message: { content: JSON.stringify(VALID_OUTPUT) } }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+  }
+
+  it("要求した出力上限を実測が超えたら、その事実を記録する", async () => {
+    // bounds.maxOutputTokens は 512。推論トークンが乗って超える。
+    respondWith(1085, 900);
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const result = await client.interpretReply(request);
+
+    // **予約が実費を下回り得る。** 気付けるように残す（RFC-004 §7）。
+    expect(result.usage.outputLimitExceeded).toBe(true);
+    // 推論分を出力トークンへ畳まない。分けて持つ。
+    expect(result.usage.outputTokens).toBe(1085);
+    expect(result.usage.reasoningTokens).toBe(900);
+  });
+
+  it("上限内に収まったときは超過として記録しない", async () => {
+    respondWith(100, 40);
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const result = await client.interpretReply(request);
+
+    expect(result.usage.outputLimitExceeded).toBe(false);
+    expect(result.usage.reasoningTokens).toBe(40);
+  });
+
+  it("推論トークンが取れない接続では undefined のままにする（0で埋めない）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: "m",
+              usage: { prompt_tokens: 10, completion_tokens: 5 },
+              choices: [{ message: { content: JSON.stringify(VALID_OUTPUT) } }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const result = await client.interpretReply(request);
+
+    // 取得不能を0にしない（AGENTS.md）。
+    expect(result.usage.reasoningTokens).toBeUndefined();
+  });
+});

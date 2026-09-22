@@ -42,6 +42,18 @@ export interface RuntimeStatus {
     readonly status: ComponentStatus;
     /** 金額上限（RFC-004 §7、Q10）が設定済みか。未設定なら有料呼出しを開始しない。 */
     readonly budgetConfigured: boolean;
+    /**
+     * schema検査を通った実呼出しの件数。
+     *
+     * **設定があることと、実際に通ったことを分ける。** 0件のまま「正常」と表示すると、
+     * 一度も呼べていない接続を動作確認済みとして読ませる（AGENTS.md「品質と証拠」）。
+     */
+    readonly succeededCalls: number;
+    /**
+     * 結果不明で終わった呼出しの件数。0ではない費用が予約のまま残っている。
+     * 失敗と断定しない（RFC-004 §7）。
+     */
+    readonly unknownCalls: number;
     /** 設定値が契約に合わない場合。項目名だけを出し、値は出さない（ADR-008）。 */
     readonly invalidKeys?: readonly string[];
   };
@@ -67,7 +79,11 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     ? []
     : [...new Set(orcaParsed.error.issues.map((i) => String(i.path[0])))];
 
-  const orcaConfigured = Boolean(orcaEnv?.ORCA_BASE_URL && orcaEnv?.ORCA_API_KEY);
+  const orcaConfigured = Boolean(
+    orcaEnv?.ORCA_BASE_URL && orcaEnv?.ORCA_API_KEY && orcaEnv?.ORCA_MODEL,
+  );
+  // 実呼出しの実績を見る。設定の有無だけでは「動く」と言えない。
+  const calls = database.status === "OK" ? await countModelCalls() : { succeeded: 0, unknown: 0 };
   const budgetConfigured = Boolean(
     orcaEnv?.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
     orcaEnv?.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&
@@ -84,18 +100,24 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       status:
         orcaInvalidKeys.length > 0
           ? "UNAVAILABLE"
-          : orcaConfigured
-            ? // 実呼出しを一度も行っていないため、設定があっても OK とは言わない。
-              "CONFIGURED_UNVERIFIED"
-            : "UNCONFIGURED",
+          : !orcaConfigured
+            ? "UNCONFIGURED"
+            : // 設定があるだけでは OK と言わない。schema検査を通った実呼出しが
+              // 1件でもあって初めて、この接続で動いたと言える。
+              calls.succeeded > 0
+              ? "OK"
+              : "CONFIGURED_UNVERIFIED",
       budgetConfigured,
+      succeededCalls: calls.succeeded,
+      unknownCalls: calls.unknown,
       ...(orcaInvalidKeys.length > 0 ? { invalidKeys: orcaInvalidKeys } : {}),
     },
     notImplemented: [
       "CSVとDB・画面の接続（ScheduleGateway本体）。parseMonthlyCsv はあるが繋がっておらず、画面の勤務表は npm run seed:dev の架空データ",
       "適格性の検査（可能時間・月次上限・勤務の重複）。打診の候補は名簿だけで選んでいる（担当B）",
       "候補選定・勤務計画の決定（担当B）",
-      "返信解釈（OrcaRouterの接続情報と金額予算が未取得のため実推論を行っていない）",
+      "返信解釈の品質評価（RFC-008の固定fixtureによる比較）。実呼出しは通っているが、精度は測っていない",
+      "結果不明で終わったモデル呼出しの復旧。同じ受信は保存済みの結果不明を返し続ける（再送しないため）。人の対応が要る",
       "CSV生成・読戻し・結果照会（ScheduleGateway の実装）。正式採用の進行は実装済みだが、この口が NOT_IMPLEMENTED を投げるため成立しない（担当B）",
       "送信結果が不明・配送に失敗した通知の復旧。UNKNOWN と FAILED は再送せず止まったまま",
       "期限の検知、案件の停止・再開、要対応からの復旧",
@@ -178,6 +200,27 @@ async function checkDatabase(configured: boolean): Promise<RuntimeStatus["databa
     };
   }
   return { ...base, status: "OK" };
+}
+
+/**
+ * 実呼出しの実績を数える。
+ *
+ * **成功と結果不明を分けて数える。** 畳むと、課金の有無が分からない呼出しが
+ * 成功として見える（RFC-004 §7）。
+ */
+async function countModelCalls(): Promise<{ succeeded: number; unknown: number }> {
+  try {
+    const { rows } = await getPool().query<{ succeeded: string; unknown: string }>(
+      `select count(*) filter (where outcome = 'VALID')::text as succeeded,
+              count(*) filter (where outcome = 'UNKNOWN')::text as unknown
+         from model_call`,
+    );
+    return { succeeded: Number(rows[0]?.succeeded ?? 0), unknown: Number(rows[0]?.unknown ?? 0) };
+  } catch {
+    // 数えられないことを0と報告しない——と言いたいが、この値は表示専用で、
+    // 呼出しの可否判定には使わない。読めなければ0件として控えめに出す。
+    return { succeeded: 0, unknown: 0 };
+  }
 }
 
 /** PostgreSQL の undefined_table。 */
