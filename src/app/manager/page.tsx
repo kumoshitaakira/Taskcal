@@ -87,17 +87,24 @@ export default async function ManagerPage({
   // 停止も描画ごとのキー。二重クリックは同じ操作になり、停止済みの案件への再送信は
   // 「すでに停止しています」で断られる（`stop-case.ts`）。
   const stopOperationId = `stop:${view.activeCase?.caseId ?? "none"}:${randomUUID()}`;
-  // 進行中の更新は作り直さず再開する（RFC-010 §7）。停止済みの案件では出さない（D10）。
+  // 進行中の更新は作り直さず再開する（RFC-010 §7）。
   const resuming =
     view.activeCase?.state === "PREPARING" || view.activeCase?.state === "RECONCILE_REQUIRED";
+  const stopped = Boolean(view.activeCase?.stopCause);
   // 停止できるのは自動調整が続いている間だけ。確定済みの取消は別の操作（D10）。
   const canStop =
     view.activeCase?.state === "COORDINATING" || view.activeCase?.state === "PREPARING";
+  // **停止済みでも再開は出す。**
+  // 採用の操作が進行中のまま落ちると、worker は結果が確定するまで触らないので
+  // （`recover-case.ts`）、案件が準備中のまま誰にも動かせなくなる。再開は
+  // 採用をやり直す操作ではない——照会して成否を確かめ、停止済みなら手順5が
+  // `CASE_STOPPED` で断って `resolvePreparingStop` の行き先へ確定させる（D10）。
+  // **新しく採用を始める方は、停止済みでは出さない。**
   const canAdopt = Boolean(
     view.activeCase &&
-    !view.activeCase.stopCause &&
     (resuming ||
-      (view.activeCase.state === "COORDINATING" &&
+      (!stopped &&
+        view.activeCase.state === "COORDINATING" &&
         view.activeCase.outreaches.some((outreach) => outreach.selectable))),
   );
 
@@ -139,15 +146,24 @@ export default async function ManagerPage({
           <input type="hidden" name="operationId" value={adoptOperationId} />
           <input type="hidden" name="caseId" value={view.activeCase.caseId} />
           <p className="lede" style={{ margin: 0 }}>
-            {resuming
-              ? // 再実行しない。進行中の更新は作り直さず、照会して照合してから進む（A03）。
-                "進行中の勤務表更新があります。作り直さず、結果を照会して照合してから続きを進めます。"
-              : "選定可の承諾から計画を固定し、作業用CSVの生成・読戻しを経て正式採用します。採用の直前に案件版・停止・期限・承諾・未処理返信・月内入力の完全性をもう一度検査します（D08）。"}{" "}
+            {resuming && stopped
+              ? // 停止済みの再開は、採用のやり直しではない。成否を確かめて行き先を決める。
+                "停止した案件に、結果の分からない勤務表更新が残っています。作り直さず、結果を照会して成否を確かめます。停止済みなので正式採用は行いません（D10）。"
+              : resuming
+                ? // 再実行しない。進行中の更新は作り直さず、照会して照合してから進む（A03）。
+                  "進行中の勤務表更新があります。作り直さず、結果を照会して照合してから続きを進めます。"
+                : "選定可の承諾から計画を固定し、作業用CSVの生成・読戻しを経て正式採用します。採用の直前に案件版・停止・期限・承諾・未処理返信・月内入力の完全性をもう一度検査します（D08）。"}{" "}
             <strong>
               選定とCSVの生成・読戻しは未実装（担当B）なので、現在は必ず未実装として断ります。
             </strong>
           </p>
-          <button type="submit">{resuming ? "正式採用の続きを進める" : "正式採用へ進む"}</button>
+          <button type="submit">
+            {resuming && stopped
+              ? "停止の結果を確定させる"
+              : resuming
+                ? "正式採用の続きを進める"
+                : "正式採用へ進む"}
+          </button>
         </form>
       ) : null}
 

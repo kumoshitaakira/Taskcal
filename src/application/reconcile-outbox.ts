@@ -17,6 +17,7 @@
  */
 
 import "server-only";
+import { RECOVERY_RETRY_MS } from "../config/mvp-policy";
 import { assertOutsideTransaction, withTransaction } from "../adapters/db/transaction";
 import type { MessagingGateway } from "../contracts/messaging-gateway";
 import { resolveOutreachAfterSend, type OutreachMessageKind } from "../contracts/outreach-state";
@@ -27,6 +28,8 @@ export interface ReconcileOutboxDeps {
   readonly outreaches: OutreachRepository;
   readonly messaging: MessagingGateway;
   readonly leaseMs?: number;
+  /** 照会できなかった項目を次に見るまでの待ち。先頭詰まりを避ける。 */
+  readonly retryAfterMs?: number;
 }
 
 /**
@@ -52,6 +55,7 @@ const AWAITS_REPLY: readonly OutreachMessageKind[] = ["INITIAL_OFFER", "CLARIFIC
 
 export function reconcileOutbox(deps: ReconcileOutboxDeps) {
   const leaseMs = deps.leaseMs ?? 30_000;
+  const retryAfterMs = deps.retryAfterMs ?? RECOVERY_RETRY_MS;
 
   return async function runOnce(): Promise<ReconcileOutboxOutcome> {
     const claimed = await withTransaction((tx) => deps.outbox.claimForReconcile(tx, { leaseMs }));
@@ -97,12 +101,15 @@ export function reconcileOutbox(deps: ReconcileOutboxDeps) {
     }
 
     if (finding === "UNRESOLVED") {
-      // 状態を動かさず lease だけ返す。次の巡回でもう一度照会する。
+      // 状態を動かさない。**ただし次に見る時刻は先送りする。**
+      // lease を返すだけだと、照会できないこの項目が毎回最古として選び直され、
+      // 後ろの結果不明が永久に照合されない（先頭詰まり）。
       const leaseLost = await withTransaction(async (tx) => {
         const settled = await deps.outbox.settle(tx, {
           outboxId: claimed.outboxId,
           leaseToken: claimed.leaseToken ?? "",
           status: "UNKNOWN",
+          retryAfterMs,
         });
         return settled === "LEASE_LOST";
       });

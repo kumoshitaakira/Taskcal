@@ -123,7 +123,11 @@ export function createPgOutboxRepository(): OutboxRepository {
              -- 結果不明だけ。**再送のための取り出しではない。** 呼出し元は
              -- getSendResult で照合し、送られたと確認できるまで送り直さない（A13）。
              -- attempts は増やさない。照会は送信試行ではない。
+             --
+             -- next_attempt_at を見る。照会できなかった項目が毎回最古として
+             -- 選ばれ続けると、後ろの結果不明が永久に照合されない（先頭詰まり）。
              where status = 'UNKNOWN'
+               and next_attempt_at <= now()
                and (leased_until is null or leased_until < now())
              order by created_at
              for update skip locked

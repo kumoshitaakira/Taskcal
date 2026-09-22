@@ -468,6 +468,10 @@ export interface OutboxRepository {
    * 呼出し元は `getSendResult` で照合し、送られたと確認できるまで送り直さない。
    * 送信試行ではないので `attempts` は増やさない。`settle` は `claimNext` と共通で、
    * ここで取った lease token をそのまま使う。
+   *
+   * `next_attempt_at` を過ぎたものだけを取る。照会できなかった項目を毎回選び直すと、
+   * 後ろの結果不明が永久に照合されない。呼出し元は照会できなかったときに
+   * `settle` の `retryAfterMs` で次の機会を先送りすること。
    */
   claimForReconcile(tx: TxHandle, input: { leaseMs: number }): Promise<OutboxItem | "NONE">;
   /** 送信結果を記録する。未送信（REFUSED）と配送失敗（FAILED）を同じ欄に畳まない。 */
