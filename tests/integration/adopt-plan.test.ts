@@ -33,7 +33,8 @@ import { computeRequestHash } from "@/contracts/operation";
 import { FakeScheduleGateway } from "../stubs/fake-gateways";
 import { createFakeSelectionPlanner } from "../fakes/selection";
 import { createSelectionPlanner } from "@/domain/selection";
-import { createEligibilityRecheck } from "@/domain/selection/eligibility";
+import { createEligibilityRecheck as createDomainEligibilityRecheck } from "@/domain/selection/eligibility";
+import { createEligibilityRecheck as createApplicationEligibilityRecheck } from "@/application/eligibility-recheck";
 import type { SelectionPlanner, EligibilityChecker } from "@/contracts/selection";
 import {
   CsvScheduleGateway,
@@ -168,21 +169,10 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       assignments: options.assignments ?? repos.assignments,
       gateway: options.gateway ?? newGateway(),
       planner: options.planner ?? createFakeSelectionPlanner(),
-      eligibility: options.eligibility ?? createEligibilityRecheck(),
-      loadMonthlyEligibility:
-        options.loadMonthlyEligibility ??
-        (async (_tx, input) => ({
-          monthlySchedule: {
-            storeId: input.storeId,
-            timezone: "Asia/Tokyo",
-            month: input.businessDate.slice(0, 7),
-            sourceRevision: REVISION,
-            staffIds: [absentStaff, ...candidates, silentStaff],
-            completeness: "COMPLETE",
-            assignments: [],
-          },
-          staffProfiles: [],
-        })),
+      eligibility: options.eligibility ?? createApplicationEligibilityRecheck(),
+      ...(options.loadMonthlyEligibility
+        ? { loadMonthlyEligibility: options.loadMonthlyEligibility }
+        : {}),
       clock: { now: () => NOW },
       ids: { next: () => randomUUID() },
     });
@@ -609,7 +599,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       const result = await build({
         gateway,
         planner: createSelectionPlanner(),
-        eligibility: createEligibilityRecheck(),
+        eligibility: createDomainEligibilityRecheck(),
         loadMonthlyEligibility: (tx, input) =>
           loadLatestMonthlyEligibility(tx, { ...input, allowedDates: new Set([BUSINESS_DATE]) }),
       })({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });

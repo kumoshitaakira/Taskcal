@@ -104,6 +104,7 @@ import {
   type OfferContext,
 } from "./offer-message";
 import { sendOperationId } from "./start-outreach";
+import { buildRecheckInput } from "./eligibility-recheck";
 
 export interface AdoptPlanCommand {
   /** 画面が描画時に作ったキー。同じ描画内の二重クリックだけが同じ値になる。 */
@@ -552,24 +553,42 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         // 取り直し、確認できない場合は採用を止める。
         let rechecked: EligibilityRecheckResult;
         try {
-          const latest = await (deps.loadMonthlyEligibility ?? loadLatestMonthlyEligibility)(tx, {
-            storeId: snapshot.storeId,
-            businessDate: snapshot.businessDate,
-          });
-          rechecked = deps.eligibility.recheck({
-            storeId: snapshot.storeId,
-            businessDate: snapshot.businessDate,
-            requirement: {
-              roleCode: snapshot.roleCode,
-              startAt: toJstTimestamp(snapshot.requiredStartAt),
-              endAt: toJstTimestamp(snapshot.requiredEndAt),
-            },
-            selected: input.selection.selected,
-            inputs: input.selection.inputs,
-            monthlySchedule: latest.monthlySchedule,
-            staffProfiles: latest.staffProfiles,
-            absentStaffId: snapshot.absentStaffId,
-          });
+          if (deps.loadMonthlyEligibility) {
+            const latest = await deps.loadMonthlyEligibility(tx, {
+              storeId: snapshot.storeId,
+              businessDate: snapshot.businessDate,
+            });
+            rechecked = deps.eligibility.recheck({
+              storeId: snapshot.storeId,
+              businessDate: snapshot.businessDate,
+              requirement: {
+                roleCode: snapshot.roleCode,
+                startAt: toJstTimestamp(snapshot.requiredStartAt),
+                endAt: toJstTimestamp(snapshot.requiredEndAt),
+              },
+              selected: input.selection.selected,
+              inputs: input.selection.inputs,
+              monthlySchedule: latest.monthlySchedule,
+              staffProfiles: latest.staffProfiles,
+              absentStaffId: snapshot.absentStaffId,
+            });
+          } else {
+            const store = await deps.stores.findById(tx, snapshot.storeId);
+            if (store === "NOT_FOUND") {
+              return rejected(ERROR_CODES.INVALID_INPUT, "店舗が見つかりません。");
+            }
+            const conditions = await deps.staff.listConditionsByStore(tx, snapshot.storeId);
+            rechecked = deps.eligibility.recheck(
+              buildRecheckInput({
+                snapshot,
+                storeTimezone: store.timezone,
+                reloaded: input.reloaded,
+                conditions,
+                selected: input.selection.selected,
+                inputs: input.selection.inputs,
+              }),
+            );
+          }
         } catch (error) {
           return rejected(
             ERROR_CODES.INVALID_INPUT,
@@ -791,23 +810,25 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         };
       }
 
-      try {
-        const monthly = await (deps.loadMonthlyEligibility ?? loadLatestMonthlyEligibility)(tx, {
-          storeId: locked.storeId,
-          businessDate: locked.businessDate,
-        });
-        inputs = { ...inputs, monthlyRevision: monthly.monthlySchedule.sourceRevision };
-      } catch (error) {
-        return {
-          kind: "FAILED",
-          result: await refuse(
-            deps.operations,
-            tx,
-            command.operationId,
-            ERROR_CODES.INVALID_INPUT,
-            error instanceof Error ? error.message : "月内入力を検査できません。",
-          ),
-        };
+      if (deps.loadMonthlyEligibility) {
+        try {
+          const monthly = await deps.loadMonthlyEligibility(tx, {
+            storeId: locked.storeId,
+            businessDate: locked.businessDate,
+          });
+          inputs = { ...inputs, monthlyRevision: monthly.monthlySchedule.sourceRevision };
+        } catch (error) {
+          return {
+            kind: "FAILED",
+            result: await refuse(
+              deps.operations,
+              tx,
+              command.operationId,
+              ERROR_CODES.INVALID_INPUT,
+              error instanceof Error ? error.message : "月内入力を検査できません。",
+            ),
+          };
+        }
       }
 
       const commitments = await deps.commitments.listByCase(tx, command.caseId);

@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createDefaultMessagingGateway } from "../adapters/channel";
 import { CsvScheduleGateway, FileCsvScheduleSource } from "../adapters/csv/schedule-gateway";
+import { loadLatestMonthlyEligibility } from "../adapters/db/monthly-eligibility";
 import { createPgAuthoritativeScheduleRefRepository } from "../adapters/db/authoritative-ref-repository";
 import { createPgBudgetLedger } from "../adapters/db/budget-ledger";
 import { createPgCommitmentRepository } from "../adapters/db/commitment-repository";
@@ -179,6 +180,7 @@ export function buildAppServices() {
       gateway,
       planner,
       eligibility,
+      loadMonthlyEligibility: loadLatestMonthlyEligibility,
       clock,
       ids: idGenerator,
     }),
