@@ -54,12 +54,14 @@ import {
   DEFAULT_CSV_STORE_ROOT,
   artifactRefOf,
   buildUpdatedInput,
+  beginOperationRecord,
+  completeOperationRecord,
   connectionKnown,
+  isOperationInFlight,
   isRevisionId,
   readOperationRecord,
   readRevision,
   revisionOfArtifactRef,
-  writeOperationRecord,
   writeRevision,
 } from "./csv-store";
 import { parseMonthlyCsv, type CsvAssignment, type MonthlyCsv } from "./monthly-csv";
@@ -115,20 +117,45 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
   const mode = options.mode ?? "ADOPT";
   const clock = options.clock ?? { now: () => new Date().toISOString() };
 
+  /** 実行中マーカーを結果で置き換える。マーカーは `applyUpdate` の先頭で作っている。 */
   async function record(
     connectionId: string,
     operationId: OperationId,
     requestHash: RequestHash,
+    startedAt: string,
     result: UpdateResult,
   ): Promise<UpdateResult> {
-    await writeOperationRecord(root, {
+    await completeOperationRecord(root, {
       connectionId,
       operationId,
       requestHash,
+      status: "DONE",
+      startedAt,
       result,
       recordedAt: clock.now(),
     });
     return result;
+  }
+
+  function conflict(command: ApplyUpdateCommand, detail: string): UpdateResult {
+    return {
+      operation: { ...command.operation },
+      kind: "CONFLICT",
+      revisionCheckEnforced: true,
+      mappings: [],
+      detail,
+    };
+  }
+
+  /** 同じ操作の別の呼出しが進行中。結果を待てないので成否不明として返す。 */
+  function inFlight(command: ApplyUpdateCommand): UpdateResult {
+    return {
+      operation: { ...command.operation },
+      kind: "UNKNOWN",
+      revisionCheckEnforced: false,
+      mappings: [],
+      detail: "同じ操作の別の呼出しが進行中です。照会で確定してください。",
+    };
   }
 
   return {
@@ -148,11 +175,12 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
         );
       }
       const revision = ref.authoritative.sourceRevision;
+      // 成果物参照は管理版を指す形でなければならない。形が違う・版が違う参照は壊れている。
       const fromRef = revisionOfArtifactRef(ref.authoritative.artifactRef);
-      if (fromRef !== undefined && fromRef !== revision) {
+      if (fromRef !== revision) {
         throw new TaskcalError(
           ERROR_CODES.INVALID_INPUT,
-          "正式版参照の版と成果物参照が一致しません。",
+          "正式版参照の版と成果物参照が一致しません。参照が壊れている可能性があります。",
         );
       }
       const parsed = await readRevision(root, ref.connectionId, revision);
@@ -188,19 +216,30 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
       const { connectionId } = command;
       const { operationId, requestHash } = command.operation;
 
-      // ADR-006／D07：同じ操作IDは内容を照合して再生する。内容が違えば拒否する。
-      const previous = await readOperationRecord(root, connectionId, operationId);
-      if (previous !== "NOT_FOUND") {
-        if (previous.requestHash !== requestHash) {
-          return {
-            operation: { ...command.operation },
-            kind: "CONFLICT",
-            revisionCheckEnforced: true,
-            mappings: [],
-            detail: "同じ操作IDで内容の異なる要求です。前回の結果を返せません。",
-          };
+      // ADR-006／D07：実行中マーカーを**排他的に**作る。作成に負けたら既存の記録と照合する。
+      // 内容が違えば CONFLICT、同じで完了済みなら再生、同じで進行中なら成否不明。
+      const startedAt = clock.now();
+      let begun = await beginOperationRecord(root, {
+        connectionId,
+        operationId,
+        requestHash,
+        now: startedAt,
+      });
+      if (!begun.created) {
+        const existing = begun.existing;
+        if (existing.requestHash !== requestHash) {
+          return conflict(command, "同じ操作IDで内容の異なる要求です。前回の結果を返せません。");
         }
-        return previous.result;
+        if (existing.status === "DONE" && existing.result) return existing.result;
+        if (isOperationInFlight(existing, startedAt)) return inFlight(command);
+        // 途中で落ちた前回の書込み。結果は返っていないので、やり直してよい（版は内容アドレス）。
+        begun = await beginOperationRecord(root, {
+          connectionId,
+          operationId,
+          requestHash,
+          now: startedAt,
+          takeOver: true,
+        });
       }
 
       // 期待版から派生させる。期待版がストアに無ければ、別の版へ重ねずに CONFLICT。
@@ -209,13 +248,13 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
         ? await readRevision(root, connectionId, command.expectedSourceRevision)
         : "NOT_FOUND";
       if (base === "NOT_FOUND") {
-        return record(connectionId, operationId, requestHash, {
-          operation: { ...command.operation },
-          kind: "CONFLICT",
-          revisionCheckEnforced: true,
-          mappings: [],
-          detail: "期待した版の管理版がストアにありません。",
-        });
+        return record(
+          connectionId,
+          operationId,
+          requestHash,
+          startedAt,
+          conflict(command, "期待した版の管理版がストアにありません。"),
+        );
       }
       const dayOfSchedule = (base.manifest.days ?? []).find(
         (day) => day.scheduleId === command.scheduleId.toLowerCase(),
@@ -225,6 +264,7 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
           connectionId,
           operationId,
           requestHash,
+          startedAt,
           refused(command, "指定された勤務表IDは、この管理版の対象月に含まれていません。"),
         );
       }
@@ -232,7 +272,13 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
       // 次の版の入力を作り、CSVの検査（形式・スタッフ・職種・15分刻み・最長時間・完全性）を通す。
       const built = buildUpdatedInput(base, command);
       if (!built.ok) {
-        return record(connectionId, operationId, requestHash, refused(command, built.detail));
+        return record(
+          connectionId,
+          operationId,
+          requestHash,
+          startedAt,
+          refused(command, built.detail),
+        );
       }
       let next: MonthlyCsv;
       try {
@@ -240,7 +286,13 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
       } catch (error) {
         if (error instanceof TaskcalError) {
           // 検査で弾いた。外部作用の前なので確定した「未反映」。
-          return record(connectionId, operationId, requestHash, refused(command, error.message));
+          return record(
+            connectionId,
+            operationId,
+            requestHash,
+            startedAt,
+            refused(command, error.message),
+          );
         }
         throw error;
       }
@@ -272,7 +324,7 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
             ? "出力のみモード。元原本には反映していません。"
             : "検査済みの作業用CSVを作りました。正式採用はまだです。",
       };
-      return record(connectionId, operationId, requestHash, result);
+      return record(connectionId, operationId, requestHash, startedAt, result);
     },
 
     async getUpdateResult(ref: {
@@ -286,7 +338,8 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
       }
       const stored = await readOperationRecord(root, ref.connectionId, ref.operationId);
       if (stored === "NOT_FOUND") {
-        // 記録は成果物の後に書く。無ければ成果物は報告されておらず、反映していない。
+        // マーカーは成果物を書く**前**に排他的に作る。無ければこの操作は一度も始まっておらず、
+        // 成果物も無い。「未実行の確認」（RFC-010 §7）が取れた状態。
         return {
           operation: {
             operationId: ref.operationId,
@@ -302,6 +355,27 @@ export function createCsvScheduleGateway(options: CsvScheduleGatewayOptions = {}
       }
       if (ref.expectedRequestHash && ref.expectedRequestHash !== stored.requestHash) {
         return "CONFLICT";
+      }
+      if (stored.status !== "DONE" || !stored.result) {
+        const operation = { operationId: ref.operationId, requestHash: stored.requestHash };
+        if (isOperationInFlight(stored, clock.now())) {
+          // 書込み側がまだ生きている。未反映と断定せず、成否不明として待たせる。
+          return {
+            operation,
+            kind: "UNKNOWN",
+            revisionCheckEnforced: false,
+            mappings: [],
+            detail: "この操作はまだ実行中です。結果が確定するまで待ってください。",
+          };
+        }
+        // 途中で落ちた書込み。結果は呼出し元へ返っておらず、正式版参照が指すこともない。
+        return {
+          operation,
+          kind: "NOT_APPLIED",
+          revisionCheckEnforced: false,
+          mappings: [],
+          detail: "この操作は結果を残さずに止まっています。成果物は報告されていません。",
+        };
       }
       return stored.result;
     },

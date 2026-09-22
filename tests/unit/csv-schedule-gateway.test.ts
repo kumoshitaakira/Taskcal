@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { matchesExpected, plannedAbsences } from "@/application/adoption-check";
 import { createCsvScheduleGateway } from "@/adapters/csv/csv-schedule-gateway";
-import { artifactRefOf, readOperationRecord } from "@/adapters/csv/csv-store";
+import { artifactRefOf, beginOperationRecord, readOperationRecord } from "@/adapters/csv/csv-store";
 import { computeRequestHash } from "@/contracts/operation";
 import type {
   ApplyUpdateCommand,
@@ -229,6 +229,65 @@ describe("CSV管理版ストア上の ScheduleGateway", () => {
         expectedRequestHash: tampered.operation.requestHash,
       }),
     ).toBe("CONFLICT");
+  });
+
+  it("D07：同じ操作IDで内容の異なる2呼出しを同時に始めても、片方だけが保存され他方は CONFLICT", async () => {
+    const f = await fixture();
+    const operationId = `apply:${randomUUID()}`;
+    const a = command(f, { operationId });
+    const b = command(f, {
+      operationId,
+      additions: [{ ...a.additions[0], endAt: "2026-09-26T12:00:00.000Z" }],
+    });
+    const [ra, rb] = await Promise.all([f.gateway.applyUpdate(a), f.gateway.applyUpdate(b)]);
+    const kinds = [ra.kind, rb.kind].sort();
+    expect(kinds).toEqual(["CONFLICT", "PREPARED"]);
+    // 記録に残るのは勝った方の内容ハッシュだけ。負けた方の結果で上書きされない。
+    const stored = await readOperationRecord(f.root, CONNECTION, operationId);
+    expect(stored).not.toBe("NOT_FOUND");
+    const winner = ra.kind === "PREPARED" ? a : b;
+    expect(stored).toMatchObject({ status: "DONE", requestHash: winner.operation.requestHash });
+    expect(
+      await f.gateway.getUpdateResult({
+        operationId,
+        connectionId: CONNECTION,
+        expectedRequestHash: winner.operation.requestHash,
+      }),
+    ).toMatchObject({ kind: "PREPARED" });
+  });
+
+  it("A03：実行中の操作は照会で UNKNOWN。途中で落ちた古いマーカーだけを未反映とみなす", async () => {
+    const f = await fixture();
+    const operationId = `apply:${randomUUID()}`;
+    const hash = "a".repeat(64);
+    // 成果物を書く前のマーカーだけがある状態（書込み側が生きている）。
+    await beginOperationRecord(f.root, {
+      connectionId: CONNECTION,
+      operationId,
+      requestHash: hash,
+      now: new Date().toISOString(),
+    });
+    expect(
+      await f.gateway.getUpdateResult({ operationId, connectionId: CONNECTION }),
+    ).toMatchObject({ kind: "UNKNOWN" });
+    // 同じ操作IDの別の applyUpdate も成否不明を返し、重ねて書かない。
+    const again = await f.gateway.applyUpdate({
+      ...command(f, { operationId }),
+      operation: { operationId, requestHash: hash },
+    });
+    expect(again.kind).toBe("UNKNOWN");
+
+    // 5分以上前のマーカーは途中で落ちたもの。結果は返っていないので未反映。
+    await beginOperationRecord(f.root, {
+      connectionId: CONNECTION,
+      operationId,
+      requestHash: hash,
+      now: new Date(Date.now() - 10 * 60_000).toISOString(),
+      takeOver: true,
+    });
+    expect(
+      await f.gateway.getUpdateResult({ operationId, connectionId: CONNECTION }),
+    ).toMatchObject({ kind: "NOT_APPLIED" });
   });
 
   it("getUpdateResult：記録が無ければ未反映、接続を知らなければ照会不能", async () => {

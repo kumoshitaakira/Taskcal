@@ -32,6 +32,10 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
   let buildStart: (
     gateway: import("@/contracts/schedule-gateway").ScheduleGateway,
   ) => ReturnType<typeof import("@/application/start-outreach").startOutreach>;
+  let buildStartWithClock: (
+    gateway: import("@/contracts/schedule-gateway").ScheduleGateway,
+    clockNow: () => string,
+  ) => ReturnType<typeof import("@/application/start-outreach").startOutreach>;
   let fixture: CsvFixture;
   const extraFixtures: CsvFixture[] = [];
 
@@ -151,6 +155,21 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
       scheduleIds: { "2026-09-26": scheduleId },
     });
 
+    buildStartWithClock = (gateway, clockNow) =>
+      startOutreach({
+        cases: createPgAbsenceCaseRepository(),
+        outreaches,
+        outbox,
+        operations,
+        roster: createRosterEligibility(),
+        stores: createPgStoreRepository(),
+        staff: createPgStaffRepository(),
+        authoritative: createPgAuthoritativeScheduleRefRepository(),
+        gateway,
+        eligibility: createOutreachEligibility(),
+        clock: { now: clockNow },
+        ids: { next: () => randomUUID() },
+      });
     buildStart = (gateway) =>
       startOutreach({
         cases: createPgAbsenceCaseRepository(),
@@ -501,6 +520,37 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
     // 打診が積まれた後の同じ操作は再生になる。
     const again = await start({ operationId, caseId });
     expect(again).toMatchObject({ ok: true, started: 3, replayed: true });
+  });
+
+  it("成功済みの操作を、遅れて失敗した並行呼出しの拒否で上書きしない", async () => {
+    const operationId = `outreach:${caseId}`;
+    const first = await start({ operationId, caseId });
+    expect(first).toMatchObject({ ok: true, started: 3 });
+    // 同じ操作IDで、勤務表の読込みに失敗する側。REFUSED を書かず、成功結果を再生する。
+    const failing = buildStart({
+      loadSchedule: async () => {
+        throw new Error("EACCES: /secret/path");
+      },
+    } as unknown as import("@/contracts/schedule-gateway").ScheduleGateway);
+    const second = await failing({ operationId, caseId });
+    expect(second).toMatchObject({ ok: true, started: 3, replayed: true });
+    const { rows } = await withTransaction((tx) =>
+      tx.query<{ status: string }>("select status from operation_result where operation_id = $1", [
+        operationId,
+      ]),
+    );
+    expect(rows[0]?.status).toBe("SUCCEEDED");
+  });
+
+  it("勤務表の読込み中に期限を過ぎたら、取引Bで期限を再検査して打診を積まない", async () => {
+    // 時計：取引Aでは期限前、取引Bでは期限後。
+    let calls = 0;
+    const late = buildStartWithClock(fixture.gateway, () =>
+      ++calls <= 1 ? now : "2026-09-26T16:30:00+09:00",
+    );
+    const result = await late({ operationId: `so-${randomUUID()}`, caseId });
+    expect(result).toMatchObject({ ok: false, code: "DEADLINE_EXCEEDED" });
+    expect(Object.keys(await outreachStates())).toHaveLength(0);
   });
 
   it("A09の入口：月内入力が完全でなければ打診を始めない（欠けた日を0と推定しない）", async () => {

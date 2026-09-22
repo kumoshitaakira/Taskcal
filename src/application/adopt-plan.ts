@@ -617,6 +617,14 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           );
         }
 
+        // ADR-026：同月の参照行を決定的な順序で先にロックする。対象日だけ先にロックして
+        // 他の行を更新すると、別営業日の採用と互いに待ってデッドロックになる。
+        await deps.authoritative.lockMonth(tx, {
+          connectionId: snapshot.connectionId,
+          scheduleId: snapshot.scheduleId,
+          month: snapshot.businessDate.slice(0, 7),
+        });
+
         // A04：期待版付きで正式版参照を差し替える。読んでから書くまでの間に別の採用が
         // 通っていれば、1行も更新されない。
         const swapped = await deps.authoritative.swap(tx, {
@@ -649,10 +657,10 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           adoptedAt: now,
           adoptedByScheduleUpdateId: input.update.scheduleUpdateId,
         });
-        if (siblings.stale > 0) {
+        if (siblings.stale > 0 || siblings.missing > 0) {
           throw new AdoptRollback(
             ERROR_CODES.REVISION_CONFLICT,
-            `同月の正式版参照 ${siblings.stale} 件が別の版を指しています。全件を未採用のまま戻します。`,
+            `同月の正式版参照が整合していません（別の版 ${siblings.stale} 件、参照なし ${siblings.missing} 件）。全件を未採用のまま戻します。`,
           );
         }
 

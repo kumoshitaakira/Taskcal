@@ -181,13 +181,38 @@ export async function importRevision(
   return { parsed, stored };
 }
 
-/** `applyUpdate` の記録。照会（`getUpdateResult`）と再生はこれを読む。 */
+/**
+ * `applyUpdate` の記録。照会（`getUpdateResult`）と再生はこれを読む。
+ *
+ * **成果物を書く前に `IN_PROGRESS` で排他的に作り**（`wx`）、書き終えたら `DONE` に置き換える。
+ * 記録が無い＝この操作は一度も始まっていない、と言えるのはこの順序があるから。
+ * 同じ操作IDの並行呼出しは、作成に負けた側が既存の記録を読んで内容ハッシュを照合する
+ * （同じなら進行中／再生、違えば CONFLICT）。後勝ちの上書きは起きない。
+ */
 export interface StoredCsvOperation {
   readonly connectionId: string;
   readonly operationId: string;
   readonly requestHash: RequestHash;
-  readonly result: UpdateResult;
-  readonly recordedAt: string;
+  readonly status: "IN_PROGRESS" | "DONE";
+  /** マーカーを作った時刻。実行中か、途中で落ちたかの判断に使う。 */
+  readonly startedAt: string;
+  /** `DONE` のときだけ。 */
+  readonly result?: UpdateResult;
+  readonly recordedAt?: string;
+}
+
+/**
+ * これより古い `IN_PROGRESS` は「途中で落ちた」とみなす。ローカルの管理版ストアへの書込みは
+ * 数秒で終わるので、この時間を超えて生きている書込み側は想定しない。落ちた書込み側は結果を
+ * 呼出し元へ返していないので、その成果物が採用されていることもない。
+ */
+export const OPERATION_IN_FLIGHT_MS = 5 * 60_000;
+
+export function isOperationInFlight(record: StoredCsvOperation, now: string): boolean {
+  return (
+    record.status === "IN_PROGRESS" &&
+    Date.parse(now) - Date.parse(record.startedAt) < OPERATION_IN_FLIGHT_MS
+  );
 }
 
 export async function readOperationRecord(
@@ -205,13 +230,61 @@ export async function readOperationRecord(
   return record;
 }
 
-/** 記録を書く。一時ファイルへ書いて rename する（半端な記録を残さない）。 */
-export async function writeOperationRecord(
+/**
+ * 実行中マーカーを**排他的に**作る（`wx`）。既にあれば `EXISTS` と既存の記録を返し、
+ * 呼出し元が内容ハッシュを照合する。`takeOver` は途中で落ちた古いマーカーの置き換え。
+ */
+export async function beginOperationRecord(
   root: string,
-  record: StoredCsvOperation,
-): Promise<void> {
-  const file = operationFile(root, record.connectionId, record.operationId);
+  input: {
+    connectionId: string;
+    operationId: string;
+    requestHash: RequestHash;
+    now: string;
+    takeOver?: boolean;
+  },
+): Promise<
+  { readonly created: true } | { readonly created: false; readonly existing: StoredCsvOperation }
+> {
+  const file = operationFile(root, input.connectionId, input.operationId);
   await mkdir(path.dirname(file), { recursive: true });
+  const marker: StoredCsvOperation = {
+    connectionId: input.connectionId,
+    operationId: input.operationId,
+    requestHash: input.requestHash,
+    status: "IN_PROGRESS",
+    startedAt: input.now,
+  };
+  if (input.takeOver) {
+    await writeAtomically(file, marker);
+    return { created: true };
+  }
+  try {
+    await writeFile(file, JSON.stringify(marker, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
+    return { created: true };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const existing = await readOperationRecord(root, input.connectionId, input.operationId);
+    if (existing === "NOT_FOUND") {
+      // 別の接続・操作IDの写像が衝突した。ここでは扱えない。
+      throw new TaskcalError(
+        ERROR_CODES.OPERATION_CONFLICT,
+        "操作記録の保存名が別の操作と衝突しています。",
+      );
+    }
+    return { created: false, existing };
+  }
+}
+
+/** 結果を確定させる。マーカーを `DONE` の記録で置き換える（一時ファイル → rename）。 */
+export async function completeOperationRecord(
+  root: string,
+  record: StoredCsvOperation & { status: "DONE"; result: UpdateResult; recordedAt: string },
+): Promise<void> {
+  await writeAtomically(operationFile(root, record.connectionId, record.operationId), record);
+}
+
+async function writeAtomically(file: string, record: StoredCsvOperation): Promise<void> {
   const staging = `${file}.staging-${process.pid}-${Date.now()}`;
   await writeFile(staging, JSON.stringify(record, null, 2) + "\n", "utf8");
   await rename(staging, file);

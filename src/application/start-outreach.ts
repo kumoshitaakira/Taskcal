@@ -94,6 +94,23 @@ async function refuse(
   code: ErrorCode,
   detail: string,
 ) {
+  // **確定済みの結果を上書きしない。** 同じ操作IDの並行呼出しが先に打診を積んで
+  // `SUCCEEDED` にしていれば、こちらの拒否理由（勤務表を読めない等）で戻してはいけない。
+  // 確定済みならその結果を再生する。
+  const stored = await deps.operations.findById(tx, operationId);
+  if (stored !== "NOT_FOUND" && stored.status !== "IN_PROGRESS") {
+    if (stored.status === "SUCCEEDED") {
+      const result = stored.result as { started?: number; excluded?: number } | undefined;
+      return {
+        ok: true as const,
+        started: result?.started ?? 0,
+        excluded: result?.excluded ?? 0,
+        replayed: true,
+      };
+    }
+    const previous = stored.result as { code?: ErrorCode; detail?: string } | undefined;
+    return fail(previous?.code ?? code, previous?.detail ?? detail);
+  }
   await deps.operations.complete(tx, {
     operationId,
     status: "REFUSED",
@@ -276,6 +293,17 @@ export function startOutreach(deps: StartOutreachDeps) {
           command.operationId,
           ERROR_CODES.REVISION_CONFLICT,
           "案件が並行して更新されました。読み直してください。",
+        );
+      }
+      // 期限は取引Aで見たが、勤務表の読込みの間に過ぎていることがある。案件版は時間の
+      // 経過では動かないので、時計を取り直してもう一度検査する（A18の期限側）。
+      if (Date.parse(deps.clock.now()) >= Date.parse(locked.deadlineAt)) {
+        return refuse(
+          deps,
+          tx,
+          command.operationId,
+          ERROR_CODES.DEADLINE_EXCEEDED,
+          "回答期限を過ぎています。",
         );
       }
       if ((await deps.outreaches.listByCase(tx, command.caseId)).length > 0) {

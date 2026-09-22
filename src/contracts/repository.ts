@@ -638,8 +638,9 @@ export interface AuthoritativeScheduleRefRepository {
    * 採用済みの代替勤務を月次上限に数えない（A01／A09）。
    *
    * `fromSourceRevision` を指す行だけを進め、それ以外の版を指す行が同月に残っていれば
-   * `stale` で返す。呼出し元は `stale > 0` なら採用取引ごと巻き戻す——参照の整合が
-   * 取れていない状態で一部だけを新版にしない（D06）。
+   * `stale`、参照を持たない営業日（`schedule` 行はあるが参照が無い）があれば `missing` で返す。
+   * 呼出し元はどちらも 0 でなければ採用取引ごと巻き戻す——参照の整合が取れていない状態で
+   * 一部だけを新版にしない（D06）。同店舗の行だけを対象にする。
    */
   advanceSiblings(
     tx: TxHandle,
@@ -655,7 +656,18 @@ export interface AuthoritativeScheduleRefRepository {
       adoptedAt: string;
       adoptedByScheduleUpdateId: string;
     },
-  ): Promise<{ readonly updated: number; readonly stale: number }>;
+  ): Promise<{ readonly updated: number; readonly stale: number; readonly missing: number }>;
+  /**
+   * ADR-026：同月・同店舗の参照行を**決定的な順序で**全て行ロックする。`swap` の前に呼ぶ。
+   *
+   * 対象日の行を先にロックして他の行を更新すると、別営業日の採用と互いに相手の行を待ち、
+   * デッドロックになる。全行を `schedule_id` 順にロックすれば、後から来た方が待つだけになる。
+   * 戻り値はロックした行数。
+   */
+  lockMonth(
+    tx: TxHandle,
+    input: { connectionId: ConnectionId; scheduleId: ScheduleId; month: string },
+  ): Promise<number>;
 }
 
 // ---------------------------------------------------------------------------

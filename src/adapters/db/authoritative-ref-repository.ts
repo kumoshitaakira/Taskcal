@@ -124,7 +124,43 @@ export function createPgAuthoritativeScheduleRefRepository(): AuthoritativeSched
             and r.source_revision <> $4`,
         [input.connectionId, monthStart, nextMonthStart, input.sourceRevision, input.scheduleId],
       );
-      return { updated: updated.rowCount ?? 0, stale: stale.rows[0]?.n ?? 0 };
+      // 参照を持たない営業日。取り込んでいない日が同月に混ざっていると、次の案件が読めない。
+      const missing = await tx.query<{ n: number }>(
+        `select count(*)::int as n
+           from schedule s
+          where s.store_id = (select store_id from schedule where schedule_id = $2)
+            and s.business_date >= $3 and s.business_date < $4
+            and not exists (
+              select 1 from authoritative_schedule_ref r
+               where r.schedule_id = s.schedule_id and r.connection_id = $1)`,
+        [input.connectionId, input.scheduleId, monthStart, nextMonthStart],
+      );
+      return {
+        updated: updated.rowCount ?? 0,
+        stale: stale.rows[0]?.n ?? 0,
+        missing: missing.rows[0]?.n ?? 0,
+      };
+    },
+
+    async lockMonth(handle: TxHandle, input) {
+      const tx = handle as Tx;
+      const [year, index] = input.month.split("-").map(Number);
+      const monthStart = `${input.month}-01`;
+      const nextMonthStart =
+        index === 12 ? `${year + 1}-01-01` : `${year}-${String(index + 1).padStart(2, "0")}-01`;
+      // 決定的な順序（schedule_id）で全行をロックする。並行する採用は同じ順で待つ。
+      const { rowCount } = await tx.query(
+        `select r.schedule_id
+           from authoritative_schedule_ref r
+           join schedule s on s.schedule_id = r.schedule_id
+          where r.connection_id = $1
+            and s.store_id = (select store_id from schedule where schedule_id = $2)
+            and s.business_date >= $3 and s.business_date < $4
+          order by r.schedule_id
+          for update`,
+        [input.connectionId, input.scheduleId, monthStart, nextMonthStart],
+      );
+      return rowCount ?? 0;
     },
   };
 }

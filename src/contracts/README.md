@@ -116,8 +116,10 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
   記録から消えないようにするため。
 - `ScheduleGateway`：`src/adapters/csv/csv-schedule-gateway.ts`（管理版ストアは `csv-store.ts`）。
   能力の意味と「記録が無い＝未反映」の限定はファイル冒頭とADR-026にある。
-- `AuthoritativeScheduleRefRepository.advanceSiblings`：管理版が月単位、参照が営業日単位なので、
-  採用取引で同月の他営業日の参照も同じ版へ進める（ADR-026、A01／A09）。`swap` の後に必ず呼ぶ。
+- `AuthoritativeScheduleRefRepository.lockMonth` / `advanceSiblings`：管理版が月単位、参照が営業日単位
+  なので、採用取引で同月の参照行を決定的な順序で先にロックし（`lockMonth`、デッドロック防止）、
+  `swap` の後に他営業日の参照も同じ版へ進める（`advanceSiblings`。旧版以外や参照なしの営業日が
+  あれば巻き戻す）（ADR-026、A01／A09）。
 - `toJstFixedFormat` は `src/domain/interval/` へ移し、application と CSV adapter が共有する。
 - `LoadedSchedule.declaredStaffIds`（任意）：月内入力が揃っていると言えるスタッフ集合（CSVの範囲宣言）。
   月次上限の対象集合はここから作り、名簿や選定対象から作らない。宣言に無い相手を「勤務0件＝残枠あり」
