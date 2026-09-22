@@ -9,7 +9,7 @@ describe("migration files（静的検証）", () => {
   it("番号付きSQLを重複なく連番順に読み込む", async () => {
     const migrations = await loadMigrationFiles();
     const ids = migrations.map((migration) => migration.id);
-    expect(ids[0]).toBe("0001_worker_runtime");
+    expect(ids).toContain("0001_worker_runtime");
     expect(ids).not.toContain("0002_schedule_update");
     expect(ids).not.toContain("0003_outbound_operations");
     expect(new Set(migrations.map((migration) => migration.id)).size).toBe(migrations.length);
@@ -78,7 +78,8 @@ describe("migration files（静的検証）", () => {
   it("通常runnerの適用対象とA確認待ち下書きを分離する", async () => {
     const approved = await loadMigrationFiles();
     const drafts = await loadDraftMigrationFiles();
-    expect(approved.map((migration) => migration.id)).toEqual(["0001_worker_runtime"]);
+    expect(approved.map((migration) => migration.id)).not.toContain("0002_schedule_update");
+    expect(approved.map((migration) => migration.id)).not.toContain("0003_outbound_operations");
     expect(drafts.map((migration) => migration.id)).toEqual([
       "0002_schedule_update",
       "0003_outbound_operations",

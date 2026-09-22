@@ -55,6 +55,6 @@
 
 `tests/unit/migration-files.test.ts` は承認済みmigrationと下書きの分離、SQL内の取引制御語、
 禁止された最終schemaの作成、今回追加した制約と状態語彙を静的に検査する。
-`tests/integration/db-repository.test.ts` はfresh schemaへ両方を明示適用し、PostgreSQLの
+`tests/integration/db-repository.test.ts` はfresh schemaへapproved bootstrapとdraftを明示適用し、PostgreSQLの
 CHECK・部分unique index・repositoryの同時insert／再起動／単調遷移を検証する。
 `DATABASE_URL`が無い場合はテストをスキップし、stderrへ未実行と記録する。未実行を合格とは扱わない。

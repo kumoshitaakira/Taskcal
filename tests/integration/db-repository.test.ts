@@ -37,7 +37,15 @@ describe.skipIf(!connectionString)("PostgreSQL repository境界（DATABASE_URL �
     try {
       await client.query(`create schema "${schema}"`);
       await client.query(`set search_path to "${schema}"`);
-      const files = [...(await loadMigrationFiles()), ...(await loadDraftMigrationFiles())];
+      const approvedBootstrap = (await loadMigrationFiles()).find(
+        (file) => file.id === "0001_worker_runtime",
+      );
+      if (!approvedBootstrap) {
+        throw new Error("承認済みmigrationに0001_worker_runtimeがありません。");
+      }
+      // A側の承認済み業務migrationにはScheduleUpdateが含まれる場合があるため、
+      // B draftとの同名table衝突を避け、draft境界だけを独立schemaへ適用する。
+      const files = [approvedBootstrap, ...(await loadDraftMigrationFiles())];
       for (const file of files) await client.query(file.sql);
     } finally {
       client.release();
@@ -56,7 +64,7 @@ describe.skipIf(!connectionString)("PostgreSQL repository境界（DATABASE_URL �
     await pool.end();
   });
 
-  it("fresh DBへapproved migrationとdraft migrationを明示適用すると全表が作られる", async () => {
+  it("fresh DBへapproved bootstrapとdraft migrationを明示適用すると全表が作られる", async () => {
     const client = await connectInSchema(pool, schema);
     try {
       const { rows } = await client.query<{ table_name: string }>(

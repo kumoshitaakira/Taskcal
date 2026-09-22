@@ -61,8 +61,7 @@ CSV原本の取込み・正規化（担当B、`src/adapters/csv/`）は未実装
 
 ## 適用対象と下書きの分離
 
-通常のrunnerはこのディレクトリ直下のSQLだけを読み込む。現在はA承認済みの
-`0001_worker_runtime.sql`だけが適用対象である。`drafts/0002_schedule_update.sql` と
+通常のrunnerはこのディレクトリ直下の承認済みSQLだけを読み込む。`drafts/0002_schedule_update.sql` と
 `drafts/0003_outbound_operations.sql` はrepository境界を検討するための**仮置き・A確認待ち**で、
 `loadDraftMigrationFiles()`と静的／明示的な結合テストからだけ読み込む。Aの承認前にmigrationを
 完成済み・統合済みとは扱わない。
