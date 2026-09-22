@@ -1,5 +1,46 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：Day 3（担当A）— 適格性の再検査を担当Bの規則へ繋いだ（Q15）
+
+担当Bの承認を得たので、`EligibilityChecker.recheck` の契約を変えて
+`evaluateCandidateEligibility`（`src/domain/interval/`）へ繋いだ。**正式採用の直前に、
+在籍・店舗・職種・本人除外・勤務の重複・月次上限が実際に検査されるようになった**（D08 / A09）。
+
+- `EligibilityRecheckInput` へ `businessDate` / `absentStaffId` / `monthlySchedule` /
+  `staffProfiles` を足した。`recheck` は**同期のまま**。口の中でDBやGatewayを引く形に
+  すると、外部待ちを取引の中へ持ち込む（RFC-010 §5）。
+- `src/contracts/selection.ts` は `MonthlyScheduleSnapshot` と `StaffProfile` を
+  `@/domain/interval` から**型だけ**取り込む（`import type`）。実行時の依存は増えない。
+  契約側で同じ形を書き写すと、片方だけが変わったときに黙って食い違う。
+- 実装は `src/application/eligibility-recheck.ts`。規則は書き直さず、結果を選定の語彙へ
+  写すだけにした。`OUT_OF_SCOPE`（Q03：空きの分断）は「覆えなかった」へ寄せず、例外で
+  返して明示的に拒否させる（A17：黙って一区間へ丸めない）。
+- **入力は採用の直前に取り直したものを使う**（D08）。`adopt-plan.ts` が手順5の前段で
+  読み直した月内勤務表をそのまま渡す。選定時に固定した値は使わない。
+- `createUnimplementedEligibilityRecheck` と、テストの `createFakeEligibilityRecheck` を
+  削除した。`adopt-plan.test.ts` は**本物の規則**を通す。
+
+### 時刻の形式を境界でそろえた
+
+担当Bの規則は `YYYY-MM-DDTHH:MM:00+09:00`（Asia/Tokyo固定）だけを受け取り、こちらの
+永続層は `Date.toISOString()`（UTC・ミリ秒つき）を返す。`toJstFixedFormat` で写す。
+**秒未満を含む値は黙って丸めず、範囲外として断る**——切り捨てると、検査した区間と実際に
+確定する勤務がずれる。
+
+### 可能時間は検査していない
+
+可能時間表がリポジトリに無い（列も表も無い）。`availabilityWindows` には**本人が承諾した
+区間**を入れている（ADR-014 / Q09：本人の返信が唯一の根拠）。したがって可能時間の検査は
+事実上恒真で、**「可能時間を検査した」とは言えない**。README の「動かないもの」と
+`runtime-status` に残した。A17のうち可能時間に由来する分断は扱えない。
+
+### テストが空振りしていたのを直した
+
+重複のテストを最初「理由の語（`OVERLAP`）が含まれること」で書いたが、**DBの排他制約の
+文面にも `OVERLAP` が入る**ため、再検査を盲目にしても素通りした。どの検査が止めたかまで
+見るよう直し、月次上限・重複・在籍のそれぞれについて、検査を外すと実際に落ちることを
+確認した。
+
 ## 2026-09-22：Day 3（担当A）— 停止・期限・復旧を本番経路へ通した
 
 ADR-022 で確定した三つの経路（Q11・Q12・Q13）は、判定関数が `src/contracts/case-state.ts`

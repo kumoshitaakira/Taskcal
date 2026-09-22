@@ -28,7 +28,8 @@ import type {
 import type { ShiftAssignmentRepository } from "@/contracts/repository";
 import { computeRequestHash } from "@/contracts/operation";
 import { FakeScheduleGateway } from "../stubs/fake-gateways";
-import { createFakeEligibilityRecheck, createFakeSelectionPlanner } from "../fakes/selection";
+import { createFakeSelectionPlanner } from "../fakes/selection";
+import { createEligibilityRecheck } from "@/application/eligibility-recheck";
 
 loadDotenv({ path: ".env.local", quiet: true });
 
@@ -74,6 +75,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     assignments: ShiftAssignmentRepository;
     schedules: import("@/adapters/db/schedule-repository").ScheduleReadRepository;
     outbox: import("@/contracts/repository").OutboxRepository;
+    staff: import("@/contracts/repository").StaffRepository;
     operations: import("@/contracts/repository").OperationResultStore;
   };
 
@@ -147,14 +149,16 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     gateway?: ScheduleGateway;
     assignments?: ShiftAssignmentRepository;
     planner?: ReturnType<typeof createFakeSelectionPlanner>;
-    eligibility?: ReturnType<typeof createFakeEligibilityRecheck>;
+    eligibility?: Pick<import("@/contracts/selection").EligibilityChecker, "recheck">;
   }) {
     return adoptPlan({
       ...repos,
       assignments: options.assignments ?? repos.assignments,
       gateway: options.gateway ?? newGateway(),
       planner: options.planner ?? createFakeSelectionPlanner(),
-      eligibility: options.eligibility ?? createFakeEligibilityRecheck(),
+      // **台ではなく本物の規則を通す**（Q15）。月次上限・重複・在籍はここで実際に
+      // 検査される。可能時間は承諾した区間を渡すため事実上恒真（`eligibility-recheck.ts`）。
+      eligibility: options.eligibility ?? createEligibilityRecheck(),
       clock: { now: () => NOW },
       ids: { next: () => randomUUID() },
     });
@@ -323,6 +327,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
         await import("@/adapters/db/schedule-repository")
       ).createPgScheduleReadRepository(),
       outbox: (await import("@/adapters/db/outbox-repository")).createPgOutboxRepository(),
+      staff: (await import("@/adapters/db/store-repository")).createPgStaffRepository(),
       operations: (
         await import("@/adapters/db/operation-result-store")
       ).createPgOperationResultStore(),
@@ -360,6 +365,13 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
 
     await withTransaction(async (tx) => {
       await cleanup(tx);
+
+      // スタッフ条件は beforeAll で作るが、適格性の再検査のテストが書き換える。
+      // 毎回戻さないと、上限や在籍の変更が後続のテストへ漏れる。
+      await tx.query(
+        "update staff set monthly_cap_minutes = 9600, active = true where store_id = $1",
+        [storeId],
+      );
 
       await tx.query(
         `insert into shift_assignment
@@ -1069,6 +1081,96 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     const notSelected = bodies.find((row) => row.kind === "NOT_SELECTED");
     expect(notSelected?.body).toContain("次回の打診に影響しません");
     expect(notSelected?.body).not.toContain("理由");
+  });
+
+  it("A09：月次割当上限を超える計画を、採用の直前で止める（Q06 / Q15）", async () => {
+    // 上限を、必要枠の4時間より短くする。選定は通るが、採用の直前の再検査で外れる。
+    await withTransaction((tx) =>
+      tx.query("update staff set monthly_cap_minutes = 60 where staff_id = any($1::uuid[])", [
+        candidates,
+      ]),
+    );
+
+    const result = await build({})({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    expect(result.ok === false && result.detail).toContain(
+      "適格性の再検査で外れました（MONTHLY_CAP）",
+    );
+    // 検査で外れた計画の勤務を作らない。
+    expect(await additionalShifts()).toHaveLength(0);
+    expect(await refRow()).toMatchObject({ version: 1 });
+  });
+
+  it("A09：既存の勤務と重なる計画を、採用の直前で止める（Q15）", async () => {
+    // 候補の一人に、必要枠と重なる別の勤務を月内勤務表へ入れておく。
+    const conflicting = randomUUID();
+    await withTransaction((tx) =>
+      tx.query(
+        `insert into shift_assignment
+           (shift_assignment_id, schedule_id, store_id, staff_id, role_code,
+            start_at, end_at, status)
+         values ($1, $2, $3, $4, 'FLOOR', $5, $6, 'SCHEDULED')`,
+        [conflicting, scheduleId, storeId, candidates[0], SHIFT_START, SHIFT_END],
+      ),
+    );
+    const gateway = newGateway();
+    gateway.setCurrentSchedule({
+      scheduleId,
+      sourceRevision: REVISION,
+      requestedRange: { fromDate: "2026-09-01", toDate: "2026-10-01" },
+      completeness: "COMPLETE",
+      missingDates: [],
+      assignments: [
+        {
+          shiftAssignmentId: absentShift,
+          staffId: absentStaff,
+          roleCode: "FLOOR",
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+          status: "SCHEDULED",
+        },
+        {
+          shiftAssignmentId: conflicting,
+          staffId: candidates[0],
+          roleCode: "FLOOR",
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+          status: "SCHEDULED",
+        },
+      ],
+    });
+
+    const result = await build({ gateway })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    // **理由の語だけを見ない。** DBの排他制約の文面にも OVERLAP が入るので、
+    // 再検査を外しても素通りしてしまう。どの検査が止めたかまで見る。
+    expect(result.ok === false && result.detail).toContain("適格性の再検査で外れました（OVERLAP）");
+    expect(await additionalShifts()).toHaveLength(0);
+  });
+
+  it("A09：在籍していないスタッフの承諾を採用しない（Q15）", async () => {
+    await withTransaction((tx) =>
+      tx.query("update staff set active = false where staff_id = $1", [candidates[0]]),
+    );
+
+    const result = await build({})({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    expect(result.ok === false && result.detail).toContain(
+      "適格性の再検査で外れました（NOT_COVERED）",
+    );
+    expect(await additionalShifts()).toHaveLength(0);
   });
 
   it("月内入力が完全でなければ、採用の直前で止める（Q06 / A09）", async () => {

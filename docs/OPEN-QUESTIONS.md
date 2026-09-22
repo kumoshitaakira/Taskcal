@@ -21,7 +21,7 @@
 | Q12 | 復旧しない`Attention`の終端 | **確定**：`Attention → HandedOff`を追加（条件はADR-022） | 現在`Attention`から終端へ行けず、読戻し・通知が復旧しない案件が永久に非終端になる。A13/A18の「既確定の事実を保持して引き継ぐ」を状態で表現できない | 2026-09-21 |
 | Q13 | 正式採用準備中の上限到達 | **確定**：`Preparing → HandedOff`を追加。未採用を確認できた場合に限る（条件はADR-022） | 現在`Preparing`から`HandedOff`へ行けない。正式採用の準備中に予算・期限が尽きた場合の経路が無い | 2026-09-21 |
 | Q14 | 受入fixtureとapplicationを結ぶ共通契約 | **未決**：既存のCommitment、SelectionResult、永続化ReplyInterpretationの契約草案とfixtureの対応付け、SelectionResultRepository／ScheduleUpdateRepository、worker lease/fenceをA・Bで共同確認する | `src/contracts/README.md`の共同所有・未固定の境界に残っている。Bが一方的に業務契約を追加してはならない | 未定 |
-| Q15 | 適格性の再検査へ渡す入力 | **未決**：`EligibilityRecheckInput`が月内の実割当・可能時間を持たない。担当Bの確認が必要（ADR-021） | Day 3（2026-09-22）に判明。**決める時点：Day 4の結合作業の冒頭**。下記「Q15」を参照 | — |
+| Q15 | 適格性の再検査へ渡す入力 | **確定**：案1（`EligibilityRecheckInput`へ月内勤務表とスタッフ条件を足し、`recheck`は同期のまま） | 担当B承認済み。可能時間は承諾した区間で代用し、**可能時間そのものは未検査** | 2026-09-22 |
 
 ## 確定した選択
 
@@ -269,34 +269,36 @@ Q11〜Q13はRFC-011 §5の状態図に出口が無い経路で、2026-09-21の�
 
 Q07は業務完了の時点だけが未決。案件・相手別対話・勤務表更新・メッセージ配送の状態を分離する方針は[ADR-017](adr/ADR-017-state-boundaries.md)で承認済み。
 
-### Q15：適格性の再検査へ渡す入力（未決・担当Bの確認待ち）
+### Q15：適格性の再検査へ渡す入力
 
-**状態：未決。決める時点はDay 4の結合作業の冒頭。** `src/contracts/selection.ts` の変更を伴うため、
-ADR-021によりBの確認が要る。合意前に変えない。期限を置かないとDay 4に持ち越したまま消える。
+**確定（2026-09-22・担当B承認済み）：案1を採用した。**
 
-`EligibilityChecker.recheck` は正式採用の直前にもう一度通す（D08）。しかし
+**経緯**：`EligibilityChecker.recheck` は正式採用の直前にもう一度通す（D08）。だが
 `EligibilityRecheckInput` が持つのは `SelectionInputs`——すなわち `monthlyCompleteness` と
-`missingDates` だけで、**月内の実際の割当も本人の可能時間も持たない**。
-
+`missingDates` だけで、月内の実際の割当も本人の可能時間も持たなかった。
 PR #9 で入った `evaluateCandidateEligibility`（`src/domain/interval/index.ts`）は
-`MonthlyScheduleSnapshot`（月内の割当とスタッフ条件）を要求する。いまの契約のままでは
-繋げないため、`createUnimplementedEligibilityRecheck` を残している。
+`MonthlyScheduleSnapshot`（月内の割当とスタッフ条件）を要求するため、契約のままでは
+繋げず、`recheck` は `NOT_IMPLEMENTED` を投げ続けていた。
 
-検討する選択：
+`EligibilityChecker.recheck` は**同期のまま**にし、必要な入力を呼出し側が渡す。
+`EligibilityRecheckInput` へ `businessDate` / `absentStaffId` / `monthlySchedule` /
+`staffProfiles` を足した。実装は `src/application/eligibility-recheck.ts` で、規則そのものは
+担当Bの `evaluateCandidateEligibility`（`src/domain/interval/`）を通す。
 
-1. `EligibilityRecheckInput` へ `MonthlyScheduleSnapshot` を足す（`recheck` は同期のまま）
-2. `recheck` を非同期にし、実装側が必要な入力を取りに行く
-3. `recheck` を廃し、application 側が `evaluateCandidateEligibility` を直接呼ぶ
+**案2（`recheck`を非同期にして実装側が入力を取りに行く）を採らない理由**：口の中でDBや
+Gatewayを引くことになり、外部待ちを取引の中へ持ち込む（RFC-010 §5）。
+**案3（applicationが直接呼ぶ）を採らない理由**：「検査した前提」がapplication側へ散り、
+D08の再検査を一箇所で説明できなくなる。
 
-**1を初期推奨とする。** `recheck` を同期のまま保てば、外部待ちを取引の中へ持ち込まない
-（RFC-010 §5）。2は口の中でDBやGatewayを引くことになり、取引境界の規則が効かなくなる。
-3は「検査した前提」をapplication側に散らし、D08の再検査が一箇所で説明できなくなる。
+**条件：可能時間は検査していない。** 可能時間表がリポジトリに無いため、
+`availabilityWindows` には本人が承諾した区間を入れる（ADR-014 / Q09：本人の返信が
+唯一の根拠）。したがって可能時間の検査は事実上恒真であり、実際に効くのは在籍・店舗・
+職種・本人除外・勤務の重複・月次上限。**「可能時間を検査した」と書かないこと。**
+README の「動かないもの」と `runtime-status` に残している。
 
-どの案でも、`ScheduleGateway` が月内入力を返せるようになるまで本番経路では成立しない。
-契約だけ先に変えても `NOT_IMPLEMENTED` が `ScheduleGateway` 側へ移るだけなので、**Bの
-CSV Gatewayと同じ変更で入れる**のが望ましい。
-
-受入への影響：A09（月内入力不足）とA16・A17の期待値。いずれも未実行のまま。
+**受入への影響**：A09（月内入力不足・月次上限）は正式採用の直前で実際に検査するように
+なった。A17のうち可能時間に関する部分（空きの分断）は、承諾区間を既存勤務が分断する
+場合だけ `OUT_OF_SCOPE` として拒否する。可能時間表に由来する分断は扱えない。
 
 ## 外部情報の確認
 

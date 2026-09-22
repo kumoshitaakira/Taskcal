@@ -70,30 +70,35 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 | 不足 | 必要になる時点 | 関連 |
 |---|---|---|
 | worker の lease / fence token | 同じイベントの二重処理を防ぐ時 | ADR-006 |
-| `EligibilityChecker.recheck` へ最新の月内割当を渡す口 | 正式採用の直前に月次上限・重複を実際に検査する時 | D08、Q06、A09 |
+| 本人の可能時間の入力 | 可能時間で候補を絞る時（いまは承諾した区間で代用） | Q15、A17 |
 | 採用済み勤務の取消・変更 | 確定後の変更を扱う時（D10：別の変更操作にする） | RFC-009 D10 |
 
 `EligibilityChecker.recheck` は同期interfaceで、repositoryも取引ハンドルも取りません。
-そのため実装側は**採用直前の最新状態を自分で読めません**。現状、呼出し側は選定時に
-固定した入力版と選択済み承諾しか渡せず、月内割当そのものは渡していません。
-アプリ側では採用の直前に `loadSchedule` を呼び直して版と完全性を照合していますが、
-月次上限・勤務重複・在籍条件を実際に検査するには**この契約を変える必要があります**。
+実装側が口の中でDBやGatewayを引く形にすると、外部待ちを取引の中へ持ち込みます
+（RFC-010 §5）。そのため**必要な入力は呼出し側が渡します**。
 
-**2026-09-22：担当Bが別の形で実装しました。** `src/domain/interval/index.ts` の
-`evaluateCandidateEligibility` は `CandidateEligibilityInput` を取り、その中に
-`monthlySchedule: MonthlyScheduleSnapshot` を含みます。つまり**最新の月内割当を渡せる形**で、
-上に書いた不足はそちらでは解けています。ただし `EligibilityChecker` を実装しては
-いないため、`adopt-plan.ts` からは**繋がっていません**。
+**2026-09-22（Q15・担当B承認済み）：合流しました。** `EligibilityRecheckInput` へ
+`businessDate` / `absentStaffId` / `monthlySchedule` / `staffProfiles` を足し、
+`src/application/eligibility-recheck.ts` が担当Bの `evaluateCandidateEligibility`
+（`src/domain/interval/`）を通します。`recheck` は同期のままです。
 
-どちらの形に寄せるかは契約の変更であり、ADR-021により変更者でない側の確認が要ります。
-合流させるまで `roster-eligibility.ts` の `recheck` は `NOT_IMPLEMENTED` を投げ続けます
-（検査していないものを通ったことにしないため）。
+`selection.ts` は `MonthlyScheduleSnapshot` と `StaffProfile` を **`@/domain/interval` から
+型だけ取り込みます**（`import type`）。実行時の依存は増えません。契約側で同じ形を
+書き写すと、片方だけが変わったときに黙って食い違うためです。
+
+**可能時間は検査していません。** 可能時間表がリポジトリに無く、`availabilityWindows`
+には本人が承諾した区間を入れています（ADR-014 / Q09：本人の返信が唯一の根拠）。
+したがって可能時間の検査は事実上恒真で、実際に効くのは在籍・店舗・職種・本人除外・
+勤務の重複・月次上限です。README の「動かないもの」に残しています。
+
+時刻の形式は境界でそろえます。永続層は `Date.toISOString()`（UTC）、担当Bの規則は
+`YYYY-MM-DDTHH:MM:00+09:00`（Asia/Tokyo固定）です。`toJstFixedFormat` が写し、
+秒未満を含む値は**黙って丸めず**範囲外として断ります。
 
 `schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
-を指します。`selection.ts` の `SelectionPlanner` と `EligibilityChecker` は**担当Bが
-`src/domain/` で実装する口**です。適格性の計算は `src/domain/interval/` に入りましたが
-（上記）、この2つの契約を実装したものはまだありません。呼び出し側は未実装を成功として
-扱わず、`NOT_IMPLEMENTED` を返します。
+を指します。`selection.ts` の `SelectionPlanner` は**担当Bが `src/domain/selection/` で
+実装する口**で、まだ実装がありません。呼び出し側は未実装を成功として扱わず、
+`NOT_IMPLEMENTED` を返します。`EligibilityChecker.recheck` は上記のとおり合流済みです。
 
 `worker_heartbeat`（migration 0001）は生存確認だけで、二重処理を防ぐ仕組みではありません。
 `worker_name` が主キーのため、同名workerが2本立っても upsert で上書きされ、`/api/health`

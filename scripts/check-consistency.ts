@@ -139,6 +139,10 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
       "src/application/recover-case.ts",
     ],
   },
+  // Q15：担当Bの適格性規則。合成の根から本番経路へ通っていることを止める。
+  { name: "evaluateCandidateEligibility", from: ["src/application/eligibility-recheck.ts"] },
+  { name: "buildRecheckInput", from: ["src/application/adopt-plan.ts"] },
+  { name: "toJstFixedFormat", from: ["src/application/eligibility-recheck.ts"] },
   // Q11：照合が継続不能なときの行き先。定義だけして呼んでいなかった型。
   { name: "resolveReconcileStall", from: ["src/application/recover-case.ts"] },
   // Q12：`ATTENTION` から戻せるかの判定。読戻し未確認のまま通知処理へ進めない。

@@ -30,6 +30,7 @@ CSVの生成・読戻しが未実装のため、**本番経路では `NOT_IMPLEM
 | `recover-case.ts` | 照合待ち・要対応・停止保留の案件を進める（workerの1ステップ） | Q11、Q12、Q13、A03、A13 |
 | `adoption-check.ts` | 採用した計画と勤務表の照合（上の2つが共有する） | RFC-010 §4 手順4・7、A06、A07 |
 | `roster-eligibility.ts` | **名簿だけの候補列挙。適格性検査ではない** | D01の名簿部分のみ |
+| `eligibility-recheck.ts` | 正式採用の直前の適格性再検査（担当Bの規則を通す） | D08、Q06・A09、Q15 |
 | `case-view.ts` / `staff-view.ts` | 画面の読み取りモデル | ADR-017・ADR-022（状態を畳まない） |
 | `offer-message.ts` | 打診・追加確認・確定・非選定・募集終了の本文 | RFC-011 §3、Q07 |
 | `deps.ts` | 合成の根 | fake を本番経路へ入れない |
@@ -96,6 +97,8 @@ repository 越しに読む。決定的なロジックを永続化の形から切
   課金済みの結果が永久に適用されない。新規の呼出しはgateway側が止める。
 - 候補選定（`SelectionPlanner`）：`NOT_IMPLEMENTED` を投げる。「選べなかった」と
   「選ぶ規則が無い」は別（A16）。
+- 本人の可能時間：**検査していない。** 可能時間表が無いため、承諾した区間をそのまま
+  可能時間として渡している（Q15）。月次上限・勤務の重複・在籍・職種は実際に検査する。
 - CSVの生成・読戻し（`ScheduleGateway`）：`UnimplementedScheduleGateway` が
   `NOT_IMPLEMENTED` を投げる。**正式採用の進行そのものは実装済み**だが、この口が無い
   ため本番経路では成立しない。`/manager` と `/api/health` の「未実装」に出す。

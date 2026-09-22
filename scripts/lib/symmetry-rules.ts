@@ -239,6 +239,21 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     mustContain: ["assertOutsideTransaction"],
   },
   {
+    label: "直前再検査は取り直した月内勤務表と当時のスタッフ条件を見る（D08 / Q06 / A09 / Q15）",
+    members: [
+      { name: "export function buildRecheckInput", file: "src/application/eligibility-recheck.ts" },
+    ],
+    // 選定時に固定した値で検査すると、その後に別営業日の勤務やスタッフ条件が
+    // 変わっても気付けない。承諾した区間を可能時間として渡す規則もここに揃える。
+    mustContain: [
+      "input.reloaded",
+      "input.conditions",
+      "availabilityWindows",
+      "monthlyWorkLimits",
+      "staffIds",
+    ],
+  },
+  {
     label: "停止は打診・承諾・通知をまとめて閉じる（A18 / D10 / Q07）",
     members: [{ name: "async function closeOutreaches", file: "src/application/stop-case.ts" }],
     // 打診だけ閉じて承諾を残すと、停止済みの案件の承諾が選定できる状態で残る。

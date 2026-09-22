@@ -64,9 +64,11 @@ import type {
   ScheduleUpdateSnapshot,
   SelectionResultRepository,
   ShiftAssignmentRepository,
+  StaffRepository,
 } from "../contracts/repository";
 import type {
   ApplyUpdatePayloadForHash,
+  LoadedSchedule,
   PlannedAbsence,
   PlannedAssignment,
   ScheduleGateway,
@@ -81,6 +83,7 @@ import {
 } from "../contracts/schedule-update";
 import type {
   EligibilityChecker,
+  EligibilityRecheckResult,
   SelectionCandidate,
   SelectionInputs,
   SelectionPlanner,
@@ -99,6 +102,7 @@ import {
   type OfferContext,
 } from "./offer-message";
 import { sendOperationId } from "./start-outreach";
+import { buildRecheckInput } from "./eligibility-recheck";
 
 export interface AdoptPlanCommand {
   /** 画面が描画時に作ったキー。同じ描画内の二重クリックだけが同じ値になる。 */
@@ -138,6 +142,8 @@ export interface AdoptPlanDeps {
   readonly outreaches: OutreachRepository;
   readonly inbound: InboundEventRepository;
   readonly stores: StoreRepository;
+  /** Q15：適格性の再検査へ渡すスタッフ条件を読む。 */
+  readonly staff: StaffRepository;
   readonly selections: SelectionResultRepository;
   readonly scheduleUpdates: ScheduleUpdateRepository;
   readonly authoritative: AuthoritativeScheduleRefRepository;
@@ -388,6 +394,11 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     update: ScheduleUpdateSnapshot & { artifactRef: string; newSourceRevision: string };
     selection: SelectionResult;
     operationId: string;
+    /**
+     * D08：**採用の直前に取り直した**月内勤務表。選定時に固定した値ではない。
+     * 適格性の再検査（Q15）はこれを見る。
+     */
+    reloaded: LoadedSchedule;
   }): Promise<
     | { readonly ok: true; readonly adopted: number }
     | Failure
@@ -534,17 +545,34 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           }
         }
 
-        // D08：可能時間・月次上限・重複をもう一度検査する（担当B）。
-        const rechecked = deps.eligibility.recheck({
-          storeId: snapshot.storeId,
-          requirement: {
-            roleCode: snapshot.roleCode,
-            startAt: snapshot.requiredStartAt,
-            endAt: snapshot.requiredEndAt,
-          },
-          selected: input.selection.selected,
-          inputs: input.selection.inputs,
-        });
+        // D08：在籍・職種・勤務の重複・月次上限をもう一度検査する（Q15・担当Bの規則）。
+        // **選定時の値を再利用しない。** 入力は採用の直前に取り直したもの。
+        const store = await deps.stores.findById(tx, snapshot.storeId);
+        if (store === "NOT_FOUND") {
+          return rejected(ERROR_CODES.INVALID_INPUT, "店舗が見つかりません。");
+        }
+        const conditions = await deps.staff.listConditionsByStore(tx, snapshot.storeId);
+
+        let rechecked: EligibilityRecheckResult;
+        try {
+          rechecked = deps.eligibility.recheck(
+            buildRecheckInput({
+              snapshot,
+              storeTimezone: store.timezone,
+              // **取り直した値**を渡す。選定時に固定した `inputs` ではない（D08）。
+              reloaded: input.reloaded,
+              conditions,
+              selected: input.selection.selected,
+              inputs: input.selection.inputs,
+            }),
+          );
+        } catch (error) {
+          if (error instanceof TaskcalError) {
+            // Q03／A17：範囲外は「覆えなかった」ではない。明示的に拒否する。
+            return rejected(error.code, error.message);
+          }
+          throw error;
+        }
         if (!rechecked.ok) {
           return rejected(
             ERROR_CODES.INVALID_INPUT,
@@ -1374,8 +1402,11 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     // 値」で、その後に別営業日の勤務やスタッフ条件が変わっても気付けない。
     // RFC-010 §4 手順5 は「参照した入力版」を再検査せよと言っている。
     assertOutsideTransaction("月内入力の再取得");
+    // 取り直した値は直前再検査（Q15）でも使う。ここで捨てると、選定時に固定した
+    // 値で検査することになり、D08 の意味が無くなる。
+    let reloaded: LoadedSchedule;
     try {
-      const reloaded = await deps.gateway.loadSchedule({
+      reloaded = await deps.gateway.loadSchedule({
         connectionId: update.connectionId,
         scheduleId: update.scheduleId,
         authoritative: await withTransaction(async (tx) => {
@@ -1429,6 +1460,7 @@ export function adoptPlan(deps: AdoptPlanDeps) {
       update: { ...update, artifactRef, newSourceRevision },
       selection,
       operationId: command.operationId,
+      reloaded,
     });
     if ("rolledBack" in adopted) {
       const { code, message, alreadyAdopted } = adopted.rolledBack;

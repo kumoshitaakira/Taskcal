@@ -237,6 +237,26 @@ export interface StoreRepository {
   findById(tx: TxHandle, storeId: string): Promise<StoreSnapshot | "NOT_FOUND">;
 }
 
+/** 適格性の再検査へ渡すスタッフ条件（Q15）。可能時間は呼出し側が入れる。 */
+export interface StaffConditions {
+  readonly staffId: string;
+  readonly storeId: string;
+  readonly active: boolean;
+  readonly roleCode: string;
+  /** Q06：月次「割当」上限。実労働時間の上限判定ではない。 */
+  readonly monthlyCapMinutes: number;
+}
+
+export interface StaffRepository {
+  /**
+   * 店舗の全スタッフの条件を読む。**在籍していない相手も返す。**
+   *
+   * 退職者を除いて返すと、選定済みの承諾がその後に無効化されたことを
+   * 「候補に居ない」と区別できない。判定は `evaluateCandidateEligibility` が行う。
+   */
+  listConditionsByStore(tx: TxHandle, storeId: string): Promise<readonly StaffConditions[]>;
+}
+
 /**
  * 保存済みの受信イベントと、そこから決まる参照。
  *
