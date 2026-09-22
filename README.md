@@ -54,8 +54,9 @@ npm run worker                 # 別ターミナルで常駐worker（送信と�
 画面：`/`（導線）、`/manager`（店長）、`/staff`（スタッフ役）、`/api/health`（起動状態のJSON）。
 
 `npm run seed:dev` が入れるのは**架空データで、CSVの取込みではありません**。担当Bの
-`parseMonthlyCsv`（正規化・安定ID・月内完全性）は入っていますが、アプリのDB・画面へは
-まだ繋がっていません（`ScheduleGateway` 本体が未実装）。`authoritative_schedule_ref.source_revision`
+`parseMonthlyCsv`（正規化・安定ID・月内完全性）は入っています。`CsvScheduleGateway` は
+作業用CSVの生成・操作結果照会・readBackまで実装済みですが、アプリのDB・画面や正式採用
+applicationへはまだ繋がっていません。`authoritative_schedule_ref.source_revision`
 にもCSVの内容hashではなくseedの目印が入ります。取込み済みと読まないでください。
 
 初期状態へ戻す（データを消す）：
@@ -154,7 +155,7 @@ src/contracts/            共同 API・イベント・モデル出力・永続�
 src/config/               A  環境変数の検査
 src/domain/interval/      B  時間区間、重複、候補適格性、月次割当計算（U03実装済み）
 src/domain/selection/     B  候補評価、勤務計画の選定（同上）
-src/adapters/csv/         B  固定CSV正規化・安定ID（Gateway本体は未実装）
+src/adapters/csv/         B  固定CSV正規化・安定ID・ScheduleGateway adapter
 fixtures/ tests/          B中心 デモデータ、単体・統合・受入試験
 ```
 
@@ -173,14 +174,14 @@ Day 2で承諾（Commitment）・選定結果・打診の遷移・永続化の�
 
 | 未達 | 理由 |
 |---|---|
-| CSVを読んで画面表示（A06のID往復はBのCLIと単体テストで確認済み） | 担当Bの `parseMonthlyCsv` は入ったが、`ScheduleGateway` 本体と画面・DBへの接続は未実装。画面が読む勤務表は `npm run seed:dev` が入れた架空データで、**CSVから往復したものではない** |
+| CSVを読んで画面表示（A06のID往復はBのCLIと単体テストで確認済み） | `CsvScheduleGateway` の単体adapterは作業CSV・操作結果・readBackまで実装済みだが、画面・DBへ未接続。画面が読む勤務表は `npm run seed:dev` が入れた架空データで、**CSVから往復したものではない** |
 | 本人の**可能時間**の検査 | 可能時間表がリポジトリに無い。承諾した区間をそのまま可能時間として渡しているため、可能時間の検査は**事実上恒真**（Q15）。月次上限・勤務の重複・在籍・職種は正式採用の直前に実際に検査している |
 | 打診の宛先の適格性 | 候補は**名簿だけ**で選んでいる。検査が効くのは正式採用の直前だけで、打診の時点では効かない |
 | 候補選定・勤務計画の決定（A16・A17） | 担当B |
 | 返信解釈の**精度**（A16・A17の判定品質） | 実推論は通った（2026-09-22）が、RFC-008の固定fixtureによる評価はしていない。1回通ったことを精度の証拠にしない |
 | 結果不明で終わったモデル呼出しの復旧 | 同じ受信は保存済みの結果不明を返し続ける（再送しないため）。人の対応が要る |
 | 見積りの出力側の保守化 | 推論モデルでは `max_tokens` が効かず、**予約が実費を下回り得る**（`outputLimitExceeded` に記録）。無料モデルでは実害なしだが、有料へ切り替える前に決める必要がある |
-| CSV生成・読戻し・結果照会（A01・A06・A14） | 担当B。`ScheduleGateway` の実装が無い。**正式採用の進行そのものは実装済み**だが、この口が `NOT_IMPLEMENTED` を投げるため本番経路では成立しない |
+| 正式採用・正式版参照の切替・application結果照合（A01〜A08、A14） | CSV adapterの作業成果物生成・readBack・操作照会は実装済み。正式採用とapplication/DBの結果照合は次段階 |
 | 採用済み勤務の取消・変更 | D10により確定済みの取消は別の変更操作。未実装 |
 | 配送に**失敗**した通知の再送 | `UNKNOWN` の照合は入った（`getSendResult` で照会し、送られたと確認できたときだけ進める）。`FAILED` は**止まったまま**で、`settle-reporting` が案件を要対応へ回す。同じ `operation_id` での再送は保存済みの失敗を返すだけなので、本当の再送には attempt を含む操作IDが要る |
 | 停止の取消（案件の再開） | D10により確定済みの取消は別の変更操作。停止は取り消せない |
@@ -231,6 +232,7 @@ DB・OrcaRouter・画面を起動せず、リポジトリルートで実行で�
 ```bash
 npx tsx scripts/check-csv.ts
 npx vitest run tests/unit/monthly-csv.test.ts
+npx vitest run tests/unit/csv-schedule-gateway.test.ts
 ```
 
 既存の単体テストも含める場合は`npm run test:unit`を使います。

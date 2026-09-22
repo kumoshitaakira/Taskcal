@@ -1,5 +1,16 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：CSV ScheduleGateway adapter（担当B）
+
+- `src/adapters/csv/schedule-gateway.ts` に、原CSVを上書きしない作業成果物の生成、
+  `sourceRevision`付きの条件付き更新、stable assignment ID順の正規化、`ABSENT`の往復、
+  書込み後readBackを追加した。
+- 成果物保管（CSV＋manifest sidecar）と操作結果保管（connectionId＋operationId単位の
+  JSON永続port）を分離し、同一hashのREPLAY、異なるhashのCONFLICT、再起動後の照会、
+  `UNKNOWN`／`LOOKUP_UNAVAILABLE`を決定的テストで確認した。
+- この変更は正式採用、正式版参照の切替、DB・画面への接続を含まない。`PREPARED`は
+  正式採用済みを意味しない。
+
 ## 2026-09-22：Day 3（担当A）— PR #15 のレビュー指摘を直した
 
 指摘6件のうち、対応が要る5件を直した。残り1件は注記として記録した。
@@ -215,7 +226,6 @@ ADR-022 で確定した三つの経路（Q11・Q12・Q13）は、判定関数が
 `assertOutsideTransaction`・`resolveOutreachAfterSend`・`isAllowedOutreachTransition`・
 `isAllowedCommitmentTransition` の呼出し元を増やした。対称性規則を4件追加した。
 いずれも、守るべき語を落とすと実際に落ちることを確認している。
-
 ## 2026-09-22：Day 2（担当A）— 最新mainへ rebase した
 
 担当Bの #8・#9・#10 がmainへ入ったので rebase した。**コードの衝突は無く、
@@ -362,7 +372,6 @@ RFC-010 §4 の手順1〜7（選定の固定 → 作業用成果物 → 読戻�
   直して回帰テストで固定した。
 - 設計文書（RFC）の本文は変更していない。新しいADRも追加していない（RFC-010 §4 の
   手順をそのまま実装しただけで、新しい永続的な選択をしていないため）。
-
 ## 2026-09-22：受入fixtureレビューコメントとmain競合の対応
 
 - 正式採用前の`input.schedule.assignmentIds`を最後に確認した正式版の既存勤務だけに限定し、
