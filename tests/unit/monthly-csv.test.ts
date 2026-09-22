@@ -44,9 +44,8 @@ describe("月内固定CSV（正式採用前の入出力）", () => {
       expect(again.assignments.map((row) => row.status)).toEqual(
         expect.arrayContaining(["SCHEDULED", "COMPLETED", "CANCELLED"]),
       );
-      expect(again.assignments.find((row) => row.sourceCaseId)?.sourceCaseId).toBe(
-        "00000005-0000-4000-8000-000000000001",
-      );
+      // fixture の勤務は全て通常勤務（由来なし）。由来つきの往復は下のテストで確かめる。
+      expect(again.assignments.every((row) => row.sourceCaseId === undefined)).toBe(true);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -173,6 +172,24 @@ describe("月内固定CSV（正式採用前の入出力）", () => {
     ]) {
       expect(() => parseMonthlyCsv(bad, manifest)).toThrow();
     }
+  });
+
+  it("由来つきの代替勤務は、勤務IDと生成元案件を往復する", async () => {
+    const { csv, manifest } = await input();
+    const lines = csv.trimEnd().split("\n");
+    // 最終行（9/25・2時間）を架空の案件由来の代替勤務にする。
+    const cells = lines[lines.length - 1].split(",");
+    cells[CSV_COLUMNS.indexOf("sourceCaseId")] = "00000005-0000-4000-8000-000000000001";
+    lines[lines.length - 1] = cells.join(",");
+    const parsed = parseMonthlyCsv(lines.join("\n") + "\n", manifest);
+    const derived = parsed.assignments.filter((row) => row.sourceCaseId);
+    expect(derived).toHaveLength(1);
+    expect(derived[0].sourceCaseId).toBe("00000005-0000-4000-8000-000000000001");
+    const again = parseMonthlyCsv(parsed.normalizedCsv, parsed.manifest);
+    expect(again.sourceRevision).toBe(parsed.sourceRevision);
+    expect(again.assignments.find((row) => row.sourceCaseId)?.shiftAssignmentId).toBe(
+      derived[0].shiftAssignmentId,
+    );
   });
 
   it("通常勤務8時間は保持し、代替勤務の4時間超は拒否する", async () => {

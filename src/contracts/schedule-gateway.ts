@@ -64,6 +64,15 @@ export interface LoadedSchedule {
   /** INCOMPLETE のとき、取得できなかった営業日。 */
   readonly missingDates: readonly string[];
   readonly assignments: readonly LoadedAssignment[];
+  /**
+   * 月内入力が「揃っている」と言えるスタッフの集合（CSVの範囲宣言 `staffIds`）。
+   *
+   * 月次上限の検査はこの集合の中でだけ成立する。ここに無いスタッフの勤務は取得済みと
+   * 言えないので、「勤務0件＝残枠あり」と推定してはならない（Q06／A09）。呼出し側は
+   * 名簿やDBから対象集合を作らず、これを `MonthlyScheduleSnapshot.staffIds` に渡す。
+   * 宣言を持たない接続では省略し、呼出し側が判定対象だけの集合で代用する。
+   */
+  readonly declaredStaffIds?: readonly string[];
 }
 
 /**

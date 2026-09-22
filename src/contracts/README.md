@@ -105,9 +105,28 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 範囲が狭いまま信じると取得していない日を0分として数えます（Q06 / A09）。
 
 `schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
-を指します。`selection.ts` の `SelectionPlanner` は**担当Bが `src/domain/selection/` で
-実装する口**で、まだ実装がありません。呼び出し側は未実装を成功として扱わず、
-`NOT_IMPLEMENTED` を返します。`EligibilityChecker.recheck` は上記のとおり合流済みです。
+を指します。
+
+**2026-09-22（Day 4）に担当Bの実装が全て合流しました。**
+
+- `SelectionPlanner.plan`：`src/domain/selection/planExactlyOneCoverage`（Q02）。
+- `EligibilityChecker.listEligible`：`src/application/outreach-eligibility.ts`。
+  `EligibilityInput` へ `businessDate` / `roster` / `monthlySchedule` / `staffProfiles` を足し、
+  戻り値を `EligibilityListing`（適格な相手と、外した相手＋理由）にした。打診されなかった人が
+  記録から消えないようにするため。
+- `ScheduleGateway`：`src/adapters/csv/csv-schedule-gateway.ts`（管理版ストアは `csv-store.ts`）。
+  能力の意味と「記録が無い＝未反映」の限定はファイル冒頭とADR-026にある。
+- `AuthoritativeScheduleRefRepository.lockMonth` / `advanceSiblings`：管理版が月単位、参照が営業日単位
+  なので、採用取引で同月の参照行を決定的な順序で先にロックし（`lockMonth`、デッドロック防止）、
+  `swap` の後に他営業日の参照も同じ版へ進める（`advanceSiblings`。旧版以外や参照なしの営業日が
+  あれば巻き戻す）（ADR-026、A01／A09）。
+- `toJstFixedFormat` は `src/domain/interval/` へ移し、application と CSV adapter が共有する。
+- `LoadedSchedule.declaredStaffIds`（任意）：月内入力が揃っていると言えるスタッフ集合（CSVの範囲宣言）。
+  月次上限の対象集合はここから作り、名簿や選定対象から作らない。宣言に無い相手を「勤務0件＝残枠あり」
+  と読まないため（Q06／A09、Day 4のドメインレビュー指摘）。
+- 打診開始（`start-outreach.ts`）は「操作登録（取引A）→勤務表読込み（外）→ロックして積む（取引B）」に
+  分けた。操作IDは案件固定なので、AとBの間で落ちても、打診が1件も無ければ同じ操作から続きを進める
+  （何も効いていないため）。取引Bでは読んだ版が今も正式版かを再照合する。
 
 `worker_heartbeat`（migration 0001）は生存確認だけで、二重処理を防ぐ仕組みではありません。
 `worker_name` が主キーのため、同名workerが2本立っても upsert で上書きされ、`/api/health`

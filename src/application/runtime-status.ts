@@ -61,7 +61,15 @@ export interface RuntimeStatus {
   readonly notImplemented: readonly string[];
 }
 
-const WORKER_STALE_MS = 30_000;
+/**
+ * heartbeat がこの時間止まると「接続できない」と表示する。
+ *
+ * worker はループの先頭と、返信の解釈の直前で beat する。解釈は OrcaRouter の応答待ち
+ * （`ORCA_TIMEOUT_MS`、既定20秒・推論モデルでは60秒に設定）で1件あたり最長その時間
+ * 止まるため、タイムアウト上限より長く取る。短くすると、正常に解釈中の worker を
+ * 落ちたと表示する（Day 4の実演で観測）。
+ */
+const WORKER_STALE_MS = 90_000;
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const checkedAt = new Date().toISOString();
@@ -113,19 +121,16 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       ...(orcaInvalidKeys.length > 0 ? { invalidKeys: orcaInvalidKeys } : {}),
     },
     notImplemented: [
-      "CSVとDB・画面の接続（ScheduleGateway本体）。parseMonthlyCsv はあるが繋がっておらず、画面の勤務表は npm run seed:dev の架空データ",
-      "本人の可能時間の検査。可能時間表が無く、承諾した区間をそのまま可能時間として扱う。月次上限・勤務の重複・在籍・職種は正式採用の直前に検査している（Q15）",
-      "打診の宛先の適格性。候補は名簿だけで選んでいる。検査が効くのは正式採用の直前だけ（担当B）",
-      "候補選定・勤務計画の決定（担当B）",
+      "本人の可能時間の検査。可能時間表が無く、打診時は必要枠を、正式採用の直前は承諾した区間をそのまま可能時間として扱う。在籍・職種・勤務の重複・月次上限は両方の時点で検査している（Q15）",
       "返信解釈の品質評価（RFC-008の固定fixtureによる比較）。実呼出しは通っているが、精度は測っていない",
       "結果不明で終わったモデル呼出しの復旧。同じ受信は保存済みの結果不明を返し続ける（再送しないため）。人の対応が要る",
-      "CSV生成・読戻し・結果照会（ScheduleGateway の実装）。正式採用の進行は実装済みだが、この口が NOT_IMPLEMENTED を投げるため成立しない（担当B）",
       "配送に失敗した通知の再送。UNKNOWN は getSendResult で照合するが、FAILED は止まったまま（attempt を含む操作IDが要る）",
       "停止の取消（案件の再開）。停止は取り消せない（D10）",
       "予算・回数上限に達した案件の停止。上限到達はモデル呼出しを断るだけで、案件は調整中のまま残る（A18の上限側）",
       "復旧しない要対応の案件を人が引き取る操作。自動では終端へ落とさない（ADR-022）",
       "採用済み勤務の取消・変更（D10：確定済みの取消は別の変更操作）",
       "worker の fence token（通知待ちの lease はアイテム単位のみ）。採用の操作が進行中のまま落ちると生死を区別できず、復旧は触らずに待つ。画面から再開すると確定できる",
+      "CSVの外部からの取込み経路。管理版ストア（var/schedule）へ入るのは npm run seed:dev / reset:dev が読む固定fixtureだけで、アップロードや別形式は受けない",
     ],
   };
 }

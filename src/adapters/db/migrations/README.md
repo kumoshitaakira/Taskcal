@@ -53,9 +53,9 @@ ADR-021 に従い B の確認を得ること。
 重複禁止の制約を落とすなら、落とした事実を README の「現時点で動かないもの」へ記録する
 こと（黙って外さない）。
 
-CSV原本の取込み・正規化（担当B、`src/adapters/csv/`）は未実装。`0002` はその結果を置く
-場所を作るだけで、CSVを読む経路を実装したことを意味しない。開発用の架空データは
-`npm run seed:dev` が入れる。
+CSV原本の取込み・正規化は担当Bの `src/adapters/csv/`（`monthly-csv.ts`・`csv-store.ts`）が
+行う。`0002` はその結果を置く場所。開発用の固定fixtureは `npm run seed:dev` / `reset:dev` が
+CSV経路で取り込む（ADR-026）。
 
 `schema_migrations` テーブルはrunnerが自動で作る。ここに書かない。
 

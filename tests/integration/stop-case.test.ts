@@ -602,6 +602,7 @@ describe.skipIf(!connectionString)("案件の停止（DATABASE_URL 必須）", (
       cause: STOP_CAUSE.MANAGER_STOP,
     });
 
+    // 停止済みの拒否は勤務表を読む前に決まる。Gateway と適格性は呼ばれない口を渡す。
     const start = startOutreach({
       cases: repos.cases,
       outreaches: repos.outreaches,
@@ -609,6 +610,16 @@ describe.skipIf(!connectionString)("案件の停止（DATABASE_URL 必須）", (
       operations: repos.operations,
       roster: (await import("@/application/roster-eligibility")).createRosterEligibility(),
       stores: repos.stores,
+      staff: (await import("@/adapters/db/store-repository")).createPgStaffRepository(),
+      authoritative: (
+        await import("@/adapters/db/authoritative-ref-repository")
+      ).createPgAuthoritativeScheduleRefRepository(),
+      gateway: {
+        loadSchedule: async () => {
+          throw new Error("停止済みの案件で勤務表を読んではいけない");
+        },
+      },
+      eligibility: (await import("@/application/outreach-eligibility")).createOutreachEligibility(),
       clock: { now: () => NOW },
       ids: { next: () => randomUUID() },
     });

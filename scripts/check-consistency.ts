@@ -100,8 +100,18 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
       "src/application/send-outbox.ts",
       "src/application/reconcile-outbox.ts",
       "src/application/recover-case.ts",
+      // 打診の直前の勤務表読込みも取引の外で行う（RFC-010 §5）。
+      "src/application/start-outreach.ts",
     ],
   },
+  // Day 4：担当Bの本物の実装が合成の根へ繋がっていること。台や未実装の口に戻さない。
+  { name: "createCsvScheduleGateway", from: ["src/application/deps.ts"] },
+  { name: "createSelectionPlanner", from: ["src/application/deps.ts"] },
+  { name: "createOutreachEligibility", from: ["src/application/deps.ts"] },
+  // 打診の直前も担当Bの規則を通す。名簿だけで打診しない（D01 / Q06）。
+  { name: "buildListEligibleInput", from: ["src/application/start-outreach.ts"] },
+  // ADR-026：月次成果物の採用で、同月の他営業日の参照も進める（A01 / A09）。
+  { name: "advanceSiblings", from: ["src/application/adopt-plan.ts"] },
   {
     name: "resolveOutreachAfterSend",
     // 照合経路も同じ解決関数を通す。別の規則で動かすと遷移表が二重になる（A13）。
