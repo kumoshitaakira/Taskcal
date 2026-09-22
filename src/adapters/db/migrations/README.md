@@ -73,6 +73,10 @@ CSV原本の取込み・正規化（担当B、`src/adapters/csv/`）は未実装
 - outbound operationは `provider`・`connection_id`・`operation_id` の範囲で冪等性記録を
   持つ。同じIDの異なるrequestHashはrepository境界で衝突拒否する。
 - `revision_check_enforced`、`read_back`の一致証拠、`external_attempt_state`を保存し、
-  外部作用前にIN_FLIGHTを永続化して再起動後の無条件再送を防ぐ。
+  短い取引でIN_FLIGHTのcommit成功を確認してから外部作用を行い、再起動後の無条件再送を防ぐ。
+  外部作用の結果は別の取引で保存し、commit成否不明時はprovider照会を先に行う。
+- ADOPTEDの採用時証拠（revision検査、採用後版、artifact、採用事実）と、正式版の
+  `read_back`観測を分離する。MISMATCH／UNKNOWNでも採用事実を取り消さず、MATCHEDの場合は
+  採用時の版・artifactとの一致を要求する。resultKindの許容値は仮置き（A確認待ち）。
 - Commitment、SelectionResult、ReplyInterpretation、worker lease/fenceの最終schemaや
   外部キーは定義しない。未決の参照はSQLコメントとrepository READMEへ残す。

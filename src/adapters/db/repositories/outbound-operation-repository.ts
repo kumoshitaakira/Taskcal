@@ -71,9 +71,10 @@ export interface OutboundOperationRepository {
 /**
  * 外部作用の結果照合境界の下書き。
  *
- * reserveは外部providerを呼ばない。applicationはbeginExternalAttemptでNEWから
- * IN_FLIGHTを同じ取引へ保存してから外部作用を行う。IN_FLIGHT／UNKNOWN／
- * RECONCILE_REQUIREDではproviderの照会を先に行い、無条件の再送をしない。
+ * reserveは外部providerを呼ばない。applicationは短い取引でbeginExternalAttemptを呼び、
+ * IN_FLIGHTのcommit成功を確認してから、取引の外で外部providerを呼ぶ。結果は別の取引で
+ * recordResultへ保存する。commit成否が不明な場合もproviderを呼ばず、IN_FLIGHT／UNKNOWN／
+ * RECONCILE_REQUIREDの照会を先に行う。
  */
 export class PgOutboundOperationRepository implements OutboundOperationRepository {
   async findByOperation(
