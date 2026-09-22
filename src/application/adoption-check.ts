@@ -21,6 +21,13 @@ function sameInstant(a: string, b: string): boolean {
   return Date.parse(a) === Date.parse(b);
 }
 
+/** DBのUTC ISO表記を固定CSVのJST表記へ変換する。時刻は変更しない。 */
+export function toJstTimestamp(value: string): string {
+  const instant = Date.parse(value);
+  if (!Number.isFinite(instant)) throw new Error("勤務時刻が不正です。");
+  return `${new Date(instant + 9 * 60 * 60 * 1000).toISOString().slice(0, 19)}+09:00`;
+}
+
 /**
  * A06：`shiftAssignmentId` の昇順で並べる。
  *
@@ -37,8 +44,8 @@ export function plannedAdditions(
       commitmentId: chosen.commitmentId,
       staffId: chosen.staffId,
       roleCode: snapshot.roleCode,
-      startAt: chosen.startAt,
-      endAt: chosen.endAt,
+      startAt: toJstTimestamp(chosen.startAt),
+      endAt: toJstTimestamp(chosen.endAt),
       sourceCaseId: snapshot.caseId,
     }))
     .sort((a, b) =>
@@ -60,8 +67,8 @@ export function plannedAbsences(snapshot: CaseSnapshot): readonly PlannedAbsence
   return [
     {
       shiftAssignmentId: snapshot.absentShiftAssignmentId,
-      startAt: snapshot.requiredStartAt,
-      endAt: snapshot.requiredEndAt,
+      startAt: toJstTimestamp(snapshot.requiredStartAt),
+      endAt: toJstTimestamp(snapshot.requiredEndAt),
     },
   ];
 }

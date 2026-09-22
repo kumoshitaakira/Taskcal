@@ -33,6 +33,6 @@
 - `EligibilityChecker.listEligible` / `recheck`：適格性。`recheck` は正式採用の直前に
   もう一度通す（D08）。月内入力が COMPLETE でなければ成立させない（Q06 / A09）。
 
-現在Aが使っているのは `src/application/roster-eligibility.ts` で、**名簿だけ**を見ている
-（同店舗・同職種・在籍中・欠勤者本人を除く・人数上限）。可能時間・月次上限・勤務の重複は
-未検査で、`recheck` は `NOT_IMPLEMENTED` を投げる。正式採用はここが入るまで進めない。
+打診時の候補列挙は `src/application/roster-eligibility.ts` の名簿条件のみ。正式採用前は
+`eligibility.ts` が、DBから取り直した月内勤務・固定デモ可能時間・月次上限を検査する。
+`SelectionInputs.monthlyRevision` と再取得した月内版が異なれば採用しない。

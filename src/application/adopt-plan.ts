@@ -34,6 +34,7 @@
 
 import "server-only";
 import { assertOutsideTransaction, withTransaction, type Tx } from "../adapters/db/transaction";
+import { loadLatestMonthlyEligibility } from "../adapters/db/monthly-eligibility";
 import type { ScheduleReadRepository } from "../adapters/db/schedule-repository";
 import {
   ADOPTION_FACT,
@@ -93,6 +94,7 @@ import {
   matchesExpected,
   plannedAbsences,
   plannedAdditions,
+  toJstTimestamp,
   verifyAdoptedArtifact,
 } from "./adoption-check";
 import {
@@ -102,7 +104,6 @@ import {
   type OfferContext,
 } from "./offer-message";
 import { sendOperationId } from "./start-outreach";
-import { buildRecheckInput } from "./eligibility-recheck";
 
 export interface AdoptPlanCommand {
   /** 画面が描画時に作ったキー。同じ描画内の二重クリックだけが同じ値になる。 */
@@ -155,6 +156,7 @@ export interface AdoptPlanDeps {
   readonly planner: SelectionPlanner;
   /** D08：正式採用の直前にもう一度通す。選定時の結果を再利用しない。 */
   readonly eligibility: Pick<EligibilityChecker, "recheck">;
+  readonly loadMonthlyEligibility?: typeof loadLatestMonthlyEligibility;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -241,6 +243,7 @@ type PrepareOutcome =
       readonly update: ScheduleUpdateSnapshot;
       readonly selection: SelectionResult;
       readonly requestHash: RequestHash;
+      readonly baseArtifactRef?: string;
       readonly additions: readonly PlannedAssignment[];
       readonly absences: readonly PlannedAbsence[];
     };
@@ -545,33 +548,33 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           }
         }
 
-        // D08：在籍・職種・勤務の重複・月次上限をもう一度検査する（Q15・担当Bの規則）。
-        // **選定時の値を再利用しない。** 入力は採用の直前に取り直したもの。
-        const store = await deps.stores.findById(tx, snapshot.storeId);
-        if (store === "NOT_FOUND") {
-          return rejected(ERROR_CODES.INVALID_INPUT, "店舗が見つかりません。");
-        }
-        const conditions = await deps.staff.listConditionsByStore(tx, snapshot.storeId);
-
+        // D08：可能時間・月次上限・重複をもう一度検査する。入力は採用直前にDBから
+        // 取り直し、確認できない場合は採用を止める。
         let rechecked: EligibilityRecheckResult;
         try {
-          rechecked = deps.eligibility.recheck(
-            buildRecheckInput({
-              snapshot,
-              storeTimezone: store.timezone,
-              // **取り直した値**を渡す。選定時に固定した `inputs` ではない（D08）。
-              reloaded: input.reloaded,
-              conditions,
-              selected: input.selection.selected,
-              inputs: input.selection.inputs,
-            }),
-          );
+          const latest = await (deps.loadMonthlyEligibility ?? loadLatestMonthlyEligibility)(tx, {
+            storeId: snapshot.storeId,
+            businessDate: snapshot.businessDate,
+          });
+          rechecked = deps.eligibility.recheck({
+            storeId: snapshot.storeId,
+            businessDate: snapshot.businessDate,
+            requirement: {
+              roleCode: snapshot.roleCode,
+              startAt: toJstTimestamp(snapshot.requiredStartAt),
+              endAt: toJstTimestamp(snapshot.requiredEndAt),
+            },
+            selected: input.selection.selected,
+            inputs: input.selection.inputs,
+            monthlySchedule: latest.monthlySchedule,
+            staffProfiles: latest.staffProfiles,
+            absentStaffId: snapshot.absentStaffId,
+          });
         } catch (error) {
-          if (error instanceof TaskcalError) {
-            // Q03／A17：範囲外は「覆えなかった」ではない。明示的に拒否する。
-            return rejected(error.code, error.message);
-          }
-          throw error;
+          return rejected(
+            ERROR_CODES.INVALID_INPUT,
+            error instanceof Error ? error.message : "最新の月内勤務を検査できません。",
+          );
         }
         if (!rechecked.ok) {
           // 誰が外れたかまで残す。理由だけだと、どの候補を見直せばよいか分からない。
@@ -761,6 +764,7 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         connectionId: snapshot.connectionId,
         scheduleId: snapshot.scheduleId,
         sourceRevision: loaded.sourceRevision,
+        baseArtifactRef: ref.artifactRef,
         monthlyCompleteness: loaded.completeness,
         missingDates: loaded.missingDates,
       };
@@ -787,6 +791,25 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         };
       }
 
+      try {
+        const monthly = await (deps.loadMonthlyEligibility ?? loadLatestMonthlyEligibility)(tx, {
+          storeId: locked.storeId,
+          businessDate: locked.businessDate,
+        });
+        inputs = { ...inputs, monthlyRevision: monthly.monthlySchedule.sourceRevision };
+      } catch (error) {
+        return {
+          kind: "FAILED",
+          result: await refuse(
+            deps.operations,
+            tx,
+            command.operationId,
+            ERROR_CODES.INVALID_INPUT,
+            error instanceof Error ? error.message : "月内入力を検査できません。",
+          ),
+        };
+      }
+
       const commitments = await deps.commitments.listByCase(tx, command.caseId);
       const supersededBy = new Map<string, string>();
       for (const c of commitments) {
@@ -806,8 +829,8 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           commitmentId: commitment.commitmentId,
           commitmentVersion: commitment.version,
           staffId: commitment.staffId,
-          startAt: commitment.startAt,
-          endAt: commitment.endAt,
+          startAt: toJstTimestamp(commitment.startAt),
+          endAt: toJstTimestamp(commitment.endAt),
           // 同率のときの安定した順序。時刻ではなく受信順を使う（RFC-011 §4）。
           committedSeq: commitment.sourceReceivedSeq,
           // 採用時に作る勤務ID。選定の時点で確定させ、再試行で採番し直さない
@@ -823,8 +846,8 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           caseVersion: locked.version,
           requirement: {
             roleCode: locked.roleCode,
-            startAt: locked.requiredStartAt,
-            endAt: locked.requiredEndAt,
+            startAt: toJstTimestamp(locked.requiredStartAt),
+            endAt: toJstTimestamp(locked.requiredEndAt),
           },
           candidates,
           inputs,
@@ -878,6 +901,7 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         connectionId: locked.connectionId,
         scheduleId: locked.scheduleId,
         expectedSourceRevision: inputs.sourceRevision,
+        baseArtifactRef: inputs.baseArtifactRef,
         additions,
         absences,
       };
@@ -933,7 +957,15 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         expectedSourceRevision: inputs.sourceRevision,
       });
 
-      return { kind: "PREPARED", update, selection, requestHash, additions, absences };
+      return {
+        kind: "PREPARED",
+        update,
+        selection,
+        requestHash,
+        baseArtifactRef: inputs.baseArtifactRef,
+        additions,
+        absences,
+      };
     });
   }
 
@@ -941,6 +973,7 @@ export function adoptPlan(deps: AdoptPlanDeps) {
   async function applyToSource(input: {
     update: ScheduleUpdateSnapshot;
     requestHash: RequestHash;
+    baseArtifactRef?: string;
     additions: readonly PlannedAssignment[];
     absences: readonly PlannedAbsence[];
   }): Promise<UpdateResult | { readonly unknown: true } | { readonly refused: TaskcalError }> {
@@ -951,6 +984,7 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         connectionId: input.update.connectionId,
         scheduleId: input.update.scheduleId,
         expectedSourceRevision: input.update.expectedSourceRevision,
+        baseArtifactRef: input.baseArtifactRef,
         additions: input.additions,
         absences: input.absences,
       });
@@ -1152,6 +1186,7 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     let update: ScheduleUpdateSnapshot;
     let selection: SelectionResult;
     let applyHash: RequestHash;
+    let baseArtifactRef: string | undefined;
     let additions: readonly PlannedAssignment[];
     let absences: readonly PlannedAbsence[];
 
@@ -1163,7 +1198,14 @@ export function adoptPlan(deps: AdoptPlanDeps) {
     if (open === "NONE") {
       const prepared = await prepare(command);
       if (prepared.kind !== "PREPARED") return prepared.result;
-      ({ update, selection, requestHash: applyHash, additions, absences } = prepared);
+      ({
+        update,
+        selection,
+        requestHash: applyHash,
+        baseArtifactRef,
+        additions,
+        absences,
+      } = prepared);
     } else {
       update = open;
       const resumed = await withTransaction(async (tx) => {
@@ -1175,12 +1217,14 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         return fail(ERROR_CODES.INVALID_INPUT, "再開に必要な選定結果または案件がありません。");
       }
       selection = resumed.stored;
+      baseArtifactRef = selection.inputs.baseArtifactRef;
       additions = plannedAdditions(selection, resumed.snapshot);
       absences = plannedAbsences(resumed.snapshot);
       applyHash = computeRequestHash({
         connectionId: update.connectionId,
         scheduleId: update.scheduleId,
         expectedSourceRevision: update.expectedSourceRevision,
+        baseArtifactRef,
         additions,
         absences,
       } satisfies ApplyUpdatePayloadForHash);
@@ -1221,6 +1265,7 @@ export function adoptPlan(deps: AdoptPlanDeps) {
         const applied = await applyToSource({
           update,
           requestHash: applyHash,
+          baseArtifactRef,
           additions,
           absences,
         });

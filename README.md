@@ -4,7 +4,7 @@ Taskcalサービスのリポジトリ
 
 飲食店の突発欠勤に対し、既存スタッフへの打診、返信の解釈、再調整、勤務条件の検査、シフト反映を進めるAIエージェントです。
 
-ハッカソン向けの実装中です（Day 2、2026-09-22）。現時点で動くのは**欠勤の登録から、適格候補への同時打診、模擬受信箱への送信、返信の受信、OrcaRouter経由の解釈、承諾の生成まで**です。正式採用の進行（選定の固定・作業用成果物の検査・一括採用・読戻し・通知）は実装しましたが、CSV取込と候補選定（担当B）が未実装のため、**本番経路では未実装として断ります**。
+ハッカソン向けの試作です。固定の架空CSVについて、欠勤登録から個別打診、返信・承諾、選定、CSV作業成果物の読戻し、一括正式採用、正式版読戻し、模擬通知までのアプリ経路を接続しています。実PostgreSQLでの通し実行は未確認です。可能時間は固定デモ日（2026-09-21/22/25）の18〜22時に限定した実装上の仮定です。
 
 ## まず読む文書
 
@@ -47,21 +47,19 @@ npm install
 docker compose up -d db        # PostgreSQL 18（ホスト側ポート 5433）
 npm run migrate                # 番号付きSQL migration を適用
 npm run seed:dev               # 架空の店舗・スタッフ・勤務表を入れる
+npm run import:demo-csv        # 固定CSVを初回取込みし、内容版と正式版参照を一致させる
 npm run dev                    # http://localhost:3000
 npm run worker                 # 別ターミナルで常駐worker（送信と解釈を回す）
 ```
 
 画面：`/`（導線）、`/manager`（店長）、`/staff`（スタッフ役）、`/api/health`（起動状態のJSON）。
 
-`npm run seed:dev` が入れるのは**架空データで、CSVの取込みではありません**。担当Bの
-`parseMonthlyCsv`（正規化・安定ID・月内完全性）は入っていますが、アプリのDB・画面へは
-まだ繋がっていません（`ScheduleGateway` 本体が未実装）。`authoritative_schedule_ref.source_revision`
-にもCSVの内容hashではなくseedの目印が入ります。取込み済みと読まないでください。
+`seed:dev` の `seed:` 版はCSV取込み済みではありません。`import:demo-csv` は固定fixtureの全日・安定ID・スタッフ集合を検査し、作業成果物を読戻してからDB勤務と正式版参照を一致させます。案件が存在するDBには取り込めません。初回取込みは既存の7勤務IDと一致する `seed:dev` 直後に行ってください。
 
 初期状態へ戻す（データを消す）：
 
 ```bash
-docker compose down -v && docker compose up -d db && npm run migrate && npm run seed:dev
+docker compose down -v && docker compose up -d db && npm run migrate && npm run seed:dev && npm run import:demo-csv
 ```
 
 ### 通しで動かす
@@ -71,9 +69,17 @@ docker compose down -v && docker compose up -d db && npm run migrate && npm run 
    送信はworkerが取引の外で行う。
 3. `/staff` に打診が届く。いずれかのスタッフ役から**返信する**。
 4. `/manager` に「回答済み／受付済み／承諾なし／受信順 N（未処理）」が出る。
+5. 返信解釈後、承諾が揃ったら `/manager` で正式採用する。CSVの `PREPARED` はまだ勤務ではなく、読戻し後にDBの一括採用が通って初めて正式版参照が切り替わる。
+6. `/manager` の正式版勤務と `/staff` の模擬通知を確認する。通知が止まっても確定済みの勤務は消さない。
 
-返信の解釈（承諾にするかどうか）はOrcaRouterが未設定のため動きません。画面と
-`/api/health` の「未実装」にその旨を出します。
+返信解釈にはサーバー側のOrcaRouter設定が必要です。設定・予算が不足すると推論を開始しません。実演には2026-09-25の18〜20時の勤務を使えます。9月25日以降は未来日のfixtureへ更新する必要があります。
+
+**未達範囲**：一般のCSV取込UI、可能時間の永続化、打診時点での月次適格性、追加店舗、本番メッセージング、通知失敗の自動復旧。`EligibilityChecker.recheck` に最新月内勤務・スタッフ条件・欠勤者IDを渡す契約変更はA・B共同所有の確認待ちです（Q14）。確認できない入力は正式採用を止めます。
+
+**再起動時の制限**：既存の `selection_result` schema は `monthlyRevision` と
+`baseArtifactRef` を保存しません。準備中にプロセスが落ちた案件は、この2値を復元できず
+正式採用を止めます。A・B確認後に両列を追加するmigrationと保存・読戻しを実装する必要が
+あります。未承認の `codex/b-db-migration-draft` のSQLは採用していません。
 
 ### 確認コマンド
 
@@ -154,7 +160,7 @@ src/contracts/            共同 API・イベント・モデル出力・永続�
 src/config/               A  環境変数の検査
 src/domain/interval/      B  時間区間、重複、候補適格性、月次割当計算（U03実装済み）
 src/domain/selection/     B  候補評価、勤務計画の選定（同上）
-src/adapters/csv/         B  固定CSV正規化・安定ID（Gateway本体は未実装）
+src/adapters/csv/         B  固定CSV正規化・安定ID・Gateway
 fixtures/ tests/          B中心 デモデータ、単体・統合・受入試験
 ```
 
@@ -173,14 +179,11 @@ Day 2で承諾（Commitment）・選定結果・打診の遷移・永続化の�
 
 | 未達 | 理由 |
 |---|---|
-| CSVを読んで画面表示（A06のID往復はBのCLIと単体テストで確認済み） | 担当Bの `parseMonthlyCsv` は入ったが、`ScheduleGateway` 本体と画面・DBへの接続は未実装。画面が読む勤務表は `npm run seed:dev` が入れた架空データで、**CSVから往復したものではない** |
-| 本人の**可能時間**の検査 | 可能時間表がリポジトリに無い。承諾した区間をそのまま可能時間として渡しているため、可能時間の検査は**事実上恒真**（Q15）。月次上限・勤務の重複・在籍・職種は正式採用の直前に実際に検査している |
-| 打診の宛先の適格性 | 候補は**名簿だけ**で選んでいる。検査が効くのは正式採用の直前だけで、打診の時点では効かない |
-| 候補選定・勤務計画の決定（A16・A17） | 担当B |
+| 打診時点の適格性検査 | 候補列挙は名簿条件のみ。採用直前には固定デモ可能時間、DBの最新月内勤務、重複、上限を検査する |
+| 固定日以外の可能時間 | 永続化するschemaが未承認。2026-09-21/22/25以外の正式採用は止める |
 | 返信解釈の**精度**（A16・A17の判定品質） | 実推論は通った（2026-09-22）が、RFC-008の固定fixtureによる評価はしていない。1回通ったことを精度の証拠にしない |
 | 結果不明で終わったモデル呼出しの復旧 | 同じ受信は保存済みの結果不明を返し続ける（再送しないため）。人の対応が要る |
 | 見積りの出力側の保守化 | 推論モデルでは `max_tokens` が効かず、**予約が実費を下回り得る**（`outputLimitExceeded` に記録）。無料モデルでは実害なしだが、有料へ切り替える前に決める必要がある |
-| CSV生成・読戻し・結果照会（A01・A06・A14） | 担当B。`ScheduleGateway` の実装が無い。**正式採用の進行そのものは実装済み**だが、この口が `NOT_IMPLEMENTED` を投げるため本番経路では成立しない |
 | 採用済み勤務の取消・変更 | D10により確定済みの取消は別の変更操作。未実装 |
 | 配送に**失敗**した通知の再送 | `UNKNOWN` の照合は入った（`getSendResult` で照会し、送られたと確認できたときだけ進める）。`FAILED` は**止まったまま**で、`settle-reporting` が案件を要対応へ回す。同じ `operation_id` での再送は保存済みの失敗を返すだけなので、本当の再送には attempt を含む操作IDが要る |
 | 停止の取消（案件の再開） | D10により確定済みの取消は別の変更操作。停止は取り消せない |
@@ -197,8 +200,7 @@ Day 2で承諾（Commitment）・選定結果・打診の遷移・永続化の�
 | **担当Bの口を台（fake）に差し替えて手順だけ確認** | A02・A03・A05・A08、A04とA07とA13の一部、Q11・Q12・Q13の復旧経路 | 取引の切り方・再検査・照合・巻き戻しは確かめた。**選定規則とCSV往復は動いていない** |
 | 未実行 | A01・A06・A14・A16・A17 | — |
 
-台に差し替えているのは `SelectionPlanner`・`EligibilityChecker`・`ScheduleGateway`
-（いずれも担当B）です。本番経路では正式採用の画面は必ず未実装通知で止まります。
+既存の正式採用統合テストは `SelectionPlanner`・`EligibilityChecker`・`ScheduleGateway` を台に差し替えています。固定CSVを使う新しい合成経路の実PostgreSQL通し実行は未確認です。
 A04は二重採用を止めるDB制約（部分一意索引・期待版付きCAS）だけを確かめており、
 `adoptPlan` を2本走らせた競合は未実行です。テスト名の付け方は
 [`tests/README.md`](tests/README.md) にあります。設計や fixture があることを合格と

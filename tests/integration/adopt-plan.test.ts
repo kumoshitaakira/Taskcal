@@ -17,6 +17,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type {
@@ -29,7 +32,15 @@ import type { ShiftAssignmentRepository } from "@/contracts/repository";
 import { computeRequestHash } from "@/contracts/operation";
 import { FakeScheduleGateway } from "../stubs/fake-gateways";
 import { createFakeSelectionPlanner } from "../fakes/selection";
-import { createEligibilityRecheck } from "@/application/eligibility-recheck";
+import { createSelectionPlanner } from "@/domain/selection";
+import { createEligibilityRecheck } from "@/domain/selection/eligibility";
+import type { SelectionPlanner, EligibilityChecker } from "@/contracts/selection";
+import {
+  CsvScheduleGateway,
+  FileCsvArtifactStore,
+  FileCsvScheduleSource,
+} from "@/adapters/csv/schedule-gateway";
+import { CSV_COLUMNS, parseMonthlyCsv } from "@/adapters/csv/monthly-csv";
 
 loadDotenv({ path: ".env.local", quiet: true });
 
@@ -148,17 +159,30 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   function build(options: {
     gateway?: ScheduleGateway;
     assignments?: ShiftAssignmentRepository;
-    planner?: ReturnType<typeof createFakeSelectionPlanner>;
-    eligibility?: Pick<import("@/contracts/selection").EligibilityChecker, "recheck">;
+    planner?: SelectionPlanner;
+    eligibility?: Pick<EligibilityChecker, "recheck">;
+    loadMonthlyEligibility?: typeof import("@/adapters/db/monthly-eligibility").loadLatestMonthlyEligibility;
   }) {
     return adoptPlan({
       ...repos,
       assignments: options.assignments ?? repos.assignments,
       gateway: options.gateway ?? newGateway(),
       planner: options.planner ?? createFakeSelectionPlanner(),
-      // **台ではなく本物の規則を通す**（Q15）。月次上限・重複・在籍はここで実際に
-      // 検査される。可能時間は承諾した区間を渡すため事実上恒真（`eligibility-recheck.ts`）。
       eligibility: options.eligibility ?? createEligibilityRecheck(),
+      loadMonthlyEligibility:
+        options.loadMonthlyEligibility ??
+        (async (_tx, input) => ({
+          monthlySchedule: {
+            storeId: input.storeId,
+            timezone: "Asia/Tokyo",
+            month: input.businessDate.slice(0, 7),
+            sourceRevision: REVISION,
+            staffIds: [absentStaff, ...candidates, silentStaff],
+            completeness: "COMPLETE",
+            assignments: [],
+          },
+          staffProfiles: [],
+        })),
       clock: { now: () => NOW },
       ids: { next: () => randomUUID() },
     });
@@ -510,6 +534,114 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       await tx.query("delete from store where store_id = $1", [storeId]);
     });
     await closePool();
+  });
+
+  it("A01/A06/A09/A16: 固定月CSVと実DBで選定、作業成果物、正式採用、読戻し、通知待ちへ進む", async () => {
+    const outputDir = await mkdtemp(path.join(tmpdir(), "taskcal-pg-csv-"));
+    const otherScheduleIds: string[] = [];
+    try {
+      const days = Array.from({ length: 30 }, (_, i) => {
+        const date = `2026-09-${String(i + 1).padStart(2, "0")}`;
+        const id = date === BUSINESS_DATE ? scheduleId : randomUUID();
+        if (id !== scheduleId) otherScheduleIds.push(id);
+        return { date, scheduleId: id, assignmentIds: date === BUSINESS_DATE ? [absentShift] : [] };
+      });
+      const manifest = {
+        formatVersion: 1,
+        storeId,
+        timezone: "Asia/Tokyo",
+        month: "2026-09",
+        roleCode: "FLOOR",
+        staffIds: [absentStaff, ...candidates, silentStaff].sort(),
+        days,
+      };
+      const csv = `${CSV_COLUMNS.join(",")}\n${[
+        scheduleId,
+        BUSINESS_DATE,
+        absentShift,
+        absentStaff,
+        "FLOOR",
+        SHIFT_START,
+        SHIFT_END,
+        "SCHEDULED",
+        "",
+      ].join(",")}\n`;
+      const parsed = parseMonthlyCsv(csv, manifest);
+      const artifactRef = `csv://initial/${caseId}`;
+      const artifacts = new FileCsvArtifactStore(path.join(outputDir, "artifacts"));
+      expect(
+        await artifacts.write({
+          connectionId: CONNECTION,
+          artifactRef,
+          csv: parsed.normalizedCsv,
+          manifest: parsed.manifest,
+        }),
+      ).toBe("WRITTEN");
+      await withTransaction(async (tx) => {
+        await tx.query(
+          `update authoritative_schedule_ref set source_revision=$3, artifact_ref=$4
+          where connection_id=$1 and schedule_id=$2`,
+          [CONNECTION, scheduleId, parsed.sourceRevision, artifactRef],
+        );
+        for (const day of days) {
+          if (day.scheduleId === scheduleId) continue;
+          await tx.query(
+            "insert into schedule (schedule_id, store_id, business_date) values ($1,$2,$3)",
+            [day.scheduleId, storeId, day.date],
+          );
+          await tx.query(
+            `insert into authoritative_schedule_ref
+            (connection_id,schedule_id,source_revision,artifact_ref,adopted_at)
+            values ($1,$2,$3,$4,$5)`,
+            [CONNECTION, day.scheduleId, parsed.sourceRevision, artifactRef, NOW],
+          );
+        }
+      });
+      const csvPath = path.join(outputDir, "schedule.csv");
+      const manifestPath = path.join(outputDir, "manifest.json");
+      await writeFile(csvPath, parsed.normalizedCsv);
+      await writeFile(manifestPath, JSON.stringify(parsed.manifest));
+      const gateway = new CsvScheduleGateway({
+        source: new FileCsvScheduleSource(csvPath, manifestPath),
+        outputDir,
+      });
+      const { loadLatestMonthlyEligibility } = await import("@/adapters/db/monthly-eligibility");
+      const result = await build({
+        gateway,
+        planner: createSelectionPlanner(),
+        eligibility: createEligibilityRecheck(),
+        loadMonthlyEligibility: (tx, input) =>
+          loadLatestMonthlyEligibility(tx, { ...input, allowedDates: new Set([BUSINESS_DATE]) }),
+      })({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
+      expect(result).toMatchObject({
+        ok: true,
+        outcome: "ADOPTED",
+        adopted: 1,
+        readBackMatches: true,
+      });
+      expect(await additionalShifts()).toHaveLength(1);
+      expect((await refRow()).source_revision).not.toBe(parsed.sourceRevision);
+      const notices = await query<{ kind: string }>(
+        "select kind from notification_outbox where case_id=$1 order by kind",
+        [caseId],
+      );
+      expect(notices.map((row) => row.kind)).toEqual([
+        "CASE_CLOSED",
+        "CONFIRMATION",
+        "NOT_SELECTED",
+      ]);
+    } finally {
+      await withTransaction(async (tx) => {
+        await tx.query(
+          "delete from authoritative_schedule_ref where schedule_id = any($1::uuid[])",
+          [otherScheduleIds],
+        );
+        await tx.query("delete from schedule where schedule_id = any($1::uuid[])", [
+          otherScheduleIds,
+        ]);
+      });
+      await rm(outputDir, { recursive: true, force: true });
+    }
   });
 
   it("D06：正式採用は勤務・欠勤・正式版参照・採用事実・通知を同じ取引で確定させる", async () => {

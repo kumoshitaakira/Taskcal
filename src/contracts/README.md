@@ -86,10 +86,9 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 型だけ取り込みます**（`import type`）。実行時の依存は増えません。契約側で同じ形を
 書き写すと、片方だけが変わったときに黙って食い違うためです。
 
-**可能時間は検査していません。** 可能時間表がリポジトリに無く、`availabilityWindows`
-には本人が承諾した区間を入れています（ADR-014 / Q09：本人の返信が唯一の根拠）。
-したがって可能時間の検査は事実上恒真で、実際に効くのは在籍・店舗・職種・本人除外・
-勤務の重複・月次上限です。README の「動かないもの」に残しています。
+**可能時間は固定デモ日のみ検査します。** 可能時間表の永続化schemaが未承認のため、
+固定fixtureの可能時間を渡し、対象外の日は正式採用を止めます。実際に効くのは在籍・店舗・
+職種・本人除外・勤務の重複・月次上限です。READMEの「動かないもの」に残しています。
 
 時刻の形式は境界でそろえます。永続層は `Date.toISOString()`（UTC）、担当Bの規則は
 `YYYY-MM-DDTHH:MM:00+09:00`（Asia/Tokyo固定）です。`toJstFixedFormat` が写し、
@@ -105,9 +104,32 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 範囲が狭いまま信じると取得していない日を0分として数えます（Q06 / A09）。
 
 `schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
-を指します。`selection.ts` の `SelectionPlanner` は**担当Bが `src/domain/selection/` で
-実装する口**で、まだ実装がありません。呼び出し側は未実装を成功として扱わず、
-`NOT_IMPLEMENTED` を返します。`EligibilityChecker.recheck` は上記のとおり合流済みです。
+を指します。`selection.ts` の `SelectionPlanner` と `EligibilityChecker` は
+`src/domain/selection/` で固定CSVの正常系へ接続しました。入力版や可能時間を確認できない
+場合は、検査を省略せず正式採用を止めます。
+`src/domain/interval/index.ts` の `evaluateCandidateEligibility` は
+`monthlySchedule: MonthlyScheduleSnapshot` を使う。今回の固定CSV経路では
+`EligibilityChecker.recheck` から呼び、最新の月内勤務を渡す。
+
+固定CSV経路では下記の形で接続した。ADR-021により、変更者でない側の確認が要る。
+
+### 固定CSV正常系での最小契約変更案（A・B共同確認待ち）
+
+`SelectionInputs.monthlyRevision` に、対象月の全日別正式版参照、勤務行、スタッフ条件の
+内容hashを選定時に保存する。正式採用取引内で同じDB範囲を読み直して照合する。
+`EligibilityRecheckInput` に `monthlySchedule`、`staffProfiles`、`absentStaffId` を渡し、
+既存の `evaluateCandidateEligibility` で可能時間・重複・月次上限を再検査する。
+`SelectionInputs.baseArtifactRef` と `ApplyUpdateCommand.baseArtifactRef` は現行正式版成果物を
+更新元として指定し、操作のrequestHashにも含める。値が確認できない場合は採用を止める。
+これらは今回の固定fixture向け実装であり、Q14の共同確認による業務契約の確定ではない。
+既存の `selection_result` テーブルには `monthly_revision` と `base_artifact_ref` が無い。
+採用準備中に再起動した場合はこの入力版を復元できず、正式採用を止める。A・B確認後、
+両列のmigration、repositoryの保存・読戻し、再開試験が必要。未承認draftは使用しない。
+
+`schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
+を指します。`selection.ts` の `SelectionPlanner` と `EligibilityChecker` は
+`src/domain/selection/` で固定CSVの正常系へ接続しました。入力版や可能時間を確認できない
+場合は、検査を省略せず正式採用を止めます。
 
 `worker_heartbeat`（migration 0001）は生存確認だけで、二重処理を防ぐ仕組みではありません。
 `worker_name` が主キーのため、同名workerが2本立っても upsert で上書きされ、`/api/health`

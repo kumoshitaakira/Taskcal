@@ -12,6 +12,7 @@
     "worker": "tsx --conditions=react-server src/worker/main.ts",
     "migrate": "tsx scripts/migrate.ts",
     "seed:dev": "tsx scripts/seed-dev.ts",
+    "import:demo-csv": "tsx scripts/import-demo-csv.ts",
     "check:orca": "tsx scripts/check-orca.ts",
     "check:orca:call": "tsx --conditions=react-server scripts/check-orca-call.ts",
     "check:consistency": "tsx scripts/check-consistency.ts",

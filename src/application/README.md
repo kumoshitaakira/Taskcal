@@ -7,10 +7,8 @@
 `monthly-schedule.ts` に、CSV adapterの結果を完全性検証済みのdomain snapshotへ変換する
 application責務を置く（担当B）。
 
-**正式採用の進行制御は実装済み**（`adopt-plan.ts`、下記）。ただし候補選定と
-CSVの生成・読戻しが未実装のため、**本番経路では `NOT_IMPLEMENTED` で断る**。
-`monthly-schedule.ts` と `src/domain/interval/` の適格性検査は、まだ
-`adopt-plan.ts` へ繋いでいない（`src/contracts/README.md` の「まだ契約に無いもの」を参照）。
+正式採用の進行制御は `adopt-plan.ts`。固定CSV Gateway、選定、DBの月内勤務再取得と
+`src/domain/interval/` の適格性検査を接続した。固定デモ日以外は可能時間を確認できず止める。
 
 ## use case
 
@@ -90,26 +88,17 @@ repository 越しに読む。決定的なロジックを永続化の形から切
 未実装の依存には「未実装を返す実装」を置く。模擬結果を返さない
 （`UnconfiguredModelGateway` と同じ方針）。
 
-- 適格性の再検査（可能時間・月次上限・重複）：`NOT_IMPLEMENTED` を投げる。
-  検査していないものを通ったことにしない。
+- 適格性の再検査（可能時間・月次上限・重複）：固定デモ日について、DBから取り直した
+  月内勤務と固定fixtureの可能時間を `domain/interval` で検査する。対象外の日は採用を止める。
 - 返信解釈：OrcaRouterが未設定なら `NOT_CONFIGURED`。ただし **worker は呼出しを止めない**
   ——`UnconfiguredModelGateway` は保存済み結果を再生するので、設定を見て手前で止めると
   課金済みの結果が永久に適用されない。新規の呼出しはgateway側が止める。
-- 候補選定（`SelectionPlanner`）：`NOT_IMPLEMENTED` を投げる。「選べなかった」と
-  「選ぶ規則が無い」は別（A16）。
-- 本人の可能時間：**検査していない。** 可能時間表が無いため、承諾した区間をそのまま
-  可能時間として渡している（Q15）。月次上限・勤務の重複・在籍・職種は実際に検査する。
-- CSVの生成・読戻し（`ScheduleGateway`）：`UnimplementedScheduleGateway` が
-  `NOT_IMPLEMENTED` を投げる。**正式採用の進行そのものは実装済み**だが、この口が無い
-  ため本番経路では成立しない。`/manager` と `/api/health` の「未実装」に出す。
-- 配送に失敗（`FAILED`）した通知の再送：未実装。`claimNext` は `FAILED` を取り出さず、
-  `settle-reporting.ts` が案件を要対応へ回す。同じ `operation_id` での再送は
-  `operation_result` に保存済みの失敗を `REPLAY` で返すだけなので、空回りにしかならない。
-  本当の再送には attempt を含む操作IDが要る。
-  結果不明（`UNKNOWN`）の側は `reconcile-outbox.ts` が `getSendResult` で照合する。
-  **こちらも再送はしない。** 送られたと確認できたときだけ状態を動かす。
-- 復旧しない要対応の案件を人が引き取る操作：未実装。`ATTENTION → HANDED_OFF` は
-  遷移表にあるが、**自動では落とさない**（ADR-022）。いまは `ATTENTION` のまま残る。
+- 候補選定（`SelectionPlanner`）：各区間ちょうど1人の計画を探し、不成立は理由を残す。
+- CSVの生成・読戻し（`ScheduleGateway`）：作業成果物の `PREPARED` は正式採用ではない。
+  既存の一括採用取引と正式版読戻しが完了してから通知へ進む。
+- 本人の可能時間：固定デモ日のみ固定fixtureで検査する。可能時間の永続化schemaは未承認のため対象外の日は採用を止める（Q15）。月次上限・勤務の重複・在籍・職種はDBから取り直して実際に検査する。
+- 配送に失敗（`FAILED`）した通知の再送：未実装。`claimNext` は `FAILED` を取り出さず、`settle-reporting.ts` が案件を要対応へ回す。同じ `operation_id` での再送は保存済みの失敗を返すだけなので、本当の再送には attempt を含む操作IDが要る。`UNKNOWN` は照会で送られたと確認できたときだけ状態を動かす。
+- 復旧しない要対応の案件を人が引き取る操作：未実装。`ATTENTION → HANDED_OFF` は自動では落とさず、いまは `ATTENTION` のまま残る（ADR-022）。
 
 ## 正式採用の手順と取引（`adopt-plan.ts`）
 

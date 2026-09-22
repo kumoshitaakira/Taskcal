@@ -50,6 +50,9 @@ export interface SelectionInputs {
   readonly connectionId: ConnectionId;
   readonly scheduleId: ScheduleId;
   readonly sourceRevision: SourceRevision;
+  readonly baseArtifactRef?: string;
+  /** 採用済み日別参照・月内勤務・スタッフ条件から計算した版。A・B共同確認対象。 */
+  readonly monthlyRevision?: string;
   /** Q06：COMPLETE でなければ月次上限の検査は成立しない（A09）。 */
   readonly monthlyCompleteness: "COMPLETE" | "INCOMPLETE" | "UNKNOWN";
   readonly missingDates: readonly string[];
@@ -159,19 +162,12 @@ export interface EligibilityRecheckInput {
   readonly businessDate: string;
   /** D01：欠勤者本人は代替候補にならない。 */
   readonly absentStaffId: string;
-  /**
-   * Q15：**採用の直前に取り直した**月内勤務表。選定時に固定した値を再利用しない（D08）。
-   *
-   * `completeness` が `COMPLETE` でなければ月次上限の検査は成立しない。欠けた日を
-   * 0と推定しない（Q06 / A09）。
-   */
+  /** **採用の直前に取り直した**月内勤務表（D08）。 */
   readonly monthlySchedule: MonthlyScheduleSnapshot;
   /**
    * 検査対象のスタッフ条件。在籍・店舗・職種・月次上限を持つ。
    *
-   * **`availabilityWindows` には本人が承諾した区間を入れる。** MVPには可能時間表が
-   * 無く、「本人が大丈夫と答えた区間」が唯一の根拠（ADR-014 / Q09）。したがって
-   * 可能時間の検査は事実上恒真で、実際に効くのは在籍・職種・重複・月次上限。
+   * 固定デモではfixtureの可能時間を渡す。未承認schemaで確認できない場合は採用を止める。
    */
   readonly staffProfiles: readonly StaffProfile[];
 }

@@ -23,7 +23,7 @@ function editFirstRow(csv: string, column: (typeof CSV_COLUMNS)[number], value: 
 }
 
 describe("月内固定CSV（正式採用前の入出力）", () => {
-  it("A06: 保存・別読込・行順変更でもID、由来、状態と内容版を保持する", async () => {
+  it("A06: 保存・別読込・行順変更でもID、状態と内容版を保持する", async () => {
     const { csv, manifest } = await input();
     const first = parseMonthlyCsv(csv, manifest);
     const directory = await mkdtemp(path.join(tmpdir(), "taskcal-csv-"));
@@ -44,9 +44,7 @@ describe("月内固定CSV（正式採用前の入出力）", () => {
       expect(again.assignments.map((row) => row.status)).toEqual(
         expect.arrayContaining(["SCHEDULED", "COMPLETED", "CANCELLED"]),
       );
-      expect(again.assignments.find((row) => row.sourceCaseId)?.sourceCaseId).toBe(
-        "00000005-0000-4000-8000-000000000001",
-      );
+      expect(again.assignments.every((row) => row.sourceCaseId === undefined)).toBe(true);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

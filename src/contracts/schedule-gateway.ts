@@ -123,6 +123,8 @@ export interface ApplyUpdateCommand {
    * その場合、呼出し側が店舗単位の直列化で代替する（RFC-010 §5）。
    */
   readonly expectedSourceRevision: SourceRevision;
+  /** 現行正式版。次案件はこの成果物を更新元として読む。 */
+  readonly baseArtifactRef?: string;
   /**
    * **`shiftAssignmentId` の昇順で渡すこと。**
    * requestHash は配列順を内容の違いとして扱うため、CSVの行順のまま渡すと
@@ -246,6 +248,7 @@ export interface ApplyUpdatePayloadForHash {
   readonly connectionId: ConnectionId;
   readonly scheduleId: ScheduleId;
   readonly expectedSourceRevision: SourceRevision;
+  readonly baseArtifactRef?: string;
   readonly additions: readonly PlannedAssignment[];
   readonly absences: readonly PlannedAbsence[];
 }

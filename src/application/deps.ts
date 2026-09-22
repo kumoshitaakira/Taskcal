@@ -7,8 +7,9 @@
 
 import "server-only";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { createDefaultMessagingGateway } from "../adapters/channel";
-import { createUnimplementedScheduleGateway } from "../adapters/csv/unimplemented-schedule-gateway";
+import { CsvScheduleGateway, FileCsvScheduleSource } from "../adapters/csv/schedule-gateway";
 import { createPgAuthoritativeScheduleRefRepository } from "../adapters/db/authoritative-ref-repository";
 import { createPgBudgetLedger } from "../adapters/db/budget-ledger";
 import { createPgCommitmentRepository } from "../adapters/db/commitment-repository";
@@ -34,8 +35,9 @@ import { interpretReply } from "./interpret-reply";
 import { receiveInboundEvent } from "./receive-inbound-event";
 import { reconcileOutbox } from "./reconcile-outbox";
 import { recoverCase } from "./recover-case";
-import { createEligibilityRecheck } from "./eligibility-recheck";
-import { createRosterEligibility, createUnimplementedSelectionPlanner } from "./roster-eligibility";
+import { createRosterEligibility } from "./roster-eligibility";
+import { createSelectionPlanner } from "../domain/selection";
+import { createEligibilityRecheck } from "../domain/selection/eligibility";
 import { sendOutbox } from "./send-outbox";
 import { settleReporting } from "./settle-reporting";
 import { startOutreach } from "./start-outreach";
@@ -67,12 +69,15 @@ export function buildAppServices() {
   const assignments = createPgShiftAssignmentRepository();
   const roster = createRosterEligibility();
   const messaging = createDefaultMessagingGateway({ operations });
-  // 担当Bの実装が入るまでの未実装の口。模擬結果を返さず NOT_IMPLEMENTED を投げる。
-  // 入ったらこの3行を差し替え、runtime-status の notImplemented から落とす。
-  const gateway = createUnimplementedScheduleGateway();
-  const planner = createUnimplementedSelectionPlanner();
-  // Q15（2026-09-22確定・担当B承認済み）：適格性の再検査は担当Bの規則を通す。
-  // **可能時間表は無い。** 在籍・職種・勤務の重複・月次上限だけが実際に効く。
+  const fixtureDir = path.join(process.cwd(), "fixtures", "dev", "month-2026-09");
+  const gateway = new CsvScheduleGateway({
+    source: new FileCsvScheduleSource(
+      path.join(fixtureDir, "schedule.csv"),
+      path.join(fixtureDir, "manifest.json"),
+    ),
+    outputDir: path.join(process.cwd(), "var", "csv"),
+  });
+  const planner = createSelectionPlanner();
   const eligibility = createEligibilityRecheck();
   const stop = stopCase({
     cases,
