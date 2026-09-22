@@ -75,6 +75,10 @@ docker compose down -v && docker compose up -d db && npm run migrate && npm run 
 返信の解釈（承諾にするかどうか）はOrcaRouterが未設定のため動きません。画面と
 `/api/health` の「未実装」にその旨を出します。
 
+#### デモ
+
+https://github.com/user-attachments/assets/456398f2-be96-4ae4-b491-ed8ce3c9c104
+
 ### 確認コマンド
 
 コミット前に、変更に関係する以下を実行します。
