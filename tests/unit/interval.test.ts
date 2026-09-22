@@ -9,11 +9,13 @@ import {
   type MonthlyAssignment,
   type MonthlyScheduleSnapshot,
   type StaffProfile,
+  calculateMonthlyCapacity,
 } from "@/domain/interval";
 
 const STAFF_A = "00000004-0000-4000-8000-000000000001";
 const STAFF_B = "00000004-0000-4000-8000-000000000002";
 const STAFF_C = "00000004-0000-4000-8000-000000000003";
+const STAFF_OUTSIDE = "00000004-0000-4000-8000-000000000099";
 const STORE = "00000001-0000-4000-8000-000000000001";
 
 const range = (startAt: string, endAt: string) => ({ startAt, endAt });
@@ -35,11 +37,15 @@ const assignment = (
   status,
 });
 
-const snapshot = (assignments: readonly MonthlyAssignment[] = []): MonthlyScheduleSnapshot => ({
+const snapshot = (
+  assignments: readonly MonthlyAssignment[] = [],
+  staffIds: readonly string[] = [STAFF_A, STAFF_B, STAFF_C],
+): MonthlyScheduleSnapshot => ({
   storeId: STORE,
   timezone: "Asia/Tokyo",
   month: "2026-09",
   sourceRevision: "test-source-revision",
+  staffIds,
   completeness: "COMPLETE",
   assignments,
 });
@@ -136,6 +142,22 @@ describe("interval domain (U03)", () => {
     expect(result).toMatchObject({
       eligible: false,
       reason: CANDIDATE_INELIGIBILITY.AVAILABILITY_NOT_COVERED,
+    });
+  });
+
+  it("月次入力で対象外のスタッフは月次0分として扱わない", () => {
+    const result = evaluateCandidateEligibility({
+      storeId: STORE,
+      roleCode: "FLOOR",
+      businessDate: "2026-09-21",
+      proposedTime: range("2026-09-21T18:00:00+09:00", "2026-09-21T22:00:00+09:00"),
+      absentStaffId: STAFF_A,
+      staff: staff({ staffId: STAFF_OUTSIDE }),
+      monthlySchedule: snapshot([], [STAFF_A, STAFF_B, STAFF_C]),
+    });
+    expect(result).toMatchObject({
+      eligible: false,
+      reason: CANDIDATE_INELIGIBILITY.STAFF_NOT_IN_MONTHLY_SNAPSHOT,
     });
   });
 
@@ -340,6 +362,18 @@ describe("interval domain (U03)", () => {
       reason: CANDIDATE_INELIGIBILITY.MONTHLY_CAP_EXCEEDED,
     });
     expect(result.monthlyCapacity?.remainingAfterMinutes).toBe(-4 * 60);
+  });
+
+  it("A09: 直接の月次余力計算でも候補日とsnapshot月の不一致を拒否する", () => {
+    expect(() =>
+      calculateMonthlyCapacity({
+        snapshot: snapshot(),
+        staffId: STAFF_B,
+        limitMinutes: 6 * 60,
+        proposedTime: range("2026-10-01T18:00:00+09:00", "2026-10-01T22:00:00+09:00"),
+        businessDate: "2026-10-01",
+      }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
   });
 
   it("取消・欠勤勤務は候補の既存重複にも月次上限にも数えない", () => {

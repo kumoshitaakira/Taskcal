@@ -42,6 +42,8 @@ export interface MonthlyScheduleSnapshot {
   readonly month: string;
   /** 正式採用前の版再検査に使う、CSV adapter由来の内容版。 */
   readonly sourceRevision: string;
+  /** 月次入力の完全性を検証した対象スタッフ集合。勤務0件のスタッフも含む。 */
+  readonly staffIds: readonly string[];
   readonly completeness: "COMPLETE" | "INCOMPLETE" | "UNKNOWN";
   readonly assignments: readonly MonthlyAssignment[];
 }
@@ -60,6 +62,7 @@ export const CANDIDATE_INELIGIBILITY = {
   WRONG_STORE: "WRONG_STORE",
   ROLE_NOT_ALLOWED: "ROLE_NOT_ALLOWED",
   ABSENT_STAFF: "ABSENT_STAFF",
+  STAFF_NOT_IN_MONTHLY_SNAPSHOT: "STAFF_NOT_IN_MONTHLY_SNAPSHOT",
   EXISTING_ASSIGNMENT_OVERLAP: "EXISTING_ASSIGNMENT_OVERLAP",
   AVAILABILITY_NOT_COVERED: "AVAILABILITY_NOT_COVERED",
   OUT_OF_SCOPE: ERROR_CODES.OUT_OF_SCOPE,
@@ -327,6 +330,12 @@ function assertCompleteMonthlySchedule(snapshot: MonthlyScheduleSnapshot): void 
   if (!snapshot.sourceRevision) {
     invalid("勤務表の内容版が必要です。");
   }
+  if (
+    snapshot.staffIds.length === 0 ||
+    new Set(snapshot.staffIds).size !== snapshot.staffIds.length
+  ) {
+    invalid("月次勤務表の対象スタッフ集合が不正です。");
+  }
   parseMonth(snapshot.month);
   if (snapshot.completeness !== "COMPLETE") {
     invalid("月次上限を検査するには対象月の勤務表が完全である必要があります。");
@@ -337,6 +346,9 @@ function assertCompleteMonthlySchedule(snapshot: MonthlyScheduleSnapshot): void 
       invalid("勤務IDが重複しています。");
     }
     ids.add(assignment.shiftAssignmentId);
+    if (!snapshot.staffIds.includes(assignment.staffId)) {
+      invalid("勤務のスタッフが月次入力の対象範囲外です。");
+    }
     if (!ASSIGNMENT_STATUSES.includes(assignment.status)) {
       outOfScope("対応していない勤務状態です。");
     }
@@ -354,6 +366,9 @@ export function calculateMonthlyAssignedMinutes(input: {
   readonly staffId: string;
 }): number {
   assertCompleteMonthlySchedule(input.snapshot);
+  if (!input.snapshot.staffIds.includes(input.staffId)) {
+    invalid("対象スタッフが月次入力の対象範囲外です。");
+  }
   return input.snapshot.assignments
     .filter(
       (assignment) => assignment.staffId === input.staffId && isActiveAssignment(assignment.status),
@@ -371,6 +386,7 @@ export function calculateMonthlyCapacity(input: {
   if (!Number.isInteger(input.limitMinutes) || input.limitMinutes < 0) {
     invalid("月次上限は0以上の整数分で指定してください。");
   }
+  assertMonthContainsDate(input.snapshot.month, input.businessDate);
   const proposed = validateCandidateTimeRange(input.proposedTime, input.businessDate);
   const usedMinutes = calculateMonthlyAssignedMinutes({
     snapshot: input.snapshot,
@@ -441,6 +457,9 @@ export function evaluateCandidateEligibility(
   }
   if (input.staff.staffId === input.absentStaffId) {
     return ineligible(input, CANDIDATE_INELIGIBILITY.ABSENT_STAFF);
+  }
+  if (!input.monthlySchedule.staffIds.includes(input.staff.staffId)) {
+    return ineligible(input, CANDIDATE_INELIGIBILITY.STAFF_NOT_IN_MONTHLY_SNAPSHOT);
   }
 
   if (

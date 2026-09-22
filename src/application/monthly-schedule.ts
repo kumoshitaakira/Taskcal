@@ -54,6 +54,7 @@ export function createMonthlyScheduleSnapshot(monthlyCsv: MonthlyCsv): MonthlySc
     timezone: monthlyCsv.manifest.timezone,
     month: monthlyCsv.manifest.month,
     sourceRevision: monthlyCsv.sourceRevision,
+    staffIds: [...monthlyCsv.manifest.staffIds],
     completeness: "COMPLETE",
     assignments: monthlyCsv.assignments.map(
       ({ shiftAssignmentId, businessDate, staffId, roleCode, startAt, endAt, status }) => ({

@@ -42,7 +42,7 @@
 
 `MonthlyScheduleSnapshot` は、applicationの
 `createMonthlyScheduleSnapshot` がCSVの完全性と対象月全日の宣言を検証した後に生成する。
-snapshotには正式採用前の版再検査用に`sourceRevision`を保持する。
+snapshotには正式採用前の版再検査用に`sourceRevision`と、勤務0件のスタッフも含む対象スタッフ集合を保持する。
 
 - `validateTimeRange`、`overlapsTimeRange`、`containsTimeRange`：半開区間、JST、15分境界、日跨ぎ
 - `deriveAvailableIntervals`：同一スタッフの予定・完了勤務を可能時間から差し引く

@@ -26,6 +26,7 @@ describe("application monthly schedule conversion", () => {
       timezone: "Asia/Tokyo",
       month: "2026-09",
       sourceRevision: monthlyCsv.sourceRevision,
+      staffIds: monthlyCsv.manifest.staffIds,
       completeness: "COMPLETE",
     });
     expect(snapshot.assignments).toHaveLength(monthlyCsv.assignments.length);
