@@ -56,14 +56,15 @@
         }
       ],
       "expected": {
-        "caseState": "ATTENTION",
-        "scheduleUpdateState": "RECONCILE_REQUIRED",
-        "adoptionFact": "UNKNOWN",
+        "caseState": "COORDINATING",
+        "scheduleUpdateState": "REJECTED",
+        "adoptionFact": "NOT_ADOPTED",
         "authoritativeSourceRevision": "demo-schedule-r1",
         "resultKinds": ["PREPARED"],
         "readBackMatches": false,
-        "formalAdoptionOccurred": "UNKNOWN",
-        "completed": false
+        "formalAdoptionOccurred": false,
+        "completed": false,
+        "recoveryTrace": ["PREPARING", "COORDINATING"]
       },
       "forbiddenExternalEffects": [
         "MARK_COMPLETED_FROM_MISMATCHED_READBACK",
@@ -72,10 +73,10 @@
       ],
       "applicationAcceptance": {
         "status": "UNEXECUTED",
-        "reason": "作業成果物の読戻しと正式版参照の照合をapplicationへ接続していないため",
+        "reason": "作業成果物の読戻しと正式採用前の正式版参照照合をapplicationへ接続していないため",
         "requires": [
           "artifactRef単位の読戻し結果と期待assignment集合の比較",
-          "不一致時に確定事実を保持してATTENTIONへ遷移する状態管理"
+          "不一致時に正式採用を拒否し、未採用のまま再計画へ戻す状態管理"
         ]
       }
     }

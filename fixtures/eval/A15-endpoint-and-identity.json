@@ -107,6 +107,10 @@
         "deduplicationKey": ["provider", "connectionId", "eventId"],
         "sameEventIdAcrossConnectionsIsDuplicate": false,
         "receivedOrderSource": "receivedSeq",
+        "receivedSeqByEvent": [
+          { "connectionId": "mock-connection-a", "eventId": "event-a15-same-id", "receivedSeq": 1 },
+          { "connectionId": "mock-connection-b", "eventId": "event-a15-same-id", "receivedSeq": 2 }
+        ],
         "commitmentCreated": false
       },
       "forbiddenExternalEffects": [

@@ -49,10 +49,17 @@
           "requestHash": "99adfc6c446259292991a2c55ee98f3637d9e588be359bf00de61378e850a1ff"
         }
       ],
+      "observedUpdateResult": {
+        "operationId": "op-a03-schedule-update",
+        "connectionId": "csv-demo-write",
+        "kind": "UNKNOWN",
+        "lookup": "LOOKUP_UNAVAILABLE"
+      },
       "expected": {
         "caseState": "HANDED_OFF",
         "scheduleUpdateState": "RECONCILE_REQUIRED",
         "adoptionFact": "UNKNOWN",
+        "handoffReason": "RECONCILE_STALLED",
         "authoritativeSourceRevision": "demo-schedule-r1",
         "resultKinds": ["UNKNOWN"],
         "formalAdoptionOccurred": "UNKNOWN",

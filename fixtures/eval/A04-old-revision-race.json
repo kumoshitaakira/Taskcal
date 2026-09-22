@@ -20,7 +20,15 @@
             "shift-replacement-a04-b"
           ]
         },
-        "expectedWinnerOperationId": "op-a04-winner"
+        "race": {
+          "mode": "SAME_OLD_REVISION_COMPARE_AND_SET",
+          "executionOrders": [
+            ["op-a04-winner", "op-a04-loser"],
+            ["op-a04-loser", "op-a04-winner"]
+          ],
+          "winnerSelection": "FIRST_SUCCESSFUL_COMPARE_AND_SET",
+          "adoptedOperationIdDependsOnExecutionOrder": true
+        }
       },
       "operations": [
         {
@@ -89,8 +97,10 @@
         "adoptionFact": "ADOPTED",
         "authoritativeSourceRevision": "demo-schedule-r2-a04",
         "resultKinds": ["PREPARED", "CONFLICT"],
-        "adoptedOperationId": "op-a04-winner",
-        "formalAdoptionCount": 1
+        "adoptedOperationIdChoices": ["op-a04-winner", "op-a04-loser"],
+        "formalAdoptionCount": 1,
+        "conflictOperationCount": 1,
+        "formalRevisionUpdateCount": 1
       },
       "forbiddenExternalEffects": [
         "SECOND_FORMAL_SCHEDULE_ADOPTION",

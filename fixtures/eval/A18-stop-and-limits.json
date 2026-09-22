@@ -162,7 +162,37 @@
           "assignmentIds": ["shift-replacement-a18"]
         }
       },
-      "operations": [],
+      "operations": [
+        {
+          "kind": "SCHEDULE_UPDATE",
+          "operationId": "op-a18-unknown-schedule-update",
+          "connectionId": "csv-demo-write",
+          "requestPayload": {
+            "connectionId": "csv-demo-write",
+            "scheduleId": "schedule-demo-2026-09",
+            "expectedSourceRevision": "demo-schedule-r1",
+            "additions": [
+              {
+                "shiftAssignmentId": "shift-replacement-a18",
+                "commitmentId": "commitment-a18-unknown",
+                "staffId": "staff-02",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-27T18:00:00+09:00",
+                "endAt": "2026-09-27T22:00:00+09:00",
+                "sourceCaseId": "case-a18-preparing-unknown"
+              }
+            ],
+            "absences": []
+          },
+          "requestHash": "26001dc92efd366c821e65be3e2af9a70f9758b1dee6451230540ec9f90e5cf4"
+        }
+      ],
+      "observedUpdateResult": {
+        "operationId": "op-a18-unknown-schedule-update",
+        "connectionId": "csv-demo-write",
+        "kind": "UNKNOWN",
+        "lookup": "LOOKUP_UNAVAILABLE"
+      },
       "expected": {
         "caseState": "RECONCILE_REQUIRED",
         "adoptionFact": "UNKNOWN",
@@ -170,7 +200,8 @@
         "resultKinds": ["UNKNOWN"],
         "newOutreachCount": 0,
         "formalAdoptionOccurred": "UNKNOWN",
-        "mustResolveAdoptionBeforeHandoff": true
+        "mustResolveAdoptionBeforeHandoff": true,
+        "recoveryTrace": ["PREPARING", "RECONCILE_REQUIRED"]
       },
       "forbiddenExternalEffects": [
         "ASSUME_NOT_ADOPTED",
@@ -179,10 +210,10 @@
       ],
       "applicationAcceptance": {
         "status": "UNEXECUTED",
-        "reason": "PREPARING中の上限到達で採用結果を先に確定する排他処理を接続していないため",
+        "reason": "PREPARING中の上限到達で採用結果を先に確定し、UNKNOWNを照合待ちへ保持する排他処理を接続していないため",
         "requires": [
           "停止・正式採用結果の同一排他規則",
-          "照会不能時にUNKNOWNを保持する引き継ぎ処理"
+          "照会不能時にUNKNOWNを保持し、自動引き継ぎを先送りする処理"
         ]
       }
     },
@@ -203,7 +234,38 @@
           "assignmentIds": ["shift-replacement-a18"]
         }
       },
-      "operations": [],
+      "operations": [
+        {
+          "kind": "SCHEDULE_UPDATE",
+          "operationId": "op-a18-adopted-schedule-update",
+          "connectionId": "csv-demo-write",
+          "requestPayload": {
+            "connectionId": "csv-demo-write",
+            "scheduleId": "schedule-demo-2026-09",
+            "expectedSourceRevision": "demo-schedule-r1",
+            "additions": [
+              {
+                "shiftAssignmentId": "shift-replacement-a18",
+                "commitmentId": "commitment-a18-adopted",
+                "staffId": "staff-02",
+                "roleCode": "FLOOR",
+                "startAt": "2026-09-28T18:00:00+09:00",
+                "endAt": "2026-09-28T22:00:00+09:00",
+                "sourceCaseId": "case-a18-preparing-adopted"
+              }
+            ],
+            "absences": []
+          },
+          "requestHash": "f2b5af902349efaa69a41c485e79aade832f08d1b75604a12269ba10852e8052"
+        }
+      ],
+      "observedUpdateResult": {
+        "operationId": "op-a18-adopted-schedule-update",
+        "connectionId": "csv-demo-write",
+        "kind": "APPLIED",
+        "newSourceRevision": "demo-schedule-r2-a18",
+        "lookup": "CONFIRMED"
+      },
       "expected": {
         "caseState": "COMMITTED",
         "adoptionFact": "ADOPTED",

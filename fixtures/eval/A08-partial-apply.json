@@ -10,6 +10,7 @@
         "caseId": "case-a08",
         "caseVersion": 15,
         "caseState": "PREPARING",
+        "lookupStillPossible": false,
         "schedule": {
           "scheduleId": "schedule-demo-2026-09",
           "sourceRevision": "demo-schedule-r1",
@@ -63,15 +64,24 @@
           "requestHash": "c9d5d0431876db81b40873b03875faec64567b39f718adb5e74fa848c5c4fec0"
         }
       ],
+      "observedUpdateResult": {
+        "operationId": "op-a08-schedule-update",
+        "connectionId": "csv-demo-write",
+        "kind": "PARTIAL",
+        "lookup": "LOOKUP_UNAVAILABLE"
+      },
       "expected": {
         "caseState": "HANDED_OFF",
         "scheduleUpdateState": "RECONCILE_REQUIRED",
         "adoptionFact": "UNKNOWN",
+        "handoffReason": "RECONCILE_STALLED",
         "authoritativeSourceRevision": "demo-schedule-r1",
         "resultKinds": ["PARTIAL"],
         "allAssignmentsFormallyAdopted": false,
-        "individualFormalAdoptionCount": 0,
-        "formalAdoptionOccurred": "UNKNOWN"
+        "internalFormalAdoptionCount": 0,
+        "externalPartialMayHaveOccurred": true,
+        "formalAdoptionOccurred": "UNKNOWN",
+        "recoveryTrace": ["PREPARING", "RECONCILE_REQUIRED", "ATTENTION", "HANDED_OFF"]
       },
       "forbiddenExternalEffects": [
         "INDIVIDUAL_ASSIGNMENT_ADOPTION",
