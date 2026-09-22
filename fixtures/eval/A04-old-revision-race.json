@@ -14,11 +14,7 @@
           "scheduleId": "schedule-demo-2026-09",
           "sourceRevision": "demo-schedule-r1",
           "formalSourceRevision": "demo-schedule-r1",
-          "assignmentIds": [
-            "shift-absent-a04",
-            "shift-replacement-a04-a",
-            "shift-replacement-a04-b"
-          ]
+          "assignmentIds": ["shift-absent-a04"]
         },
         "race": {
           "mode": "SAME_OLD_REVISION_COMPARE_AND_SET",

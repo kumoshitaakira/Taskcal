@@ -179,6 +179,25 @@ describe("決定的な受入fixtureの構造", () => {
     }
   });
 
+  it("正式採用前の既存勤務集合と追加予定を重ねない", () => {
+    for (const scenario of scenarios) {
+      if (scenario.boundary === "AFTER_FORMAL_ADOPTION") continue;
+      const scheduleValue = scenario.input.schedule;
+      if (typeof scheduleValue !== "object" || scheduleValue === null) continue;
+
+      const existingAssignmentIds = new Set(getArray(scheduleValue as JsonObject, "assignmentIds"));
+      for (const operation of scenario.operations) {
+        if (operation.kind !== "SCHEDULE_UPDATE") continue;
+        const payload = operation.requestPayload as JsonObject;
+        for (const addition of getArray(payload, "additions")) {
+          const plannedAssignment = addition as JsonObject;
+          expect(typeof plannedAssignment.shiftAssignmentId).toBe("string");
+          expect(existingAssignmentIds.has(plannedAssignment.shiftAssignmentId)).toBe(false);
+        }
+      }
+    }
+  });
+
   it("A02: PREPARED成果物を停止後の正式勤務にしない", () => {
     const scenario = fixtures.find((fixture) => fixture.caseId === "A02")!.scenarios[0];
     expect(scenario.expected.caseState).toBe("CANCELLED");

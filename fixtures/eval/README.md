@@ -10,6 +10,9 @@
 各JSONは一つの受入ケースを表し、`scenarios`に一つ以上の反例を持つ。
 
 - `input`：案件状態、最後に確認できた正式版、固定した更新／送信内容。
+- `input.schedule.assignmentIds`：最後に確認できた正式版に既に存在する勤務ID。正式採用前の
+  `operations[].requestPayload.additions`は計画中の勤務であり、この集合と重ねない。正式採用後の
+  シナリオでは、操作履歴が指す採用済み勤務が既存集合に含まれることがある。
 - `operations`：実行する前に固定する`operationId`、`requestPayload`、`requestHash`。
   配列の順序に意味がある更新内容は、既存契約どおり安定ID順で記載する。
 - `observedUpdateResult`：実行結果または照会結果のfixture上の証拠。`operationId`・
@@ -57,13 +60,15 @@ A15の`receivedSeqByEvent`は、受信イベントを永続化した後に案件
 
 ## 実行していない結合範囲
 
-`origin/main`には、A側の案件状態機械、Commitment／SelectionResultの永続化、模擬受信箱の
-受信イベント永続化、正式採用transaction、Gateway本体の結合実装がない。したがって、
-この変更ではJSONと構造検証だけを実行する。各シナリオの`applicationAcceptance.reason`
+`origin/main`にはA側の契約・案件進行・受信経路の実装が追加されているが、このfixture JSONを
+application、DB、正式版CSV Gateway、模擬受信箱へ通した結合受入は実行していない。特に正式採用
+transaction、正式版の読戻し・結果照合、停止・上限・期限との排他、再起動復旧は未確認である。
+したがって、この変更ではJSONと構造検証だけを実行する。各シナリオの`applicationAcceptance.reason`
 と`requires`に、未実行理由と必要な結合条件を残している。
 
-この共通契約の不足は[Q14](../../docs/OPEN-QUESTIONS.md)として未決のまま記録している。
-fixtureの文字列参照をCommitment等の正式な業務契約と読み替えない。
+`src/contracts/README.md`の共同所有・未固定の境界（正式採用用repository、worker lease/fence、
+fixtureからの対応付け）は[Q14](../../docs/OPEN-QUESTIONS.md)として未決のまま記録している。
+fixtureの文字列参照を、既存の契約草案を含む正式なapplication受入証拠へ読み替えない。
 
 fake Gatewayの結果を確認するテストを追加しても、application全体の受入合格へ昇格させない。
 このworktreeは`origin/main`起点であり、別worktreeのfake Gateway実装は取り込まない。

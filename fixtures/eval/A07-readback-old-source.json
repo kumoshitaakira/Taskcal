@@ -14,7 +14,7 @@
           "scheduleId": "schedule-demo-2026-09",
           "sourceRevision": "demo-schedule-r1",
           "formalSourceRevision": "demo-schedule-r1",
-          "assignmentIds": ["shift-absent-a07", "shift-replacement-a07"]
+          "assignmentIds": ["shift-absent-a07"]
         },
         "preparedArtifactRef": "work/a07/update.csv",
         "expectedPreparedSourceRevision": "demo-schedule-r2-a07",

@@ -159,7 +159,7 @@
           "scheduleId": "schedule-demo-2026-09",
           "sourceRevision": "demo-schedule-r1",
           "formalSourceRevision": "demo-schedule-r1",
-          "assignmentIds": ["shift-replacement-a18"]
+          "assignmentIds": []
         }
       },
       "operations": [
