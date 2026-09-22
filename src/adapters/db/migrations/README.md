@@ -59,10 +59,12 @@ CSV原本の取込み・正規化（担当B、`src/adapters/csv/`）は未実装
 
 `schema_migrations` テーブルはrunnerが自動で作る。ここに書かない。
 
-## `codex/b-db-migration-draft` の下書き
+## 適用対象と下書きの分離
 
-このブランチの `0002_schedule_update.sql` と `0003_outbound_operations.sql` は、
-repository境界を検討するための**仮置き・A確認待ち**である。Aの承認前にmigrationを
+通常のrunnerはこのディレクトリ直下のSQLだけを読み込む。現在はA承認済みの
+`0001_worker_runtime.sql`だけが適用対象である。`drafts/0002_schedule_update.sql` と
+`drafts/0003_outbound_operations.sql` はrepository境界を検討するための**仮置き・A確認待ち**で、
+`loadDraftMigrationFiles()`と静的／明示的な結合テストからだけ読み込む。Aの承認前にmigrationを
 完成済み・統合済みとは扱わない。
 
 - `ScheduleUpdate`の操作ID、requestHash、sourceRevision、artifactRef、readBack結果、
@@ -70,5 +72,7 @@ repository境界を検討するための**仮置き・A確認待ち**である�
 - 採用済み事実は `adoption_fact` として、ScheduleUpdateの状態や案件状態とは別に保存する。
 - outbound operationは `provider`・`connection_id`・`operation_id` の範囲で冪等性記録を
   持つ。同じIDの異なるrequestHashはrepository境界で衝突拒否する。
+- `revision_check_enforced`、`read_back`の一致証拠、`external_attempt_state`を保存し、
+  外部作用前にIN_FLIGHTを永続化して再起動後の無条件再送を防ぐ。
 - Commitment、SelectionResult、ReplyInterpretation、worker lease/fenceの最終schemaや
   外部キーは定義しない。未決の参照はSQLコメントとrepository READMEへ残す。

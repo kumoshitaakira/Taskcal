@@ -16,8 +16,11 @@ create table schedule_update (
   request_hash text not null,
   expected_source_revision text not null,
   source_revision_after text,
+  revision_check_enforced boolean not null default false,
   artifact_ref text,
   state text not null,
+  -- 外部作用前にIN_FLIGHTを保存する。再起動後に再送せず照合するための境界。
+  external_attempt_state text not null default 'IN_FLIGHT',
   result_kind text,
   read_back_status text not null default 'NOT_ATTEMPTED',
   read_back_source_revision text,
@@ -45,8 +48,27 @@ create table schedule_update (
     )),
   constraint schedule_update_read_back_status_values
     check (read_back_status in ('NOT_ATTEMPTED', 'MATCHED', 'MISMATCH', 'UNKNOWN')),
+  constraint schedule_update_external_attempt_state_values
+    check (external_attempt_state in ('IN_FLIGHT', 'RESULT_RECORDED')),
+  constraint schedule_update_read_back_match_evidence
+    check (read_back_status <> 'MATCHED'
+      or (read_back_source_revision is not null
+        and read_back_artifact_ref is not null
+        and char_length(read_back_source_revision) > 0
+        and char_length(read_back_artifact_ref) > 0)),
   constraint schedule_update_adoption_fact_values
     check (adoption_fact in ('NOT_ADOPTED', 'ADOPTED', 'UNKNOWN')),
+  constraint schedule_update_adopted_evidence
+    check (state <> 'ADOPTED'
+      or (adoption_fact = 'ADOPTED'
+        and revision_check_enforced
+        and read_back_status = 'MATCHED'
+        and source_revision_after is not null
+        and artifact_ref is not null
+        and char_length(source_revision_after) > 0
+        and char_length(artifact_ref) > 0
+        and source_revision_after = read_back_source_revision
+        and artifact_ref = read_back_artifact_ref)),
   constraint schedule_update_result_mappings_array
     check (jsonb_typeof(result_mappings) = 'array')
 );
