@@ -202,6 +202,12 @@ describe("FakeScheduleGateway", () => {
     expect(first.revisionCheckEnforced).toBe(false);
     expect(second.artifactRef).not.toBe(first.artifactRef);
     await expect(
+      gateway.readBack({ connectionId: command.connectionId, artifactRef: first.artifactRef! }),
+    ).resolves.toMatchObject({ artifactRef: first.artifactRef });
+    await expect(
+      gateway.readBack({ connectionId: command.connectionId, artifactRef: second.artifactRef! }),
+    ).resolves.toMatchObject({ artifactRef: second.artifactRef });
+    await expect(
       gateway.getUpdateResult({
         operationId: command.operation.operationId,
         connectionId: command.connectionId,
@@ -211,6 +217,24 @@ describe("FakeScheduleGateway", () => {
     await expect(gateway.applyUpdate(scheduleCommand("operation-batch"))).rejects.toThrow(
       "atomic batch",
     );
+  });
+
+  it("明示したartifactRefでも成果物ごとに既定sourceRevisionを進める", async () => {
+    const gateway = new FakeScheduleGateway({ initialSchedule: schedule });
+    gateway.setApplyOutcome("operation-explicit-artifact-a", {
+      kind: "PREPARED",
+      artifactRef: "fake://explicit-a",
+    });
+    gateway.setApplyOutcome("operation-explicit-artifact-b", {
+      kind: "PREPARED",
+      artifactRef: "fake://explicit-b",
+    });
+
+    const first = await gateway.applyUpdate(scheduleCommand("operation-explicit-artifact-a"));
+    const second = await gateway.applyUpdate(scheduleCommand("operation-explicit-artifact-b"));
+
+    expect(first.newSourceRevision).toBe("fake-revision-1");
+    expect(second.newSourceRevision).toBe("fake-revision-2");
   });
 
   it("版を読めない接続は勤務表の読込を拒否する", async () => {

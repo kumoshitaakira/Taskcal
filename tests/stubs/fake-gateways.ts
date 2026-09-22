@@ -44,16 +44,18 @@ export interface FakeScheduleApplyOutcome {
 }
 
 interface StoredScheduleUpdate {
-  readonly connectionId: string;
   readonly requestHash: RequestHash;
   readonly result: UpdateResult;
   readonly lookupResult: UpdateResult;
   readonly lookupAvailable: boolean;
-  readonly readBack?: ReadBackResult;
 }
 
 function updateKey(connectionId: string, operationId: OperationId): string {
   return `${connectionId}\u0000${operationId}`;
+}
+
+function artifactKey(connectionId: string, artifactRef: string): string {
+  return `${connectionId}\u0000${artifactRef}`;
 }
 
 function cloneAssignments(assignments: readonly LoadedAssignment[]): LoadedAssignment[] {
@@ -128,6 +130,7 @@ export class FakeScheduleGateway implements ScheduleGateway {
   private nextOutcome: FakeScheduleApplyOutcome = { kind: "PREPARED" };
   private readonly outcomes = new Map<OperationId, FakeScheduleApplyOutcome>();
   private readonly updates = new Map<string, StoredScheduleUpdate>();
+  private readonly artifacts = new Map<string, ReadBackResult>();
   private artifactSequence = 0;
 
   constructor(input: {
@@ -202,7 +205,6 @@ export class FakeScheduleGateway implements ScheduleGateway {
         true,
       );
       this.updates.set(key, {
-        connectionId: command.connectionId,
         requestHash: command.operation.requestHash,
         result,
         lookupResult: result,
@@ -213,9 +215,9 @@ export class FakeScheduleGateway implements ScheduleGateway {
 
     const configured = this.outcomes.get(command.operation.operationId) ?? this.nextOutcome;
     this.nextOutcome = { kind: "PREPARED" };
-    const artifactRef =
-      configured.artifactRef ?? `fake://schedule-update/${++this.artifactSequence}`;
-    const stagedRevision = configured.newSourceRevision ?? `fake-revision-${this.artifactSequence}`;
+    const artifactNumber = ++this.artifactSequence;
+    const artifactRef = configured.artifactRef ?? `fake://schedule-update/${artifactNumber}`;
+    const stagedRevision = configured.newSourceRevision ?? `fake-revision-${artifactNumber}`;
     const defaultMappings = command.additions
       .slice(0, configured.kind === "PARTIAL" ? 1 : undefined)
       .map((addition) => ({
@@ -245,14 +247,18 @@ export class FakeScheduleGateway implements ScheduleGateway {
       ? { ...cloneUpdateResult(configured.lookupResult), operation: { ...command.operation } }
       : result;
     this.updates.set(key, {
-      connectionId: command.connectionId,
       requestHash: command.operation.requestHash,
       result,
       lookupResult,
       lookupAvailable:
         this.capabilities.supportsResultLookup && configured.lookup !== "UNAVAILABLE",
-      ...(readBack ? { readBack: cloneReadBack(readBack) } : {}),
     });
+    if (readBack) {
+      this.artifacts.set(
+        artifactKey(command.connectionId, readBack.artifactRef),
+        cloneReadBack(readBack),
+      );
+    }
     return cloneUpdateResult(result);
   }
 
@@ -275,13 +281,9 @@ export class FakeScheduleGateway implements ScheduleGateway {
     readonly artifactRef: string;
   }): Promise<ReadBackResult> {
     this.readBackCalls.push({ ...ref });
-    for (const stored of this.updates.values()) {
-      if (
-        stored.connectionId === ref.connectionId &&
-        stored.readBack?.artifactRef === ref.artifactRef
-      ) {
-        return cloneReadBack(stored.readBack);
-      }
+    const readBack = this.artifacts.get(artifactKey(ref.connectionId, ref.artifactRef));
+    if (readBack) {
+      return cloneReadBack(readBack);
     }
     throw new Error("fake artifactRef is not available");
   }
