@@ -25,7 +25,9 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
 
   // 未設定でも callStore は渡す。新規呼出しは止めるが、保存済み結果の再生は
   // 外部呼出しを要さないため許す（設定復元まで復旧を止めない）。
-  if (!env.ORCA_BASE_URL || !env.ORCA_API_KEY) {
+  if (!env.ORCA_BASE_URL || !env.ORCA_API_KEY || !env.ORCA_MODEL) {
+    // モデルIDも接続情報のうち。どれを呼ぶか決まっていなければ、その単価も
+    // 決まっていない（RFC-004 §7）。既定のモデルへ黙って振らない。
     return new UnconfiguredModelGateway(deps.callStore, replayOnlyBudget(deps));
   }
   if (
@@ -42,6 +44,10 @@ export function createModelGateway(deps: ModelGatewayDeps): ModelGateway {
   return new OrcaRouterClient({
     baseUrl: env.ORCA_BASE_URL,
     apiKey: env.ORCA_API_KEY,
+    model: env.ORCA_MODEL,
+    // 未設定ならADR-007の初期値（クライアント側の既定）。推論モデルでは
+    // 20秒で足りず、結果不明の呼出しを量産するため設定できるようにしている。
+    timeoutMs: env.ORCA_TIMEOUT_MS,
     budget: new BudgetGuard(
       {
         caseSpendLimitMicroUsd: env.ORCA_CASE_SPEND_LIMIT_MICRO_USD,

@@ -81,3 +81,55 @@ export function buildClarificationBody(context: OfferContext): string {
     `回答期限：${deadlineDate} ${deadlineTime}`,
   ].join("\n");
 }
+
+/**
+ * 確定通知の本文（RFC-010 §4 手順6、Q07）。
+ *
+ * **正式採用が成立した後にだけ積む。** 作業用CSVができた段階（`PREPARED`）で
+ * 送ると、採用していない勤務を確定として伝えることになる（RFC-010 §6）。
+ *
+ * 区間は承諾した本人の確定区間で、必要枠そのものとは限らない。
+ */
+export function buildConfirmationBody(context: OfferContext): string {
+  const date = formatDate(context.startAt, context.timeZone);
+  const from = formatTime(context.startAt, context.timeZone);
+  const to = formatTime(context.endAt, context.timeZone);
+
+  return [
+    `${context.storeName}の代替勤務が確定しました。`,
+    `${date} ${from}〜${to}（${context.roleLabel}）`,
+    "勤務表へ反映済みです。変更が必要な場合は店舗へ直接ご連絡ください。",
+  ].join("\n");
+}
+
+/**
+ * 非選定通知の本文（Q07）。
+ *
+ * **辞退理由を尋ねない。** 次回の打診に影響しないことを明記する——過去の辞退や
+ * 非選定を候補順位の減点に使わない方針（AGENTS.md）を、相手にも伝えるため。
+ */
+export function buildNotSelectedBody(context: OfferContext): string {
+  const date = formatDate(context.startAt, context.timeZone);
+
+  return [
+    `${context.storeName}からのご連絡です。`,
+    `${date} の代替勤務は、今回は別の方で確定しました。`,
+    "ご回答ありがとうございました。今回の結果は次回の打診に影響しません。",
+  ].join("\n");
+}
+
+/**
+ * 募集終了通知の本文（Q07）。
+ *
+ * 返信が無かった相手・確定しなかった相手にも、募集が終わったことを伝える。
+ * 待たせたままにしないため、完了境界に含める（`COMPLETION_REQUIRES_NOTIFICATION_ACCEPTED`）。
+ */
+export function buildCaseClosedBody(context: OfferContext): string {
+  const date = formatDate(context.startAt, context.timeZone);
+
+  return [
+    `${context.storeName}からのご連絡です。`,
+    `${date} の代替勤務の募集は終了しました。`,
+    "ご確認ありがとうございました。",
+  ].join("\n");
+}

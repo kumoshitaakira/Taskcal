@@ -101,8 +101,28 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
   { name: "isAllowedCommitmentTransition", from: ["src/adapters/db/commitment-repository.ts"] },
   { name: "resolveOutreachAfterSend", from: ["src/application/send-outbox.ts"] },
   { name: "resolveOutreachAfterInbound", from: ["src/application/receive-inbound-event.ts"] },
-  { name: "computeRequestHash", from: ["src/application/start-outreach.ts"] },
-  { name: "isSelectableCommitment", from: ["src/application/case-view.ts"] },
+  {
+    name: "computeRequestHash",
+    // 外部作用の内容ハッシュを作る経路。ここを落とすと、同じ操作IDで内容の違う
+    // 要求を REPLAY として握り潰す（ADR-006 / D07）。
+    from: ["src/application/start-outreach.ts", "src/application/adopt-plan.ts"],
+  },
+  {
+    name: "isSelectableCommitment",
+    // D08：選定の時点と、正式採用の直前の両方で通す。片方だけでは、準備中に
+    // 届いた訂正を見落とす（A05）。
+    from: ["src/application/case-view.ts", "src/application/adopt-plan.ts"],
+  },
+  // 定義して呼ばない状態を止める。円換算は表示経路だけが呼ぶ（RFC-004 §7）。
+  { name: "toJpyForDisplay", from: ["src/application/model-usage-view.ts"] },
+  { name: "resolveReconcile", from: ["src/application/adopt-plan.ts"] },
+  { name: "resolveCaseReconcile", from: ["src/application/adopt-plan.ts"] },
+  // Q13／ADR-022：`PREPARING` 中の停止は行き先が変わる。期限検知だけで引き継がない。
+  { name: "resolvePreparingStop", from: ["src/application/adopt-plan.ts"] },
+  {
+    name: "isAllowedScheduleUpdateTransition",
+    from: ["src/adapters/db/schedule-update-repository.ts"],
+  },
 ];
 
 /** 文書として走査する範囲。 */

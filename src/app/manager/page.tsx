@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { getManagerView } from "@/application/case-view";
+import { getModelUsageView } from "@/application/model-usage-view";
 import { getRuntimeStatus } from "@/application/runtime-status";
 import { CasePanel } from "../_components/case-panel";
 import { Notice } from "../_components/notice";
 import { NotImplementedList, StatusPanel } from "../_components/status-panel";
-import { createAbsenceCaseAction, startOutreachAction } from "./actions";
+import { UsagePanel } from "../_components/usage-panel";
+import { adoptPlanAction, createAbsenceCaseAction, startOutreachAction } from "./actions";
 
 // 起動状態と案件を毎回確認する。
 export const dynamic = "force-dynamic";
@@ -63,6 +65,8 @@ export default async function ManagerPage({
   const noticeCount = typeof params.c === "string" ? params.c : undefined;
   const now = new Date().toISOString();
   const [status, view] = await Promise.all([getRuntimeStatus(), getManagerView(now)]);
+  // 実測・推定・取得不能を分けて出す（RFC-004 §8）。案件が無ければ読まない。
+  const usage = view.activeCase ? await getModelUsageView(view.activeCase.caseId) : undefined;
 
   // 操作IDは描画時に作る。二重クリック・再読込・戻る操作が同じキーになり、
   // operation_result の照合で REPLAY になる（ADR-006 / D07）。
@@ -70,12 +74,27 @@ export default async function ManagerPage({
   const outreachOperationId = view.activeCase
     ? `outreach:${view.activeCase.caseId}`
     : `outreach:${randomUUID()}`;
+  // 正式採用のキーは**描画ごと**に作る。同じ描画内の二重クリックだけが同じキーで、
+  // 再読込・戻る操作は別の操作になる（打診の `outreach:{caseId}` とは違う）。
+  // 内容から決めてしまうと、未実装で一度断った結果を実装が入った後も返し続けるため。
+  // 進行中の更新は作り直さず `findOpenByCase` で再開する（`adopt-plan.ts`）。
+  const adoptOperationId = `adopt:${view.activeCase?.caseId ?? "none"}:${randomUUID()}`;
+  // 進行中の更新は作り直さず再開する（RFC-010 §7）。停止済みの案件では出さない（D10）。
+  const resuming =
+    view.activeCase?.state === "PREPARING" || view.activeCase?.state === "RECONCILE_REQUIRED";
+  const canAdopt = Boolean(
+    view.activeCase &&
+    !view.activeCase.stopCause &&
+    (resuming ||
+      (view.activeCase.state === "COORDINATING" &&
+        view.activeCase.outreaches.some((outreach) => outreach.selectable))),
+  );
 
   return (
     <main>
       <h1>店長画面</h1>
       <p className="lede">
-        欠勤の登録、名簿上の同職種への同時打診、返信の受信までが動きます。適格性（可能時間・月次上限・勤務の重複）は未検査で、返信の解釈・正式採用も未実装です。
+        欠勤の登録、名簿上の同職種への同時打診、返信の受信と解釈、承諾の生成までが動きます。適格性（可能時間・月次上限・勤務の重複）は未検査です。正式採用の進行は実装済みですが、選定とCSVの生成・読戻し（担当B）が無いため、実際には未実装として断ります。
       </p>
       <nav className="links">
         <Link href="/">トップ</Link>
@@ -103,6 +122,23 @@ export default async function ManagerPage({
           </p>
         </div>
       )}
+
+      {canAdopt && view.activeCase ? (
+        <form action={adoptPlanAction} className="panel">
+          <input type="hidden" name="operationId" value={adoptOperationId} />
+          <input type="hidden" name="caseId" value={view.activeCase.caseId} />
+          <p className="lede" style={{ margin: 0 }}>
+            {resuming
+              ? // 再実行しない。進行中の更新は作り直さず、照会して照合してから進む（A03）。
+                "進行中の勤務表更新があります。作り直さず、結果を照会して照合してから続きを進めます。"
+              : "選定可の承諾から計画を固定し、作業用CSVの生成・読戻しを経て正式採用します。採用の直前に案件版・停止・期限・承諾・未処理返信・月内入力の完全性をもう一度検査します（D08）。"}{" "}
+            <strong>
+              選定とCSVの生成・読戻しは未実装（担当B）なので、現在は必ず未実装として断ります。
+            </strong>
+          </p>
+          <button type="submit">{resuming ? "正式採用の続きを進める" : "正式採用へ進む"}</button>
+        </form>
+      ) : null}
 
       {view.activeCase && view.activeCase.outreaches.length === 0 ? (
         <form action={startOutreachAction} className="panel">
@@ -164,6 +200,13 @@ export default async function ManagerPage({
           <div className="notice">
             Q04により欠勤は元勤務の全時間です。部分欠勤・日跨ぎは範囲外として拒否します。
           </div>
+        </>
+      ) : null}
+
+      {usage ? (
+        <>
+          <h2>モデル呼出しと費用</h2>
+          <UsagePanel usage={usage} />
         </>
       ) : null}
 

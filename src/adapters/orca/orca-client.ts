@@ -41,7 +41,10 @@ import type { MicroUsd, UsageRecord } from "./usage";
 export interface OrcaClientOptions {
   readonly baseUrl: string;
   readonly apiKey: string;
-  /** Router規則に任せる場合は undefined。指定した場合 routingSource=APPLICATION。 */
+  /**
+   * 呼び出すモデルID。`orcarouter/...` はRouter側が実モデルを決める別名。
+   * 具体的なモデルを指した場合だけ routingSource=APPLICATION になる。
+   */
   readonly model?: string;
   /** 1呼出しのタイムアウト。ADR-007の初期値は20秒。 */
   readonly timeoutMs?: number;
@@ -67,7 +70,12 @@ export class OrcaRouterClient implements ModelGateway {
     // 呼出し元が永続化したIDをそのまま使う。ここで採番しない（ADR-006）。
     // adapter側で採番すると、再試行のたびに新しい予約と新しい有料呼出しが起きる。
     const requestId = request.requestId;
-    const routingSource = this.options.model ? ROUTING_SOURCE.APPLICATION : ROUTING_SOURCE.ROUTER;
+    // **Router別名を「アプリが選んだ」と記録しない。** `orcarouter/auto` や
+    // `orcarouter/free` を指定しても、実モデルを決めるのはRouterで、こちらは
+    // どれが使われたかを応答からしか知れない（RFC-004 §8）。
+    const routingSource = isRouterAlias(this.options.model)
+      ? ROUTING_SOURCE.ROUTER
+      : ROUTING_SOURCE.APPLICATION;
 
     // **保存済み結果の照会を最初に行う。** 再生は外部呼出しを要さないため、
     // 接続設定・入力上限・単価・予算のどれにも依存させない。ここより後に置くと、
@@ -449,6 +457,13 @@ export class OrcaRouterClient implements ModelGateway {
     // 通すと、costFromTokens が不正な費用を出し、台帳と後続の予算判定を壊す。
     const inputTokens = asTokenCount(usage.prompt_tokens);
     const outputTokens = asTokenCount(usage.completion_tokens);
+    // 推論モデルは `completion_tokens` に推論分を含める。`max_tokens` は本文だけを
+    // 縛り、推論トークンには効かない接続がある（OrcaRouter経由のDeepSeekで観測）。
+    const details = (usage.completion_tokens_details ?? {}) as Record<string, unknown>;
+    const reasoningTokens = asTokenCount(details.reasoning_tokens);
+    // 見積りの前提（出力上限）が守られたか。**守られなければ予約は実費を下回り得る。**
+    const outputLimitExceeded =
+      outputTokens === undefined ? undefined : outputTokens > this.options.bounds.maxOutputTokens;
 
     return {
       requestId: input.requestId,
@@ -466,6 +481,8 @@ export class OrcaRouterClient implements ModelGateway {
       rulesVersion: MODEL_OUTPUT_SCHEMA_VERSION,
       inputTokens,
       outputTokens,
+      reasoningTokens,
+      outputLimitExceeded,
       tokenMeasurement:
         inputTokens !== undefined && outputTokens !== undefined
           ? MEASUREMENT.MEASURED
@@ -522,6 +539,15 @@ export class InvalidModelOutputError extends TaskcalError {
  * すると `/v1/v1/chat/completions` になり、予約したあと誤ったendpointへ送って
  * HTTPエラーを UNKNOWN_CHARGE として残すため、末尾の `/v1` を正規化する。
  */
+/**
+ * Routerが実モデルを決める別名か。
+ *
+ * 未設定も Router 扱いにする（要求にモデルを載せない＝Router既定に委ねる形）。
+ */
+export function isRouterAlias(model: string | undefined): boolean {
+  return model === undefined || model.startsWith("orcarouter/");
+}
+
 export function chatCompletionsUrl(baseUrl: string): string {
   // 文字列連結にしない。query や fragment があると、追加した path がその中へ
   // 入り、実際のpathが chat completions にならない。

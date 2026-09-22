@@ -3,13 +3,14 @@
  *
  * `check-consistency.ts` の対称性検査が使う。切り出しや除外を誤ると、誤検出
  * （正しいのに失敗）か見逃し（欠落なのに通る）になり、検査そのものが信用できなく
- * なる。開発中に実際に次の4つを出した。いずれも回帰テストで固定している。
+ * なる。開発中に実際に次の6つを出した。いずれも回帰テストで固定している。
  *
  *   - 名前の単純検索が doc comment 内の言及を拾った
  *   - `foo(a: { ... }): T {` のインライン型の `}` で本体が切れた
  *   - 1行で閉じる定義が、次の定義まで伸びた
  *   - 文字列リテラル内の `}` で本体が切れた
  *   - 前方一致で `resolveReconcile` が `resolveReconcileStall` を掴んだ
+ *   - 複数行のunion戻り値型（`| { ... }` を1行ずつ書く形）の閉じブレースで本体が切れた
  *
  * **コメントを落とすのが重要。** 落とさないと、戻り値型から `"CONFLICT"` を
  * 削除しても doc comment に残る限り検査が通ってしまう（実際にそうなっていた）。
@@ -20,6 +21,17 @@
 
 /** 識別子として使える文字。名前一致の境界判定に使う。 */
 const IDENT = /[A-Za-z0-9_$]/;
+
+/**
+ * 型の続きを書いている行か（`| { ... }` / `& { ... }`）。
+ *
+ * この形は1行で開いて閉じるので、素朴に見ると「定義がここで終わった」に見える。
+ * 実際には戻り値型の途中で、本体はこの後にある。**切り出しが短くなっても検査は
+ * 「語が無い」ではなく「通った」側へ倒れ得る**ので、見逃しになる。
+ *
+ * 汎用の型解析はしない。この2つの継続記号だけを見る。
+ */
+const TYPE_CONTINUATION = /^\s*[|&]/;
 
 interface ScanState {
   depth: number;
@@ -62,6 +74,8 @@ export function extractDefinition(text: string, name: string): string | undefine
 function scanLine(line: string, state: ScanState): { kept: string; ended: boolean } {
   let kept = "";
   let ended = false;
+  // 戻り値型のunion／intersectionの途中。ここの `}` で定義を終わらせない。
+  const continuesType = TYPE_CONTINUATION.test(line);
 
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
@@ -115,7 +129,7 @@ function scanLine(line: string, state: ScanState): { kept: string; ended: boolea
         // この `}` の後ろに `;` と空白しか無ければ、定義の終わり。
         // `}): Promise<...>` のようにまだ続く場合は終わりにしない。
         const rest = line.slice(i + 1).trim();
-        if (rest === "" || rest === ";") {
+        if (!continuesType && (rest === "" || rest === ";")) {
           ended = true;
           break;
         }

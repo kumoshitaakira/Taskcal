@@ -20,6 +20,11 @@
  * （D08）を、検査していないのに通ったことにしないため。
  *
  * 過去の辞退を候補の順位の減点に使わない（AGENTS.md）。
+ *
+ * このファイルには、担当Bの実装が入るまでの**未実装の口**も置く
+ * （`createUnimplementedEligibilityRecheck` / `createUnimplementedSelectionPlanner`）。
+ * どちらも成功を返さず `NOT_IMPLEMENTED` を投げる。合成の根へ fake を入れて、
+ * 検査していないものを通ったことにしないため。
  */
 
 import "server-only";
@@ -30,6 +35,7 @@ import type {
   EligibilityInput,
   EligibilityRecheckResult,
   EligibleCandidate,
+  SelectionPlanner,
 } from "../contracts/selection";
 import type { TxHandle } from "../contracts/repository";
 import type { Tx } from "../adapters/db/transaction";
@@ -97,6 +103,25 @@ export function createUnimplementedEligibilityRecheck(): Pick<EligibilityChecker
       throw new TaskcalError(
         ERROR_CODES.NOT_IMPLEMENTED,
         "適格性の再検査（可能時間・月次上限・重複）は未実装です（担当B）。正式採用へ進めません。",
+      );
+    },
+  };
+}
+
+/**
+ * 候補選定（RFC-009 §6）。**未実装。担当Bの `src/domain/selection/`。**
+ *
+ * 承諾時間の自動短縮を行わず、各区間ちょうど1人（Q02）で必要枠を覆う計画を選ぶ、
+ * という規則そのものがまだ無い。ここで適当な計画を返すと、検査していない組合せを
+ * 正式採用してしまう。成功も `NOT_FEASIBLE` も返さず、未実装として投げる——
+ * 「選べなかった」と「選ぶ規則が無い」は別（A16）。
+ */
+export function createUnimplementedSelectionPlanner(): SelectionPlanner {
+  return {
+    plan(): never {
+      throw new TaskcalError(
+        ERROR_CODES.NOT_IMPLEMENTED,
+        "候補選定（必要枠の被覆・重複の排除）は未実装です（担当B）。正式採用へ進めません。",
       );
     },
   };

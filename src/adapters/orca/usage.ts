@@ -125,7 +125,27 @@ export interface UsageRecord {
   /** RFC-004 §8 の `rules_version`（抽出規則・出力schemaの版）。 */
   readonly rulesVersion: string;
   readonly inputTokens?: number;
+  /**
+   * 出力トークン。**推論モデルでは推論トークンを含む。**
+   * 提供元の `completion_tokens` をそのまま持つ（RFC-004 §8）。
+   */
   readonly outputTokens?: number;
+  /**
+   * そのうち推論に使われた分（取得できた場合）。
+   *
+   * 分けて持つ理由：`max_tokens` は本文の長さを縛る設定で、推論トークンには
+   * 効かない接続がある。両者を1つの数字に畳むと、見積りの上限が守られなかった
+   * ことに気付けない（RFC-004 §7）。
+   */
+  readonly reasoningTokens?: number;
+  /**
+   * 要求した出力上限を実測が超えたか。
+   *
+   * **超えた場合、予約額は実費を下回り得る。** RFC-004 §7 は「出力上限」を
+   * 見積りの前提にしているので、この前提が崩れたことを記録に残す。0件かどうかを
+   * 後から数えられないと、有料モデルへ切り替えてよいか判断できない。
+   */
+  readonly outputLimitExceeded?: boolean;
   readonly tokenMeasurement: Measurement;
   /**
    * USDの整数micro単位。`costKind` が UNKNOWN_CHARGE のときは、実費ではなく

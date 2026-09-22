@@ -20,6 +20,7 @@ loadDotenv({ path: ".env", quiet: true });
 const KEYS = [
   "ORCA_BASE_URL",
   "ORCA_API_KEY",
+  "ORCA_MODEL",
   "ORCA_CASE_SPEND_LIMIT_MICRO_USD",
   "ORCA_RUN_SPEND_LIMIT_MICRO_USD",
   "ORCA_CASE_CALL_LIMIT",
@@ -27,6 +28,7 @@ const KEYS = [
   "ORCA_OUTPUT_MICRO_USD_PER_KTOK",
   "ORCA_MAX_REPLY_CHARS",
   "ORCA_MAX_OUTPUT_TOKENS",
+  "ORCA_TIMEOUT_MS",
 ] as const;
 
 // OrcaRouter関連だけを見る。DATABASE_URL の有無で結果を変えない。
@@ -56,7 +58,8 @@ if (!parsed.success) {
     );
   }
 
-  const connectionReady = Boolean(env.ORCA_BASE_URL && env.ORCA_API_KEY);
+  // モデルIDも接続情報のうち。どれを呼ぶか決まっていなければ単価も決まらない。
+  const connectionReady = Boolean(env.ORCA_BASE_URL && env.ORCA_API_KEY && env.ORCA_MODEL);
   const budgetReady =
     env.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
     env.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&

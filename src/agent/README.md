@@ -1,6 +1,10 @@
 # src/agent
 
-**担当A** — 観測、返信解釈、次行動の選択、費用記録（作業U08）。未実装。
+**担当A** — 観測、返信解釈、次行動の選択、費用記録（作業U08）。
+
+呼出し経路と費用記録は実装済み（`src/adapters/orca/`、`src/application/interpret-reply.ts`、
+`src/application/model-usage-view.ts`）。次行動の選択（`SELECT_ACTION`）は未実装。
+実推論を行ったかどうかは、ルートREADMEの「現時点で動かないもの」に書く。
 
 境界（ADR-004、AGENTS.md）：
 
@@ -28,5 +32,7 @@
 
 遅れて返った結果は、受信順（`last_applied_seq`）で弾く。保存はするが適用しない（A12）。
 
-OrcaRouterの接続情報・金額予算が未取得のため、**実推論は一度も行っていない**。
+2026-09-22にOrcaRouterへ接続し、**実推論が通った**（`orcarouter/free` 経由で
+DeepSeek V4 Flash へ振られ、schema検査を通過して承諾が1件できた）。
+**精度は測っていない。** 1回通ったことと、RFC-008の固定fixtureによる評価は別。
 決定的テストは注入した fake で行っており、実モデルの評価とは別（AGENTS.md）。

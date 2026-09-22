@@ -18,7 +18,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { buildAppServices } from "@/application/deps";
-import { ERROR_CODES, type ErrorCode } from "@/contracts/errors";
+import { ERROR_CODES, TaskcalError, type ErrorCode } from "@/contracts/errors";
 import { NOTICE, type NoticeCode } from "../_components/notice";
 
 function back(path: string, code: NoticeCode, count?: number): never {
@@ -99,4 +99,64 @@ export async function startOutreachAction(formData: FormData): Promise<void> {
     result.replayed ? NOTICE.OUTREACH_REPLAYED : NOTICE.OUTREACH_STARTED,
     result.started,
   );
+}
+
+/**
+ * 正式採用の失敗理由を通知コードへ写す。
+ *
+ * **未実装・結果不明・拒否を同じ文言に畳まない。** 畳むと「まだ繋がっていない」と
+ * 「やってみて断られた」と「成否が分からない」が区別できず、採用していないのに
+ * 失敗したように、あるいは失敗したのに単なる未実装のように読める（ADR-022）。
+ */
+function adoptNoticeOf(code: ErrorCode, outcome?: "REJECTED" | "RECONCILE_REQUIRED"): NoticeCode {
+  if (outcome === "RECONCILE_REQUIRED") return NOTICE.ADOPT_RECONCILE;
+  switch (code) {
+    case ERROR_CODES.NOT_IMPLEMENTED:
+    case ERROR_CODES.NOT_CONFIGURED:
+      return NOTICE.ADOPT_NOT_IMPLEMENTED;
+    case ERROR_CODES.CASE_STOPPED:
+      return NOTICE.ADOPT_STOPPED;
+    case ERROR_CODES.DEADLINE_EXCEEDED:
+      return NOTICE.ADOPT_DEADLINE;
+    case ERROR_CODES.RECONCILE_REQUIRED:
+      return NOTICE.ADOPT_RECONCILE;
+    case ERROR_CODES.OPERATION_CONFLICT:
+    case ERROR_CODES.REVISION_CONFLICT:
+      return NOTICE.ADOPT_CONFLICT;
+    default:
+      return NOTICE.ADOPT_REJECTED;
+  }
+}
+
+export async function adoptPlanAction(formData: FormData): Promise<void> {
+  const operationId = String(formData.get("operationId") ?? "");
+  const caseId = String(formData.get("caseId") ?? "");
+  if (!operationId || !caseId) back("/manager", NOTICE.INPUT_MISSING);
+
+  const services = buildAppServices();
+  // 想定外の例外を素通りさせない。Next のエラー画面になると、店長には「停止」
+  // 「拒否」「結果不明」のどれでもない未定義の状態に見え、その場で復帰できない。
+  // redirect は例外で実現されているので、ここで握り潰さないよう外へ出す。
+  let result;
+  try {
+    result = await services.adoptPlan({ operationId, caseId });
+  } catch (error) {
+    if (error instanceof TaskcalError) {
+      revalidatePath("/manager");
+      back("/manager", adoptNoticeOf(error.code));
+    }
+    throw error;
+  }
+
+  revalidatePath("/manager");
+  revalidatePath("/staff");
+  if (!result.ok) back("/manager", adoptNoticeOf(result.code, result.outcome));
+  if (result.outcome === "NOT_FEASIBLE") back("/manager", NOTICE.ADOPT_NOT_FEASIBLE);
+  // 採用済みと読戻し一致は別。一致していなければ要対応だが、採用は取り消さない（D09）。
+  const code = !result.readBackMatches
+    ? NOTICE.ADOPT_ATTENTION
+    : result.replayed
+      ? NOTICE.ADOPT_REPLAYED
+      : NOTICE.ADOPT_ADOPTED;
+  back("/manager", code, result.adopted);
 }

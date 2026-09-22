@@ -45,8 +45,9 @@ ADR-021 に従い B の確認を得ること。
 | `0009` | `inbound_event.message_id` | 受信とMessageの対応 |
 | `0010` | `inbound_event.interpretation_block` / 返信対象の参照 | 解釈できない受信を取り出しから外す、返信対象の参照（RFC-011 §3） |
 | `0011` | `inbound_event.in_reply_to_message_ref` | 返信対象の参照を**未検証の外部入力**として持つ。外部キーを付けると、存在しないIDを送られただけで受信を保存できない（ADR-008） |
-| `0013` | `inbound_event.event_hash` | 同じIDで内容が違う受信を拒否する（D07）。0013より前の行はnullで、照合できないので重複として扱う |
 | `0012` | 同上の検査 | 入口（`z.uuid()`）が受理する形はDBも受け取る。**DBが値域を決める側にならない**。保存値はrepositoryが小文字へ揃える |
+| `0013` | `inbound_event.event_hash` | 同じIDで内容が違う受信を拒否する（D07）。0013より前の行はnullで、照合できないので重複として扱う |
+| `0014` | `schedule_update.case_version` | 準備開始**後**の案件版。D08の直前再検査で照合する。`selection_result.case_version` は検査時点（`COORDINATING`）の版で、準備開始の遷移で1つ進むため、そのままでは比較できない |
 
 `0002` の `create extension btree_gist` は、拡張を作れない環境では失敗する。その場合に
 重複禁止の制約を落とすなら、落とした事実を README の「現時点で動かないもの」へ記録する

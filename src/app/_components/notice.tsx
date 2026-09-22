@@ -22,6 +22,16 @@ export const NOTICE = {
   OUTREACH_CONFLICT: "OUTREACH_CONFLICT",
   OUTREACH_STOPPED: "OUTREACH_STOPPED",
   OUTREACH_DEADLINE: "OUTREACH_DEADLINE",
+  ADOPT_ADOPTED: "ADOPT_ADOPTED",
+  ADOPT_REPLAYED: "ADOPT_REPLAYED",
+  ADOPT_ATTENTION: "ADOPT_ATTENTION",
+  ADOPT_NOT_FEASIBLE: "ADOPT_NOT_FEASIBLE",
+  ADOPT_REJECTED: "ADOPT_REJECTED",
+  ADOPT_RECONCILE: "ADOPT_RECONCILE",
+  ADOPT_NOT_IMPLEMENTED: "ADOPT_NOT_IMPLEMENTED",
+  ADOPT_STOPPED: "ADOPT_STOPPED",
+  ADOPT_DEADLINE: "ADOPT_DEADLINE",
+  ADOPT_CONFLICT: "ADOPT_CONFLICT",
   REPLY_RECORDED: "REPLY_RECORDED",
   REPLY_DUPLICATE: "REPLY_DUPLICATE",
   REPLY_UNMATCHED: "REPLY_UNMATCHED",
@@ -46,6 +56,22 @@ const TEXT: Record<NoticeCode, (count?: number) => string> = {
   OUTREACH_CONFLICT: () => "この案件ではすでに打診を開始しています。",
   OUTREACH_STOPPED: () => "停止済みの案件です。新規の打診は行いません（D10）。",
   OUTREACH_DEADLINE: () => "回答期限を過ぎています。",
+  ADOPT_ADOPTED: (count) => `${count ?? 0}件の代替勤務を正式採用しました。読戻しも一致しています。`,
+  ADOPT_REPLAYED: (count) => `同じ操作なので、採用済みの${count ?? 0}件を表示しています。`,
+  // 採用は取り消さない。確定した事実を保ったまま、読戻しの不一致だけを伝える（D09）。
+  ADOPT_ATTENTION: (count) =>
+    `${count ?? 0}件を正式採用しましたが、正式版の読戻しが一致しません。採用は取り消さず要対応にしました（A07 / D09）。`,
+  ADOPT_NOT_FEASIBLE: () =>
+    "実行可能な計画がありませんでした。案件は調整中のままです（A16）。選定結果は記録しています。",
+  ADOPT_REJECTED: () => "前提が変わったため採用しませんでした。成果物は未採用として残しています。",
+  // 未採用と断定しない。再実行もしない（A03 / ADR-022）。
+  ADOPT_RECONCILE: () =>
+    "勤務表の更新結果を照合できません。再実行せず、照合できるまで待ちます（A03）。",
+  ADOPT_NOT_IMPLEMENTED: () =>
+    "正式採用に必要なCSVの生成・読戻し・選定が未実装です（担当B）。採用は行っていません。",
+  ADOPT_STOPPED: () => "停止済みの案件です。正式採用は行いません（D10）。",
+  ADOPT_DEADLINE: () => "回答期限を過ぎています。正式採用は行いません。",
+  ADOPT_CONFLICT: () => "案件または勤務表が並行して更新されました。読み直してください。",
   REPLY_RECORDED: (seq) => `返信を受け取りました（受信順 ${seq ?? "-"}）。`,
   REPLY_DUPLICATE: () => "同じ返信をすでに受け取っています。",
   REPLY_UNMATCHED: () =>
@@ -55,7 +81,27 @@ const TEXT: Record<NoticeCode, (count?: number) => string> = {
   FAILED: () => "処理に失敗しました。ログを確認してください。",
 };
 
+/**
+ * 結果不明・要対応。**成功でも失敗でもない。**
+ *
+ * 「失敗」と書くと未確定と読まれ（ADR-022）、「実行しました」と書くと成功と読まれる。
+ * どちらも誤りなので、3つ目のトーンを持つ。`case-panel.tsx` が状態タグで `tag-warn` を
+ * 使っているのと同じ語彙にそろえる。
+ */
+const WARN: readonly NoticeCode[] = [
+  NOTICE.ADOPT_ATTENTION,
+  NOTICE.ADOPT_RECONCILE,
+  NOTICE.ADOPT_NOT_FEASIBLE,
+  NOTICE.CASE_RECONCILE,
+  NOTICE.OUTREACH_NONE,
+];
+
 const BAD: readonly NoticeCode[] = [
+  NOTICE.ADOPT_REJECTED,
+  NOTICE.ADOPT_NOT_IMPLEMENTED,
+  NOTICE.ADOPT_STOPPED,
+  NOTICE.ADOPT_DEADLINE,
+  NOTICE.ADOPT_CONFLICT,
   NOTICE.CASE_CONFLICT,
   NOTICE.CASE_INVALID,
   NOTICE.CASE_OUT_OF_SCOPE,
@@ -85,13 +131,14 @@ export function Notice({ code, count }: { code?: string; count?: string }) {
   if (!code || !isNoticeCode(code)) return null;
   // 数値以外は表示しない。URLから任意の文字列を出せないようにする。
   const parsed = count && /^\d{1,4}$/.test(count) ? Number(count) : undefined;
-  const tone = BAD.includes(code) ? "tag-bad" : "tag-ok";
+  const [tone, label] = BAD.includes(code)
+    ? (["tag-bad", "できませんでした"] as const)
+    : WARN.includes(code)
+      ? (["tag-warn", "確認してください"] as const)
+      : (["tag-ok", "実行しました"] as const);
   return (
     <div className="notice">
-      <span className={`tag ${tone}`}>
-        {BAD.includes(code) ? "できませんでした" : "実行しました"}
-      </span>{" "}
-      {TEXT[code](parsed)}
+      <span className={`tag ${tone}`}>{label}</span> {TEXT[code](parsed)}
     </div>
   );
 }

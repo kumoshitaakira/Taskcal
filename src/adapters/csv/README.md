@@ -5,6 +5,13 @@
 `monthly-csv.ts`に固定形式の月内CSV取込・正規化・出力を実装済み。
 `src/contracts/schedule-gateway.ts` の `ScheduleGateway` 本体（更新・操作照会・正式版接続）は次段階。
 
+`unimplemented-schedule-gateway.ts` は**担当Aが暫定で置いたもの**。正式採用の進行
+（`src/application/adopt-plan.ts`）は Gateway に対して書いてあるが、実装がまだ無い。
+合成の根へ fake を入れると動いていないものが画面で動いて見えるため、模擬結果を返さず
+`NOT_IMPLEMENTED` を投げる実装を置いている。**Bの `ScheduleGateway` が入ったら
+`deps.ts` から外し、このファイルごと削除すること**（`runtime-status` の
+`notImplemented` からも該当行を落とす）。
+
 `parseMonthlyCsv(csv, manifest)`は通常・代替勤務を共通の`LoadedAssignment`に営業日と
 勤務表IDを添えた形で返す。`normalizedCsv`を保存・再読込でき、入力順によらない
 `sourceRevision`と入力完全性を返す。ID欠落時は拒否し、自動採番しない。

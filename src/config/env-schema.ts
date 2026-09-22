@@ -82,6 +82,14 @@ export const serverEnvSchema = z.object({
   // 一度も送っていない呼出しの照合が必要になる（RFC-004 §7）。
   ORCA_BASE_URL: optionalHttpUrl,
   ORCA_API_KEY: optionalText,
+  /**
+   * 呼び出すモデルID（例 `orcarouter/free`、`deepseek/deepseek-v4-flash-free`）。
+   *
+   * **既定値を置かない。** 既定を置くと、単価を設定した覚えのないモデルへ黙って
+   * 振られる。どのモデルを呼ぶか決まっていなければ、その単価も決まっておらず、
+   * 予約額を保守的に作れない（RFC-004 §7）。未設定なら実呼出しを開始しない。
+   */
+  ORCA_MODEL: optionalText,
   // RFC-004 §7：金額はUSDの整数micro単位。円換算は表示時のみ。
   ORCA_CASE_SPEND_LIMIT_MICRO_USD: optionalPositiveInt,
   ORCA_RUN_SPEND_LIMIT_MICRO_USD: optionalPositiveInt,
@@ -92,6 +100,21 @@ export const serverEnvSchema = z.object({
   ORCA_OUTPUT_MICRO_USD_PER_KTOK: optionalPositiveInt,
   ORCA_MAX_REPLY_CHARS: optionalPositiveInt,
   ORCA_MAX_OUTPUT_TOKENS: optionalPositiveInt,
+  /**
+   * 1呼出しのタイムアウト（ミリ秒）。未設定ならADR-007の初期値20秒。
+   *
+   * **推論モデルでは20秒では足りない。** 推論トークンの生成に時間がかかり、
+   * タイムアウトすると結果不明（`UNKNOWN_CHARGE`）として予約が残る。短すぎる値は
+   * 「課金されたか分からない呼出し」を量産するので、接続先の実測に合わせる。
+   */
+  ORCA_TIMEOUT_MS: optionalPositiveInt,
+  /**
+   * 表示用の円換算レート（1 USD あたりの円）。**記録には使わない。**
+   *
+   * 未設定なら換算しない。既定値を置かない——持っていないレートを作ると、
+   * 換算日時もレートも添えられない数字を画面へ出すことになる（RFC-004 §7）。
+   */
+  ORCA_DISPLAY_JPY_PER_USD: optionalPositiveInt,
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -106,6 +129,7 @@ export type ServerEnv = z.infer<typeof serverEnvSchema>;
 export const orcaEnvSchema = serverEnvSchema.pick({
   ORCA_BASE_URL: true,
   ORCA_API_KEY: true,
+  ORCA_MODEL: true,
   ORCA_CASE_SPEND_LIMIT_MICRO_USD: true,
   ORCA_RUN_SPEND_LIMIT_MICRO_USD: true,
   ORCA_CASE_CALL_LIMIT: true,
@@ -113,6 +137,7 @@ export const orcaEnvSchema = serverEnvSchema.pick({
   ORCA_OUTPUT_MICRO_USD_PER_KTOK: true,
   ORCA_MAX_REPLY_CHARS: true,
   ORCA_MAX_OUTPUT_TOKENS: true,
+  ORCA_TIMEOUT_MS: true,
 });
 
 export type OrcaEnv = z.infer<typeof orcaEnvSchema>;

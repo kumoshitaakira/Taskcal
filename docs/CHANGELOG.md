@@ -1,5 +1,151 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：Day 2（担当A）— 最新mainへ rebase した
+
+担当Bの #8・#9・#10 がmainへ入ったので rebase した。**コードの衝突は無く、
+gitが検知した衝突は文書2件**（`docs/CHANGELOG.md`・`tests/README.md`）だった。
+ただし**gitが検知しない食い違いが3件**あり、次のとおり直した。
+
+- **受入fixtureの検証が落ちていた。** `tests/unit/eval-fixtures.test.ts` は
+  `fixtures/eval/` の**全JSON**を走査し、`caseId`／`scenarios`／`applicationAcceptance`
+  を要求する。こちらが置いた `reply-accept-full.json` は**実接続の疎通確認の入力**で
+  受入ケースの期待値ではないため、形が合わず3件落ちていた。`fixtures/orca/` へ移し、
+  READMEで用途の違いを書いた。Bの形式へ寄せてはいない——用途が違う。
+- **`src/application/README.md` の「正式採用の進行制御は未実装」が古くなっていた。**
+  自動マージは通るが、このPRで実装したので実態と食い違う。直した。
+- **適格性検査が二重になっている。** Bは `src/domain/interval/` に
+  `evaluateCandidateEligibility` を実装したが、契約 `EligibilityChecker` は実装して
+  いない。こちらの `adopt-plan.ts` は契約経由で呼ぶので、**繋がっていない**。
+  しかもBの `CandidateEligibilityInput` は `monthlySchedule` を取るので、
+  「`recheck` へ最新の月内割当を渡せない」という積み残しはBの形では解けている。
+  どちらへ寄せるかは契約の変更で、ADR-021によりBの確認が要る。**合流は別PR**とし、
+  `src/contracts/README.md` へ経緯を記録した。合流するまで `recheck` は
+  `NOT_IMPLEMENTED` を投げ続ける（検査していないものを通ったことにしないため）。
+
+繋いでいないものがもう1件ある。Bの `tests/stubs/fake-gateways.ts`（`FakeScheduleGateway`）
+と、こちらの `tests/fakes/schedule-gateway.ts` が重複している。こちらの台は `lookup` の
+種別合成・`readBackOverride`・呼出し回数の記録を持ち、`adopt-plan.test.ts` の23件が
+依存しているため、今回は両方残した。統合は別PRにする。
+
+migrationは衝突しなかった（Bは追加していない）。`0014_schedule_update_case_version.sql`
+のままで、`0013` → `0014` の順に適用できることを確認した。
+
+## 2026-09-22：Day 2（担当A）— PR #12 のレビュー指摘を直した
+
+`chatgpt-codex-connector` の指摘5件（P1×4・P2×1）を確認し、すべて直した。
+いずれも回帰テストを足し、直しを外すと実際に落ちることを確認している。
+
+- **`EXPORTED_ONLY` を正式採用していた**（A14）。出力のみモードは元原本へ未反映で、
+  勤務確定済みと表示してはいけない（RFC-010 §7）。成果物は保持したまま未採用で終える。
+- **同じ操作IDの2本目が再開経路へ入っていた。** 1本目が `applyUpdate` を待つ間に
+  2本目が照会して未解決を得ると、案件と更新を照合待ちへ落とし、戻ってきた1本目が
+  版競合で成果物を捨てる。`IN_PROGRESS` は「進行中」として断る。落ちた後の再開は
+  別の操作ID（描画ごと）で来るので、復旧経路は塞がらない。
+- **手順7が内部表しか読んでいなかった。** 採用取引で自分が書いた行を読み返している
+  だけなので、採用後にCSVが消失・破損・改変されても一致扱いになっていた。正式版参照が
+  指す成果物を Gateway から取り直して突き合わせる。`settle-reporting` の復旧経路も同じ。
+- **採用の直前に月内入力を取り直していなかった。** 選定時に固定した版・完全性を
+  そのまま再検査に使っていたため、選定後に別営業日の勤務やスタッフ条件が変わっても
+  気付けなかった（D08）。採用取引の直前に `loadSchedule` を呼び直して照合する。
+  なお `EligibilityChecker.recheck` は同期interfaceで最新の割当を受け取れない。
+  **契約の変更が要るため、担当Bの確認事項として残した。**
+- **読戻しで追加勤務の状態を見ていなかった**（A07）。ID・担当・区間・件数が合っていても
+  `CANCELLED`／`ABSENT` で返っていれば必要枠は埋まっていない。`SCHEDULED` を条件に足した。
+
+対称性検査を1件追加し、既存の1件へ `SCHEDULED` を足した。
+
+## 2026-09-22：Day 2（担当A）— OrcaRouterへ実接続した
+
+OrcaRouterへ接続し、**返信解釈の実推論が通った**。`orcarouter/free` 経由で
+DeepSeek V4 Flash へ振られ、schema検査を通過して承諾が1件できた。画面で
+欠勤登録 → 打診 → 返信 → 解釈 → 承諾まで通し確認した。
+
+**精度は測っていない。** 1回通ったことと、RFC-008の固定fixtureによる評価は別。
+
+### 実接続で分かったこと（いずれも設定・記録へ反映した）
+
+- **要求にモデルIDが入っていなかった。** `OrcaClientOptions.model` は
+  `createModelGateway` から渡されておらず、実呼出しは必ず失敗する状態だった。
+  `ORCA_MODEL` を設定項目にし、**既定値は置かない**——どれを呼ぶか決まっていなければ
+  単価も決まらず、保守的な予約額を作れない（RFC-004 §7）。
+- **`max_tokens` の出力上限が効かない。** 振り先が推論モデルで、`completion_tokens` に
+  推論分が含まれる。上限512に対し実測1085を観測（本文111・推論1117の回もあった）。
+  `max_completion_tokens` へ替えても同じ。RFC-004 §7 は出力上限を見積りの前提に
+  しているので、**予約が実費を下回り得る**。`outputLimitExceeded` と
+  `reasoningTokens` を記録して画面へ出した。見積り側の保守化は未着手で、
+  有料モデルへ切り替える前に決める必要がある。
+- **タイムアウト20秒では足りない。** 推論の生成に時間がかかり、最初の解釈は
+  20秒で打ち切られて `UNKNOWN_CHARGE` になった。`ORCA_TIMEOUT_MS` を設定項目にし、
+  この構成では60秒にした。**結果不明になった受信は再送されず保留のまま**で、
+  保存済みの結果不明を返し続ける（仕様どおり。復旧には人の対応が要る）。
+- **Router別名を「アプリが選んだ」と記録していた。** `orcarouter/*` はRouterが実モデルを
+  決める別名なので、`ROUTER` として記録するよう直した（RFC-004 §8）。
+
+### 記録と表示
+
+- `model-usage-view.ts` / `usage-panel.tsx`：実測・推定・取得不能を畳まずに表示する。
+  結果不明は予約額をそのまま出し、**0円と書かない**。円換算は
+  `ORCA_DISPLAY_JPY_PER_USD` を設定したときだけ行う（持っていないレートを作らない）。
+  `toJpyForDisplay` は定義済みで未使用だったのをここで繋いだ。
+- `runtime-status`：OrcaRouterの状態を**実呼出しの実績**で判定する。設定があるだけでは
+  `OK` にしない。成功件数と結果不明件数を分けて出す。
+- `scripts/check-orca-call.ts`（`npm run check:orca:call`）：**1回だけ**実呼出しして
+  接続・応答形式・予約と精算の対を確かめる。失敗しても自動で再試行しない。
+
+### Q10（費用・回数の上限）
+
+接続先 `https://api.orcarouter.ai/v1`、モデル `orcarouter/free` で確定。
+ウォレット残高は $0.00、支払い方法未登録で、無料モデルはウォレットに触れない。
+
+**無料モデル構成では金額上限が歯止めになっていない。** 実費は $0 で、単価は正の
+名目値（schemaが0を受けないのは「未設定」と「0」を区別するため）。実際に効くのは
+`case_call_limit`（回数）だけ。**有料モデルへ切り替えるなら単価と金額上限を決め直すこと。**
+
+## 2026-09-22：Day 2（担当A）— 正式採用の進行を実装
+
+RFC-010 §4 の手順1〜7（選定の固定 → 作業用成果物 → 読戻し → 直前再検査 → 一括採用 →
+正式版の再照合 → 通知）を `src/application/adopt-plan.ts` に実装した。
+
+**本番経路ではまだ成立しない。** 候補選定（`SelectionPlanner`）とCSVの生成・読戻し
+（`ScheduleGateway`）が担当Bの未実装のため、`UnimplementedScheduleGateway` と
+`createUnimplementedSelectionPlanner` が `NOT_IMPLEMENTED` を投げる。合成の根へ fake を
+入れていないので、画面には未実装として出る。
+
+- `src/contracts/repository.ts` へ `SelectionResultRepository` /
+  `ScheduleUpdateRepository` / `AuthoritativeScheduleRefRepository` /
+  `ShiftAssignmentRepository` を追加。README が「まだ契約に無いもの」として挙げていた
+  2項目を埋めた。Bの確認待ち。
+- `src/contracts/schedule-gateway.ts` に**例外の意味の例外**を明記した。Gatewayの例外は
+  原則「成否不明」だが、`NOT_IMPLEMENTED` と `NOT_CONFIGURED` は「外部作用の前に断った」。
+  区別しないと、まだ繋がっていない案件が全て照合待ちになり、本当の結果不明と混ざる。
+- migration `0014` を追加。`schedule_update.case_version`（準備開始**後**の案件版）。
+  `selection_result.case_version` は検査時点の版で、準備開始の遷移で1つ進むため、
+  そのままではD08の直前再検査に使えなかった。
+- `settle-reporting.ts` を追加し、workerのループへ入れた。Q07の完了境界（正式採用・
+  読戻し・必要通知の受付）まで進んだ案件を完了させ、通知が止まった案件は**勤務を
+  取り消さずに**要対応へ回す（D09）。
+- 操作IDを二つに分けた。画面の冪等キー（`adopt:{caseId}:{uuid}`、描画ごと）と、
+  外部作用の冪等キー（`apply:{selectionId}`、不変の選定結果から決まる）。前者を内容から
+  決めると、未実装で一度断った案件を実装が入った後も同じ拒否で返し続ける。
+- 対称性検査へ4件、`MUST_BE_CALLED` へ5件を追加した。「一取引で全てを保存する」
+  「照合の結果から更新と案件の両方を決める」「外部作用は取引の外」「照合は勤務ID・
+  担当者・役割・区間・件数を見る」。
+- 受入ケースの記載を2段に分けた。**本番経路でそのまま再現**できるのは従来どおり
+  A11・A12・A15・A18の一部だけで、今回加わった A02・A03・A05・A08（と A04・A07・A13 の
+  一部）は**担当Bの口を台に差し替えて手順だけを確認**したもの。選定規則（A16・A17）と
+  CSV往復（A01・A06・A14）は未検証。
+- 読み取り専用レビュー（ドメイン／デリバリー）で見つかった落ちる場所を直した。
+  再開時に `applyUpdate` を送り直していた（A03）、照合待ちへ入れると案件版がずれて
+  以後必ず「未採用」と断定していた（A03）、検査済み成果物を再開時に照合し直して
+  いなかった（RFC-010 §7）、手順7の前に落ちると `COMMITTED` で止まっていた、
+  採用取引を巻き戻した後に確定結果を書けず決定的な失敗で止まり続けていた（A08）。
+  いずれも回帰テストを足し、直しを外すと落ちることを確認した。
+- `scripts/lib/extract-definition.ts` が、複数行のunion戻り値型で定義を途中で切って
+  いた。対称性検査が**短い本体に対して通ってしまう**向きの欠陥なので、切り出しを
+  直して回帰テストで固定した。
+- 設計文書（RFC）の本文は変更していない。新しいADRも追加していない（RFC-010 §4 の
+  手順をそのまま実装しただけで、新しい永続的な選択をしていないため）。
+
 ## 2026-09-22：受入fixtureレビューコメントとmain競合の対応
 
 - 正式採用前の`input.schedule.assignmentIds`を最後に確認した正式版の既存勤務だけに限定し、

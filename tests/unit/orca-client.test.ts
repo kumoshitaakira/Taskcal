@@ -12,7 +12,7 @@ import {
   type ModelCallStore,
   type StoredModelCall,
 } from "@/adapters/orca/budget";
-import { OrcaRouterClient } from "@/adapters/orca/orca-client";
+import { isRouterAlias, OrcaRouterClient } from "@/adapters/orca/orca-client";
 import { MICRO_USD_PER_USD, type UsageRecord } from "@/adapters/orca/usage";
 import { ERROR_CODES } from "@/contracts/errors";
 import type { InterpretReplyRequest } from "@/adapters/orca/model-gateway";
@@ -102,12 +102,14 @@ function storeOf(stored: StoredModelCall | "NO_RESULT") {
 function clientWith(
   result: (typeof RESERVATION_RESULT)[keyof typeof RESERVATION_RESULT],
   stored: StoredModelCall | "NO_RESULT",
+  model?: string,
 ) {
   const { store, saved } = storeOf(stored);
   const { ledger, settled } = ledgerReturning(result);
   const client = new OrcaRouterClient({
     baseUrl: "https://example.test",
     apiKey: "dummy-key",
+    model,
     budget: new BudgetGuard(
       { caseSpendLimitMicroUsd: MICRO_USD_PER_USD, runSpendLimitMicroUsd: MICRO_USD_PER_USD },
       ledger,
@@ -485,5 +487,127 @@ describe("OrcaRouterClient の再試行（ADR-006 / AGENTS.md）", () => {
     expect(userContent.after_commit).toBe(true);
     // 氏名・連絡先は渡さない（ADR-008）。
     expect(JSON.stringify(userContent)).not.toContain("staffId");
+  });
+});
+
+describe("モデルを選んだ主体の記録（RFC-004 §8）", () => {
+  /** 応答を1回返す fetch。 */
+  function respondOnce() {
+    const spy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            model: "deepseek/deepseek-v4-flash",
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+            choices: [{ message: { content: JSON.stringify(VALID_OUTPUT) } }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", spy);
+    return spy;
+  }
+
+  it("Router別名を指定しても、選んだのはRouterとして記録する", async () => {
+    // `orcarouter/free` はRouterが実モデルを決める別名。こちらが決めたのは
+    // 「Routerに任せる」ことであって、モデルそのものではない。
+    respondOnce();
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT", "orcarouter/free");
+    const result = await client.interpretReply(request);
+
+    expect(result.usage.routingSource).toBe("ROUTER");
+    // 実使用モデルは応答からしか分からない。
+    expect(result.usage.resolvedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(result.usage.requestedModel).toBe("orcarouter/free");
+  });
+
+  it("具体的なモデルを指定したときだけ、アプリが選んだとして記録する", async () => {
+    respondOnce();
+    const { client } = clientWith(
+      RESERVATION_RESULT.RESERVED,
+      "NO_RESULT",
+      "deepseek/deepseek-v4-flash-free",
+    );
+    const result = await client.interpretReply(request);
+
+    expect(result.usage.routingSource).toBe("APPLICATION");
+  });
+
+  it("Router別名の判定", () => {
+    expect(isRouterAlias("orcarouter/free")).toBe(true);
+    expect(isRouterAlias("orcarouter/auto")).toBe(true);
+    // 未設定も「Router既定に委ねる」形なのでRouter扱い。
+    expect(isRouterAlias(undefined)).toBe(true);
+    expect(isRouterAlias("deepseek/deepseek-v4-flash-free")).toBe(false);
+    // 前方一致で別のprovider名を巻き込まない。
+    expect(isRouterAlias("orcarouterish/model")).toBe(false);
+  });
+});
+
+describe("出力上限と推論トークンの記録（RFC-004 §7・§8）", () => {
+  /** 推論モデルの応答。`completion_tokens` に推論分を含む。 */
+  function respondWith(completionTokens: number, reasoningTokens: number) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: "deepseek-v4-flash",
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: completionTokens,
+                completion_tokens_details: { reasoning_tokens: reasoningTokens },
+              },
+              choices: [{ message: { content: JSON.stringify(VALID_OUTPUT) } }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+  }
+
+  it("要求した出力上限を実測が超えたら、その事実を記録する", async () => {
+    // bounds.maxOutputTokens は 512。推論トークンが乗って超える。
+    respondWith(1085, 900);
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const result = await client.interpretReply(request);
+
+    // **予約が実費を下回り得る。** 気付けるように残す（RFC-004 §7）。
+    expect(result.usage.outputLimitExceeded).toBe(true);
+    // 推論分を出力トークンへ畳まない。分けて持つ。
+    expect(result.usage.outputTokens).toBe(1085);
+    expect(result.usage.reasoningTokens).toBe(900);
+  });
+
+  it("上限内に収まったときは超過として記録しない", async () => {
+    respondWith(100, 40);
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const result = await client.interpretReply(request);
+
+    expect(result.usage.outputLimitExceeded).toBe(false);
+    expect(result.usage.reasoningTokens).toBe(40);
+  });
+
+  it("推論トークンが取れない接続では undefined のままにする（0で埋めない）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: "m",
+              usage: { prompt_tokens: 10, completion_tokens: 5 },
+              choices: [{ message: { content: JSON.stringify(VALID_OUTPUT) } }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const { client } = clientWith(RESERVATION_RESULT.RESERVED, "NO_RESULT");
+    const result = await client.interpretReply(request);
+
+    // 取得不能を0にしない（AGENTS.md）。
+    expect(result.usage.reasoningTokens).toBeUndefined();
   });
 });
