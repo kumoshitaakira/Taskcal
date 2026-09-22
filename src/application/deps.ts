@@ -23,22 +23,23 @@ import { createPgScheduleReadRepository } from "../adapters/db/schedule-reposito
 import { createPgScheduleUpdateRepository } from "../adapters/db/schedule-update-repository";
 import { createPgSelectionResultRepository } from "../adapters/db/selection-repository";
 import { createPgShiftAssignmentRepository } from "../adapters/db/shift-assignment-repository";
-import { createPgStoreRepository } from "../adapters/db/store-repository";
+import { createPgStaffRepository, createPgStoreRepository } from "../adapters/db/store-repository";
 import type { Clock, IdGenerator } from "../contracts/repository";
 import { createModelGateway } from "../adapters/orca";
 import { adoptPlan } from "./adopt-plan";
 import { createAbsenceCase } from "./create-absence-case";
+import { detectDeadline } from "./detect-deadline";
 import { interpretPending } from "./interpret-pending";
 import { interpretReply } from "./interpret-reply";
 import { receiveInboundEvent } from "./receive-inbound-event";
-import {
-  createRosterEligibility,
-  createUnimplementedEligibilityRecheck,
-  createUnimplementedSelectionPlanner,
-} from "./roster-eligibility";
+import { reconcileOutbox } from "./reconcile-outbox";
+import { recoverCase } from "./recover-case";
+import { createEligibilityRecheck } from "./eligibility-recheck";
+import { createRosterEligibility, createUnimplementedSelectionPlanner } from "./roster-eligibility";
 import { sendOutbox } from "./send-outbox";
 import { settleReporting } from "./settle-reporting";
 import { startOutreach } from "./start-outreach";
+import { stopCase } from "./stop-case";
 
 const clock: Clock = { now: () => new Date().toISOString() };
 const idGenerator: IdGenerator = { next: () => randomUUID() };
@@ -59,6 +60,7 @@ export function buildAppServices() {
   const operations = createPgOperationResultStore();
   const schedules = createPgScheduleReadRepository();
   const stores = createPgStoreRepository();
+  const staff = createPgStaffRepository();
   const selections = createPgSelectionResultRepository();
   const scheduleUpdates = createPgScheduleUpdateRepository();
   const authoritative = createPgAuthoritativeScheduleRefRepository();
@@ -69,7 +71,20 @@ export function buildAppServices() {
   // 入ったらこの3行を差し替え、runtime-status の notImplemented から落とす。
   const gateway = createUnimplementedScheduleGateway();
   const planner = createUnimplementedSelectionPlanner();
-  const eligibility = createUnimplementedEligibilityRecheck();
+  // Q15（2026-09-22確定・担当B承認済み）：適格性の再検査は担当Bの規則を通す。
+  // **可能時間表は無い。** 在籍・職種・勤務の重複・月次上限だけが実際に効く。
+  const eligibility = createEligibilityRecheck();
+  const stop = stopCase({
+    cases,
+    outreaches,
+    commitments,
+    outbox,
+    scheduleUpdates,
+    operations,
+    stores,
+    clock,
+    ids: idGenerator,
+  });
   const interpret = interpretReply({
     model,
     cases,
@@ -91,6 +106,7 @@ export function buildAppServices() {
     interpretations,
     commitments,
     stores,
+    staff,
     model,
     operations,
     schedules,
@@ -120,6 +136,19 @@ export function buildAppServices() {
       ids: idGenerator,
     }),
     sendOutbox: sendOutbox({ outbox, outreaches, messaging }),
+    reconcileOutbox: reconcileOutbox({ outbox, outreaches, messaging }),
+    stopCase: stop,
+    detectDeadline: detectDeadline({ stopCase: stop, clock }),
+    recoverCase: recoverCase({
+      cases,
+      scheduleUpdates,
+      selections,
+      schedules,
+      authoritative,
+      operations,
+      gateway,
+      clock,
+    }),
     settleReporting: settleReporting({
       cases,
       outbox,
@@ -134,6 +163,7 @@ export function buildAppServices() {
       outreaches,
       inbound,
       stores,
+      staff,
       selections,
       scheduleUpdates,
       authoritative,

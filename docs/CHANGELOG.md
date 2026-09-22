@@ -1,5 +1,187 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：Day 3（担当A）— 適格性の再検査を担当Bの規則へ繋いだ（Q15）
+
+担当Bの承認を得たので、`EligibilityChecker.recheck` の契約を変えて
+`evaluateCandidateEligibility`（`src/domain/interval/`）へ繋いだ。**正式採用の直前に、
+在籍・店舗・職種・本人除外・勤務の重複・月次上限が実際に検査されるようになった**（D08 / A09）。
+
+- `EligibilityRecheckInput` へ `businessDate` / `absentStaffId` / `monthlySchedule` /
+  `staffProfiles` を足した。`recheck` は**同期のまま**。口の中でDBやGatewayを引く形に
+  すると、外部待ちを取引の中へ持ち込む（RFC-010 §5）。
+- `src/contracts/selection.ts` は `MonthlyScheduleSnapshot` と `StaffProfile` を
+  `@/domain/interval` から**型だけ**取り込む（`import type`）。実行時の依存は増えない。
+  契約側で同じ形を書き写すと、片方だけが変わったときに黙って食い違う。
+- 実装は `src/application/eligibility-recheck.ts`。規則は書き直さず、結果を選定の語彙へ
+  写すだけにした。`OUT_OF_SCOPE`（Q03：空きの分断）は「覆えなかった」へ寄せず、例外で
+  返して明示的に拒否させる（A17：黙って一区間へ丸めない）。
+- **入力は採用の直前に取り直したものを使う**（D08）。`adopt-plan.ts` が手順5の前段で
+  読み直した月内勤務表をそのまま渡す。選定時に固定した値は使わない。
+- `createUnimplementedEligibilityRecheck` と、テストの `createFakeEligibilityRecheck` を
+  削除した。`adopt-plan.test.ts` は**本物の規則**を通す。
+
+### 時刻の形式を境界でそろえた
+
+担当Bの規則は `YYYY-MM-DDTHH:MM:00+09:00`（Asia/Tokyo固定）だけを受け取り、こちらの
+永続層は `Date.toISOString()`（UTC・ミリ秒つき）を返す。`toJstFixedFormat` で写す。
+**秒未満を含む値は黙って丸めず、範囲外として断る**——切り捨てると、検査した区間と実際に
+確定する勤務がずれる。
+
+### 可能時間は検査していない
+
+可能時間表がリポジトリに無い（列も表も無い）。`availabilityWindows` には**本人が承諾した
+区間**を入れている（ADR-014 / Q09：本人の返信が唯一の根拠）。したがって可能時間の検査は
+事実上恒真で、**「可能時間を検査した」とは言えない**。README の「動かないもの」と
+`runtime-status` に残した。A17のうち可能時間に由来する分断は扱えない。
+
+### 読み取り専用レビューの指摘を反映した
+
+`taskcal-domain-reviewer` へ委譲し、7件のうち対応可能な6件を直した。
+
+- **`completeness` を「対象月が揃っている」と読んでいた**（高）。契約上の `completeness` は
+  `requestedRange` の中で揃っているという意味でしかない。範囲が対象月より狭いまま信じると、
+  取得していない日を0分として数え、月次上限を素通りさせる（Q06 / A09が禁じる形）。
+  `requestedRange` が対象月を覆っているかを検査するようにした。
+- **対象月外・他人の勤務を絞らずに渡していた**（高）。担当Bの検査は渡した全行に効くため、
+  無関係な相手の日跨ぎ勤務が1行あるだけで案件全体が未採用確定に落ちる。月次上限も重複も
+  可能時間も「その本人の、その月の」勤務しか見ないので、**判定に要る行だけ**を渡す。
+- **オフセットの無い日時を `Date.parse` が受理していた**。サーバのタイムゾーンで解釈され、
+  壁時計の時刻が実行環境で変わる。明示のオフセットを要求するようにした。
+- 不適格の理由に `staffId` を添えた。理由だけでは、どの候補を見直せばよいか分からない。
+- `requirement` の時刻だけUTCのISOのまま残っていたので、形式をそろえた。
+- **A17を「検査した」と書いていたのを取り消した。** 可能時間が承諾区間そのものなので、
+  それを既存勤務が分断するなら必ず提案区間とも重なり、分断判定より先に重複検査が止める。
+  分断の判定は現在の配線では到達しない。同じスタッフの承諾が複数ある場合に承諾どうしの
+  重複・上限の合算を見ないことも、限界として記録した。
+
+不適格の**生の理由コード**（`STAFF_INACTIVE` と `WRONG_STORE` の区別など）は、契約の
+`EligibilityRecheckResult` が `SelectionNotFeasibleReason` しか持たないため残せていない。
+観測性の課題として残す。
+
+### テストが空振りしていたのを直した
+
+重複のテストを最初「理由の語（`OVERLAP`）が含まれること」で書いたが、**DBの排他制約の
+文面にも `OVERLAP` が入る**ため、再検査を盲目にしても素通りした。どの検査が止めたかまで
+見るよう直し、月次上限・重複・在籍のそれぞれについて、検査を外すと実際に落ちることを
+確認した。
+
+## 2026-09-22：Day 3（担当A）— 停止・期限・復旧を本番経路へ通した
+
+ADR-022 で確定した三つの経路（Q11・Q12・Q13）は、判定関数が `src/contracts/case-state.ts`
+に**定義済みで、どこからも呼ばれていなかった**。停止を起こす経路そのものが無く、
+`stop_cause` / `stopped_at` 列も `applyTransition` の `stop` 引数も使われていなかった。
+これが A18（店長停止・期限到達）と A13（通知失敗からの復旧）を本番経路で再現できない
+理由だった。RFC-012 §4 の Day 3 方針「新機能凍結。事故試験を優先」に沿い、機能は
+増やさず事故経路だけを通した。
+
+### 停止（A18 / D10 / Q13）
+
+- `stopCase` を追加した。店長停止・期限・上限・枯渇を同じ入口で扱い、**行き先だけが
+  理由と状態で変わる**。`COORDINATING` からは `CANCELLED`（店長停止）または
+  `HANDED_OFF`（それ以外、引き継ぎ理由と時刻つき）。
+- **`PREPARING` 中に未決の `ScheduleUpdate` があれば状態を動かさない**（Q13）。停止の
+  事実だけを確定させ、行き先は並行する正式採用の結果を見てから決める。期限を検知した
+  だけで引き継ぐと、外部へ適用済みかもしれない計画を未採用と断定する。
+  そのための `AbsenceCaseRepository.recordStop` を足した（版は進める。進めないと並行する
+  採用の直前再検査が変更に気付かない／D08）。
+- `COMMITTED` 以降は停止しない。**確定済みの事実を消さない**（D10）。取消は別の変更操作。
+- 停止と同じ取引で、非終端の打診と `ACTIVE`/`HELD` の承諾を `EXPIRED` にし、
+  **届いたと確認できた相手にだけ**募集終了を積む（Q07）。送信待ちのままの相手へは
+  積まず、理由を `CASE_CLOSED_SKIPPED` として記録する。
+- **停止後に古い打診が送られる穴を塞いだ**（D10）。`claimNext` は、停止済みの案件の
+  `INITIAL_OFFER`／`CLARIFICATION` を取り出さない。募集終了・非選定・確定は送る。
+- `detectDeadline` を worker の1ステップとして足した。期限到達の案件を
+  `for update skip locked` で1件取り、**同じ取引の中で** `stopCase` を呼ぶ。判定と実行を
+  分けない——分けると、判定後・実行前に正式採用が通った案件まで止める。
+- `/manager` に「調整を停止する」を足した。停止が取り消せないことを文面に出す。
+
+### 復旧（A13 / Q11 / Q12）
+
+- `reconcileOutbox` を worker の1ステップとして足した。`UNKNOWN` の通知だけを取り出し、
+  **再送せず** `getSendResult` で照合する。受け付けられたと確認できたら `SENT`、
+  送信の記録が無いと確認できたら `PENDING`。`LOOKUP_UNAVAILABLE`／`CONFLICT` は
+  **動かさない。未送信と読み替えない。**
+- `recoverCase` を worker の1ステップとして足した。`resolveReconcileStall`（Q11）と
+  `canResumeReporting`（Q12）の呼出し元がここで初めてできた。
+  `RECONCILE_REQUIRED` は照会して `resolveReconcile` と `resolveCaseReconcile` を対で
+  進め、照合が継続不能なら `ATTENTION` へ。`ATTENTION` は成果物を読み直し、
+  **採用済みかつ読戻し一致のときだけ** `REPORTING` へ戻す。戻せない場合は
+  `ATTENTION` のまま残し、**自動で終端へ落とさない**。
+- `settle-reporting.ts` は触っていない。あちらは全体を1取引で回しており、外部照会を
+  足すと外部待ちの間ロックを保持する。復旧は `send-outbox.ts` と同じ3取引の形で別に書いた。
+
+### 入れなかったもの（理由つき）
+
+- **配送に失敗（`FAILED`）した通知の自動再送。** 同じ `operation_id` での再送は
+  `operation_result` に保存済みの失敗を `REPLAY` で返すだけで結果が変わらない。本当の
+  再送には attempt を含む操作IDが要り、これは新機能にあたる。README と `runtime-status`
+  に未実装として残した。
+- **`EligibilityChecker` への実装差し替え。** PR #9 の `evaluateCandidateEligibility` は
+  入ったが、`EligibilityRecheckInput`（`src/contracts/selection.ts`）が持つのは
+  `monthlyCompleteness` と `missingDates` だけで、月内の実割当・可能時間を渡せない。
+  繋ぐには `src/contracts/` の変更が要り、ADR-021 により担当Bの確認が必須。
+  **Q15 として未決事項へ起こした。** 初期推奨は「`EligibilityRecheckInput` へ
+  `MonthlyScheduleSnapshot` を足す（`recheck` は同期のまま）」。契約は変えていない。
+- **実CSV `ScheduleGateway`。** `main` にも開いているPRにも無い。
+  `createUnimplementedScheduleGateway` は残した。
+
+### テストの台を一本化した
+
+`ScheduleGateway` の台が `tests/fakes/schedule-gateway.ts`（Day 2・担当A）と
+`tests/stubs/fake-gateways.ts`（PR #8・担当B）の二つあった。同じ口に台が二つあると、
+どちらで確かめたのかが分からなくなる。`integration/adopt-plan.test.ts` を担当Bの台へ
+寄せ、自分の台は削除した。担当Bの台は状態を持ち、冪等replay・版競合・読戻し不一致を
+再現できる。呼出しの記録も回数ではなく**呼出し内容の配列**なので、「再実行していない」
+の検査は維持できる。
+
+移行の過程で、`matchesExpected` の**件数の検査がどのテストにも守られていなかった**
+ことが分かった（読戻しから1件落とす既存のテストは、その前のIDごとの照合で先に落ちる）。
+余分な代替勤務が生えた場合のテストを足した。検査を外すと実際に落ちることを確認している。
+
+`tests/fakes/selection.ts`（担当Bの実装待ち）と `tests/fakes/model-gateway.ts` は残した。
+
+### 文書の追随
+
+- RFC-011 §5 の状態図に ADR-022 の三つの経路を追加した。ADR-022 の「更新範囲」が
+  この図を名指ししているのに未追随だった。**ADR-022 の本文は書き換えていない。**
+- README の「動かないもの」と受入状況表、`runtime-status` の `notImplemented` を
+  実態に合わせた。**動くようになった行だけ**を書き換え、それ以外は減らしていない。
+
+### 読み取り専用レビューの指摘を反映した
+
+`taskcal-domain-reviewer` と `taskcal-delivery-reviewer` へ委譲し、指摘を直した。
+
+- **停止した案件が「調整中」へ復帰する経路があった**（高）。`recover-case` の停止分岐が
+  **状態**（`PREPARING`）で判定していたため、一度 `RECONCILE_REQUIRED` を経由した停止済み
+  案件が `resolveCaseReconcile` の `COORDINATING` へ落ちていた。停止印（`stoppedAt`）で
+  判定するよう直し、`RECONCILE_REQUIRED` からの終端を [ADR-025](adr/ADR-025-stopped-case-reconcile-exit.md)
+  として記録した。RFC-011 §5 の図と `ALLOWED_CASE_TRANSITIONS` も更新した。
+- **進行中の正式採用を「未採用」と断定しうる経路があった**（中〜高）。`applyUpdate` は取引の
+  外で行われ、その間 adopt 側は案件のロックも版も持たない。その窓で停止が成立すると
+  `recover-case` が拾い、外部作用がまだ届いていないだけの照会を「反映されていない」と
+  読んでいた。`apply:{selectionId}` の操作が `IN_PROGRESS` なら**何も動かさない**。
+  そのために `OperationResultStore.findById` を足した（`begin` は無ければ `IN_PROGRESS` を
+  作ってしまうので、状態を見る用途には使えない）。
+- **期限停止の操作が `IN_PROGRESS` のまま commit されうる**（中）。操作IDが
+  `stop:{caseId}:deadline` で固定なので、一度残るとその案件は二度と期限停止できない。
+  並行更新は値を返さず例外にして取引ごと巻き戻す。
+- **A18を「本番経路でそのまま再現」と書いていた**（高）。`STOP_CAUSE.LIMIT` に呼出し元が
+  なく、予算・回数上限に達しても案件は調整中のまま残る。README・`tests/README.md` を
+  「A18のうち店長停止・期限到達」へ戻し、上限側を未実装として3か所へ記録した。
+- 停止の**失敗**が「停止できない」に畳まれていた。並行更新・進行中は再試行してよい状態
+  なので分けた（`STOP_CONFLICT`）。`STOP_HANDED_OFF` は緑（成功）ではなく警告へ移した
+  ——引き継ぎは片付いたことではなく、欠勤枠は埋まっていない。
+- 通知件数が水増しになりうる。`enqueue` は `on conflict do nothing` なので、実際に積んだ
+  ときだけ数えるよう戻り値を足した。
+
+### 機械的検査
+
+`MUST_BE_CALLED` へ `resolveReconcileStall`・`canResumeReporting`・`handoffReasonOf` を
+追加し、`resolvePreparingStop`・`resolveReconcile`・`resolveCaseReconcile`・
+`assertOutsideTransaction`・`resolveOutreachAfterSend`・`isAllowedOutreachTransition`・
+`isAllowedCommitmentTransition` の呼出し元を増やした。対称性規則を4件追加した。
+いずれも、守るべき語を落とすと実際に落ちることを確認している。
+
 ## 2026-09-22：Day 2（担当A）— 最新mainへ rebase した
 
 担当Bの #8・#9・#10 がmainへ入ったので rebase した。**コードの衝突は無く、
@@ -29,6 +211,7 @@ gitが検知した衝突は文書2件**（`docs/CHANGELOG.md`・`tests/README.md
 
 migrationは衝突しなかった（Bは追加していない）。`0014_schedule_update_case_version.sql`
 のままで、`0013` → `0014` の順に適用できることを確認した。
+
 
 ## 2026-09-22：Day 2（担当A）— PR #12 のレビュー指摘を直した
 

@@ -6,7 +6,13 @@
  */
 
 import "server-only";
-import type { StoreRepository, StoreSnapshot, TxHandle } from "../../contracts/repository";
+import type {
+  StaffConditions,
+  StaffRepository,
+  StoreRepository,
+  StoreSnapshot,
+  TxHandle,
+} from "../../contracts/repository";
 import type { Tx } from "./transaction";
 
 export function createPgStoreRepository(): StoreRepository {
@@ -26,6 +32,31 @@ export function createPgStoreRepository(): StoreRepository {
         roleCode: row.role_code,
       };
       return snapshot;
+    },
+  };
+}
+
+export function createPgStaffRepository(): StaffRepository {
+  return {
+    async listConditionsByStore(handle: TxHandle, storeId: string) {
+      const tx = handle as Tx;
+      const { rows } = await tx.query<{
+        staff_id: string;
+        role_code: string;
+        active: boolean;
+        monthly_cap_minutes: number;
+      }>(
+        `select staff_id, role_code, active, monthly_cap_minutes
+           from staff where store_id = $1 order by staff_id`,
+        [storeId],
+      );
+      return rows.map((row): StaffConditions => ({
+        staffId: row.staff_id,
+        storeId,
+        active: row.active,
+        roleCode: row.role_code,
+        monthlyCapMinutes: row.monthly_cap_minutes,
+      }));
     },
   };
 }

@@ -2,8 +2,9 @@
  * 常駐worker。担当A（ADR-003：webとworkerは別プロセス・単一DB・同じリリース単位）。
  *
  * 2026-09-22時点の状態：
- *   通知待ち（outbox）の送信、未処理の返信の解釈、通知処理中の案件の完了判定を行う。
- *   **期限の検知・停止・復旧は未実装。**
+ *   通知待ち（outbox）の送信、未処理の返信の解釈、期限に達した案件の停止、
+ *   結果不明な通知の照合、止まった案件の復旧、通知処理中の案件の完了判定を行う。
+ *   **配送に失敗した通知の再送は未実装**（attempt を含む操作IDが要る）。
  *   解釈はOrcaRouterが未設定なら何もしない（模擬結果を返さない）。
  *
  * 設計（RFC-003 §2）：
@@ -49,9 +50,9 @@ async function main(): Promise<void> {
   await pool.query("select 1");
   process.stdout.write(`worker: 起動 instance=${instanceId}\n`);
   process.stdout.write(
-    "worker: 通知待ちの送信、未処理の返信の解釈、通知処理の完了判定を行います。\n",
+    "worker: 通知待ちの送信、返信の解釈、期限の停止、結果の照合、復旧、完了判定を行います。\n",
   );
-  process.stdout.write("worker: 期限の検知・停止・復旧は未実装です。\n");
+  process.stdout.write("worker: 配送に失敗した通知の再送は未実装です。\n");
 
   const { buildAppServices } = await import("@/application/deps");
   const services = buildAppServices();
@@ -89,6 +90,52 @@ async function main(): Promise<void> {
       // 保留は進捗であって成功ではない。何が止めたかを出す。
       const detail = "blocked" in outcome ? `保留 ${outcome.blocked}` : outcome.applied;
       process.stdout.write(`worker: 解釈 ${outcome.inboundEventId} -> ${detail}\n`);
+    }
+
+    // A18：期限に達した案件を止める。判定と実行を分けない（detect-deadline.ts）。
+    while (running && drained < DRAIN_LIMIT) {
+      const outcome = await services.detectDeadline().catch((error: unknown) => {
+        process.stderr.write(
+          `worker: 期限の検知で例外 ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return { handled: false } as const;
+      });
+      if (!outcome.handled) break;
+      drained += 1;
+      const to = outcome.result.ok ? outcome.result.to : `拒否 ${outcome.result.code}`;
+      process.stdout.write(`worker: 期限停止 ${outcome.caseId} -> ${to}\n`);
+    }
+
+    // A13：結果不明で終わった通知を照合する。**再送はしない。**
+    while (running && drained < DRAIN_LIMIT) {
+      const outcome = await services.reconcileOutbox().catch((error: unknown) => {
+        process.stderr.write(
+          `worker: 送信結果の照会で例外 ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return { handled: false } as const;
+      });
+      if (!outcome.handled) break;
+      process.stdout.write(
+        `worker: 送信照合 ${outcome.outboxId} -> ${outcome.finding}/${outcome.status}\n`,
+      );
+      // 照会できないものは動いていない。同じ項目を選び直して空回りしない。
+      if (outcome.finding === "UNRESOLVED") break;
+      drained += 1;
+    }
+
+    // Q11・Q12・Q13：照合待ち・要対応・停止保留の案件を進める（recover-case.ts）。
+    while (running && drained < DRAIN_LIMIT) {
+      const outcome = await services.recoverCase().catch((error: unknown) => {
+        process.stderr.write(
+          `worker: 復旧で例外 ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return { handled: false } as const;
+      });
+      if (!outcome.handled) break;
+      process.stdout.write(`worker: 復旧 ${outcome.caseId} -> ${outcome.to}\n`);
+      // 戻せなかった案件は進んでいない。終端へは落とさず、次の巡回で見る。
+      if (outcome.to === "WAITING") break;
+      drained += 1;
     }
 
     // Q07：正式採用・読戻し・必要通知の受付まで済んだ案件を完了させる。

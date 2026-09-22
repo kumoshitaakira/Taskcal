@@ -24,8 +24,13 @@ CSVの生成・読戻しが未実装のため、**本番経路では `NOT_IMPLEM
 | `interpret-pending.ts` | 未処理の返信を1件解釈する（workerの1ステップ） | 未設定なら何もしない |
 | `adopt-plan.ts` | 正式採用の進行（RFC-010 §4 手順1〜7） | D05・D06・D08・D09、A02〜A08 |
 | `settle-reporting.ts` | 正式採用の後始末（読戻しの照合と完了判定。workerの1ステップ） | Q07、A07、A13、D09 |
+| `stop-case.ts` | 案件の停止（店長停止・期限・上限・枯渇） | A18、D10、Q07、Q13 |
+| `detect-deadline.ts` | 期限に達した案件を止める（workerの1ステップ） | A18、判定と実行を分けない |
+| `reconcile-outbox.ts` | 結果不明の通知を照合する（workerの1ステップ）。**再送しない** | A13、A03 |
+| `recover-case.ts` | 照合待ち・要対応・停止保留の案件を進める（workerの1ステップ） | Q11、Q12、Q13、A03、A13 |
 | `adoption-check.ts` | 採用した計画と勤務表の照合（上の2つが共有する） | RFC-010 §4 手順4・7、A06、A07 |
 | `roster-eligibility.ts` | **名簿だけの候補列挙。適格性検査ではない** | D01の名簿部分のみ |
+| `eligibility-recheck.ts` | 正式採用の直前の適格性再検査（担当Bの規則を通す） | D08、Q06・A09、Q15 |
 | `case-view.ts` / `staff-view.ts` | 画面の読み取りモデル | ADR-017・ADR-022（状態を畳まない） |
 | `offer-message.ts` | 打診・追加確認・確定・非選定・募集終了の本文 | RFC-011 §3、Q07 |
 | `deps.ts` | 合成の根 | fake を本番経路へ入れない |
@@ -92,12 +97,19 @@ repository 越しに読む。決定的なロジックを永続化の形から切
   課金済みの結果が永久に適用されない。新規の呼出しはgateway側が止める。
 - 候補選定（`SelectionPlanner`）：`NOT_IMPLEMENTED` を投げる。「選べなかった」と
   「選ぶ規則が無い」は別（A16）。
+- 本人の可能時間：**検査していない。** 可能時間表が無いため、承諾した区間をそのまま
+  可能時間として渡している（Q15）。月次上限・勤務の重複・在籍・職種は実際に検査する。
 - CSVの生成・読戻し（`ScheduleGateway`）：`UnimplementedScheduleGateway` が
   `NOT_IMPLEMENTED` を投げる。**正式採用の進行そのものは実装済み**だが、この口が無い
   ため本番経路では成立しない。`/manager` と `/api/health` の「未実装」に出す。
-- 送信結果の照合：未実装。`send-outbox.ts` は結果不明（`UNKNOWN`）の項目を再送しない。
-  `claimNext` が `UNKNOWN` を取り出さないため、**照合の経路ができるまで止まったまま**に
-  なる。失敗と断定しないための意図的な停止であり、静かに再送しないことが目的。
+- 配送に失敗（`FAILED`）した通知の再送：未実装。`claimNext` は `FAILED` を取り出さず、
+  `settle-reporting.ts` が案件を要対応へ回す。同じ `operation_id` での再送は
+  `operation_result` に保存済みの失敗を `REPLAY` で返すだけなので、空回りにしかならない。
+  本当の再送には attempt を含む操作IDが要る。
+  結果不明（`UNKNOWN`）の側は `reconcile-outbox.ts` が `getSendResult` で照合する。
+  **こちらも再送はしない。** 送られたと確認できたときだけ状態を動かす。
+- 復旧しない要対応の案件を人が引き取る操作：未実装。`ATTENTION → HANDED_OFF` は
+  遷移表にあるが、**自動では落とさない**（ADR-022）。いまは `ATTENTION` のまま残る。
 
 ## 正式採用の手順と取引（`adopt-plan.ts`）
 

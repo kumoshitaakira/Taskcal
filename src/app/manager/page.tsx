@@ -7,7 +7,12 @@ import { CasePanel } from "../_components/case-panel";
 import { Notice } from "../_components/notice";
 import { NotImplementedList, StatusPanel } from "../_components/status-panel";
 import { UsagePanel } from "../_components/usage-panel";
-import { adoptPlanAction, createAbsenceCaseAction, startOutreachAction } from "./actions";
+import {
+  adoptPlanAction,
+  createAbsenceCaseAction,
+  startOutreachAction,
+  stopCaseAction,
+} from "./actions";
 
 // 起動状態と案件を毎回確認する。
 export const dynamic = "force-dynamic";
@@ -79,9 +84,15 @@ export default async function ManagerPage({
   // 内容から決めてしまうと、未実装で一度断った結果を実装が入った後も返し続けるため。
   // 進行中の更新は作り直さず `findOpenByCase` で再開する（`adopt-plan.ts`）。
   const adoptOperationId = `adopt:${view.activeCase?.caseId ?? "none"}:${randomUUID()}`;
+  // 停止も描画ごとのキー。二重クリックは同じ操作になり、停止済みの案件への再送信は
+  // 「すでに停止しています」で断られる（`stop-case.ts`）。
+  const stopOperationId = `stop:${view.activeCase?.caseId ?? "none"}:${randomUUID()}`;
   // 進行中の更新は作り直さず再開する（RFC-010 §7）。停止済みの案件では出さない（D10）。
   const resuming =
     view.activeCase?.state === "PREPARING" || view.activeCase?.state === "RECONCILE_REQUIRED";
+  // 停止できるのは自動調整が続いている間だけ。確定済みの取消は別の操作（D10）。
+  const canStop =
+    view.activeCase?.state === "COORDINATING" || view.activeCase?.state === "PREPARING";
   const canAdopt = Boolean(
     view.activeCase &&
     !view.activeCase.stopCause &&
@@ -94,7 +105,7 @@ export default async function ManagerPage({
     <main>
       <h1>店長画面</h1>
       <p className="lede">
-        欠勤の登録、名簿上の同職種への同時打診、返信の受信と解釈、承諾の生成までが動きます。適格性（可能時間・月次上限・勤務の重複）は未検査です。正式採用の進行は実装済みですが、選定とCSVの生成・読戻し（担当B）が無いため、実際には未実装として断ります。
+        欠勤の登録、名簿上の同職種への同時打診、返信の受信と解釈、承諾の生成、調整の停止までが動きます。打診の宛先は名簿だけで選んでいます。正式採用の直前には在籍・職種・勤務の重複・月次上限を検査しますが、本人の可能時間は承諾した区間で代用しており未検査です。正式採用の進行は実装済みですが、選定とCSVの生成・読戻し（担当B）が無いため、実際には未実装として断ります。
       </p>
       <nav className="links">
         <Link href="/">トップ</Link>
@@ -137,6 +148,21 @@ export default async function ManagerPage({
             </strong>
           </p>
           <button type="submit">{resuming ? "正式採用の続きを進める" : "正式採用へ進む"}</button>
+        </form>
+      ) : null}
+
+      {view.activeCase && !view.activeCase.stopCause && canStop ? (
+        <form action={stopCaseAction} className="panel">
+          <input type="hidden" name="operationId" value={stopOperationId} />
+          <input type="hidden" name="caseId" value={view.activeCase.caseId} />
+          <p className="lede" style={{ margin: 0 }}>
+            調整を止めます。以後は新規の打診も正式採用も行いません（D10）。送信済みの打診には募集終了を通知し、承諾は失効させます（Q07）。{" "}
+            <strong>停止は取り消せません。</strong>
+            {view.activeCase.state === "PREPARING"
+              ? " 正式採用の準備中です。停止を記録したうえで、並行する更新の結果を確認してから行き先を決めます（Q13）。"
+              : ""}
+          </p>
+          <button type="submit">調整を停止する</button>
         </form>
       ) : null}
 

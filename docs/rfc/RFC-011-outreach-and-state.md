@@ -75,16 +75,25 @@ stateDiagram-v2
     Committed --> Attention: 読戻しの問題
     Reporting --> Completed: 必要通知受付を確認
     Reporting --> Attention: 通知失敗・不明
-    Attention --> Reporting: 事実を照合し通知を復旧
+    Attention --> Reporting: 採用済みかつ読戻し一致（ADR-022）
+    ReconcileRequired --> Attention: 照合が継続不能（Q11 / ADR-022）
+    Attention --> HandedOff: 人が対応を引き取った（Q12 / ADR-022）
     Coordinating --> HandedOff: 枯渇・期限・上限
     Coordinating --> Cancelled: 店長停止
     Preparing --> Cancelled: 停止が正式採用より先に成立
+    Preparing --> HandedOff: 未採用を確認できた停止（Q13 / ADR-022）
+    ReconcileRequired --> Cancelled: 停止成立＋未採用を確認（ADR-025）
+    ReconcileRequired --> HandedOff: 停止成立＋未採用を確認（ADR-025）
     Completed --> [*]
     HandedOff --> [*]
     Cancelled --> [*]
 ```
 
 状態を対象ごとに分離することは承認済み。この図の`Reporting --> Completed`だけは、Q07の初期推奨「必要な通知受付まで業務完了」を仮置きしている。確定と通知を別完了にする場合は、完了遷移、指標、画面を対応して変更する。
+
+[ADR-022](../adr/ADR-022-handoff-and-outcome-retention.md)で追加した三つの経路には条件がある。矢印だけで動かさず、`resolveReconcileStall`／`canResumeReporting`／`resolvePreparingStop`を通す。
+[ADR-025](../adr/ADR-025-stopped-case-reconcile-exit.md)で足した`ReconcileRequired`からの二つは、
+**停止が成立していて未採用を確認できた場合だけ**。停止していない案件の扱いは変えていない。`HandedOff`は「自動調整を終了し、人へ対応を引き継いだ」であり、「未確定」を意味しない。採用事実は案件状態と別に保持する。
 
 完了後の訂正は自動調整を再開せず、元のcompletedAt・確定内容を保持した追記の変更申告として扱う。CaseOutcome一つを上書きして過去の完了を消さない。別Handoffテーブルは必須ではない。
 

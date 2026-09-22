@@ -32,6 +32,14 @@ export const NOTICE = {
   ADOPT_STOPPED: "ADOPT_STOPPED",
   ADOPT_DEADLINE: "ADOPT_DEADLINE",
   ADOPT_CONFLICT: "ADOPT_CONFLICT",
+  STOP_CANCELLED: "STOP_CANCELLED",
+  STOP_HANDED_OFF: "STOP_HANDED_OFF",
+  STOP_COMMITTED: "STOP_COMMITTED",
+  STOP_DEFERRED: "STOP_DEFERRED",
+  STOP_RECONCILE: "STOP_RECONCILE",
+  STOP_ALREADY: "STOP_ALREADY",
+  STOP_CONFLICT: "STOP_CONFLICT",
+  STOP_NOT_ALLOWED: "STOP_NOT_ALLOWED",
   REPLY_RECORDED: "REPLY_RECORDED",
   REPLY_DUPLICATE: "REPLY_DUPLICATE",
   REPLY_UNMATCHED: "REPLY_UNMATCHED",
@@ -72,6 +80,25 @@ const TEXT: Record<NoticeCode, (count?: number) => string> = {
   ADOPT_STOPPED: () => "停止済みの案件です。正式採用は行いません（D10）。",
   ADOPT_DEADLINE: () => "回答期限を過ぎています。正式採用は行いません。",
   ADOPT_CONFLICT: () => "案件または勤務表が並行して更新されました。読み直してください。",
+  // 件数は**積んだ**数。送信はworkerが順次行う。送信済みの数ではない。
+  STOP_CANCELLED: (count) =>
+    `調整を停止しました。打診と承諾を失効させ、募集終了の通知を${count ?? 0}件積みました（送信は順次）。停止は取り消せません。`,
+  // 引き継ぎは「片付いた」ではない。欠勤枠は埋まっていない。
+  STOP_HANDED_OFF: (count) =>
+    `自動調整を終了し、人へ引き継ぎました。欠勤枠は埋まっていません。募集終了の通知を${count ?? 0}件積みました（ADR-022）。`,
+  // 停止より先に正式採用が成立していた。確定した事実は消さない（D10）。
+  STOP_COMMITTED: () =>
+    "停止は記録しました。以後の新規打診・正式採用は行いません。ただし停止より先に正式採用が成立していたため、確定した勤務はそのまま保持します（D10）。",
+  // 期限・上限を検知しただけで引き継がない（Q13）。
+  STOP_DEFERRED: () =>
+    "停止を記録しました。並行する正式採用の結果を確認してから行き先を決めます（Q13）。",
+  STOP_RECONCILE: () =>
+    "停止を記録しましたが、正式採用の成否を照合できません。未採用と断定せず照合を続けます（A03）。",
+  STOP_ALREADY: () => "すでに停止しています。停止は取り消せません。",
+  // 停止できない状態ではない。読み直して再試行してよい。
+  STOP_CONFLICT: () =>
+    "案件が並行して更新されました。停止は成立していません。読み直してもう一度実行してください。",
+  STOP_NOT_ALLOWED: () => "この状態では停止できません。確定済みの勤務の取消は別の操作です（D10）。",
   REPLY_RECORDED: (seq) => `返信を受け取りました（受信順 ${seq ?? "-"}）。`,
   REPLY_DUPLICATE: () => "同じ返信をすでに受け取っています。",
   REPLY_UNMATCHED: () =>
@@ -94,6 +121,13 @@ const WARN: readonly NoticeCode[] = [
   NOTICE.ADOPT_NOT_FEASIBLE,
   NOTICE.CASE_RECONCILE,
   NOTICE.OUTREACH_NONE,
+  // 停止は「できませんでした」でも「実行しました」でもない。行き先が未確定。
+  NOTICE.STOP_DEFERRED,
+  NOTICE.STOP_RECONCILE,
+  NOTICE.STOP_COMMITTED,
+  // 引き継ぎは成功ではない。欠勤枠が埋まらないまま自動調整を終えた。
+  NOTICE.STOP_HANDED_OFF,
+  NOTICE.STOP_CONFLICT,
 ];
 
 const BAD: readonly NoticeCode[] = [
@@ -110,6 +144,8 @@ const BAD: readonly NoticeCode[] = [
   NOTICE.OUTREACH_DEADLINE,
   NOTICE.REPLY_TOO_LONG,
   NOTICE.INPUT_MISSING,
+  NOTICE.STOP_ALREADY,
+  NOTICE.STOP_NOT_ALLOWED,
   NOTICE.FAILED,
 ];
 

@@ -61,6 +61,20 @@ export function createPgOperationResultStore(): OperationResultStore {
       return { match: OPERATION_MATCH.REPLAY, stored };
     },
 
+    async findById(handle, operationId) {
+      const tx = handle as Tx;
+      const { rows } = await tx.query<{
+        operation_id: string;
+        status: StoredOperationResult["status"];
+        result: unknown;
+      }>(`select operation_id, status, result from operation_result where operation_id = $1`, [
+        operationId,
+      ]);
+      const row = rows[0];
+      if (!row) return "NOT_FOUND";
+      return { operationId: row.operation_id, status: row.status, result: row.result };
+    },
+
     async complete(handle, input) {
       const tx = handle as Tx;
       // 内容ハッシュは触らない。書き換えはトリガが拒否する。

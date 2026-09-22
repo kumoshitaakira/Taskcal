@@ -60,7 +60,8 @@ export const ALLOWED_CASE_TRANSITIONS: Readonly<Record<CaseState, readonly CaseS
   // Q13: 未採用を確認できた場合に限り HANDED_OFF へ。期限検知だけでは進めない。
   PREPARING: ["COORDINATING", "COMMITTED", "RECONCILE_REQUIRED", "HANDED_OFF", "CANCELLED"],
   // Q11: 照合が継続不能なら ATTENTION へ。未採用とも採用済みとも断定しない。
-  RECONCILE_REQUIRED: ["COMMITTED", "COORDINATING", "ATTENTION"],
+  // ADR-025: 停止が成立していて未採用を確認できた場合だけ、停止理由に応じた終端へ。
+  RECONCILE_REQUIRED: ["COMMITTED", "COORDINATING", "ATTENTION", "CANCELLED", "HANDED_OFF"],
   COMMITTED: ["REPORTING", "ATTENTION"],
   REPORTING: ["COMPLETED", "ATTENTION"],
   // Q12: 復旧しないまま人が引き取った場合の終端。採用事実は保持する。
@@ -191,7 +192,11 @@ export const STOP_CAUSE = {
 export type StopCause = (typeof STOP_CAUSE)[keyof typeof STOP_CAUSE];
 
 /**
- * Q13/ADR-022：`PREPARING` 中に停止条件へ達したときの行き先。
+ * Q13/ADR-022・ADR-025：**停止が成立した案件**の行き先。
+ *
+ * 名前は `PREPARING` に由来するが、判断そのものは状態ではなく停止印に紐づく。
+ * ADR-025 で `RECONCILE_REQUIRED` からも同じ判断を使う——停止した案件を
+ * `COORDINATING`（調整中）へ戻すと、停止印が付いたままの案件が復帰する。
  *
  * 期限を検知しただけで引き継がない。並行する正式採用の結果を先に確定させる。
  * 正式採用と同じ排他規則で停止を確定させたうえで判定する（RFC-010 §4 手順5）。
@@ -215,5 +220,28 @@ export function resolvePreparingStop(input: {
     case ADOPTION_FACT.UNKNOWN:
       // 結果不明。引き継がず照合へ回す。未採用と断定しない。
       return "RECONCILE_REQUIRED";
+  }
+}
+
+/**
+ * 停止理由から引き継ぎ理由へ写す。
+ *
+ * `HANDED_OFF` は理由と時刻を必ず持つ（`absence_case_handoff_reason` 制約）。
+ * 店長停止は `resolvePreparingStop` が `CANCELLED` へ落とすので、ここへ来ない。
+ * 黙って期限到達へ写すと、キャンセルを運用上の引き継ぎとして誤記録する。
+ */
+export function handoffReasonOf(cause: StopCause): HandoffReason {
+  switch (cause) {
+    case STOP_CAUSE.DEADLINE:
+      return HANDOFF_REASON.DEADLINE_REACHED;
+    case STOP_CAUSE.LIMIT:
+      return HANDOFF_REASON.LIMIT_REACHED;
+    case STOP_CAUSE.CANDIDATES_EXHAUSTED:
+      return HANDOFF_REASON.CANDIDATES_EXHAUSTED;
+    case STOP_CAUSE.MANAGER_STOP:
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "店長停止は引き継ぎではなくキャンセルです。",
+      );
   }
 }

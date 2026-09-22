@@ -21,22 +21,20 @@
  *
  * 過去の辞退を候補の順位の減点に使わない（AGENTS.md）。
  *
+ * **`recheck` は2026-09-22（Q15）に実装が入った**。`src/application/eligibility-recheck.ts`
+ * が担当Bの `evaluateCandidateEligibility` を通す。ただし可能時間表が無く、承諾した
+ * 区間を可能時間として渡しているため、**可能時間そのものは検査していない**。
+ *
  * このファイルには、担当Bの実装が入るまでの**未実装の口**も置く
- * （`createUnimplementedEligibilityRecheck` / `createUnimplementedSelectionPlanner`）。
- * どちらも成功を返さず `NOT_IMPLEMENTED` を投げる。合成の根へ fake を入れて、
- * 検査していないものを通ったことにしないため。
+ * （`createUnimplementedSelectionPlanner`）。成功も `NOT_FEASIBLE` も返さず
+ * `NOT_IMPLEMENTED` を投げる。合成の根へ fake を入れて、検査していないものを
+ * 通ったことにしないため。
  */
 
 import "server-only";
 import { MAX_STAFF } from "../config/mvp-policy";
 import { ERROR_CODES, TaskcalError } from "../contracts/errors";
-import type {
-  EligibilityChecker,
-  EligibilityInput,
-  EligibilityRecheckResult,
-  EligibleCandidate,
-  SelectionPlanner,
-} from "../contracts/selection";
+import type { EligibilityInput, EligibleCandidate, SelectionPlanner } from "../contracts/selection";
 import type { TxHandle } from "../contracts/repository";
 import type { Tx } from "../adapters/db/transaction";
 
@@ -87,23 +85,6 @@ export function createRosterEligibility(): RosterEligibility {
         offeredStartAt: input.requirement.startAt,
         offeredEndAt: input.requirement.endAt,
       }));
-    },
-  };
-}
-
-/**
- * 正式採用の直前の再検査（D08）。**未実装。**
- *
- * 月次上限・可能時間・重複を検査できないため、成功を返さない。検査していない
- * ものを通ったことにすると、上限を超えた勤務を確定し得る（A09）。
- */
-export function createUnimplementedEligibilityRecheck(): Pick<EligibilityChecker, "recheck"> {
-  return {
-    recheck(): EligibilityRecheckResult {
-      throw new TaskcalError(
-        ERROR_CODES.NOT_IMPLEMENTED,
-        "適格性の再検査（可能時間・月次上限・重複）は未実装です（担当B）。正式採用へ進めません。",
-      );
     },
   };
 }

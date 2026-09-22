@@ -160,3 +160,68 @@ export async function adoptPlanAction(formData: FormData): Promise<void> {
       : NOTICE.ADOPT_ADOPTED;
   back("/manager", code, result.adopted);
 }
+
+/**
+ * 停止の結果を通知コードへ写す。
+ *
+ * **「停止した」と「停止を記録して行き先を保留した」を同じ文言に畳まない。**
+ * 畳むと、並行する正式採用がまだ決着していない案件を終了済みとして読ませる（Q13）。
+ */
+function stopNoticeOf(to: string): NoticeCode {
+  switch (to) {
+    case "CANCELLED":
+      return NOTICE.STOP_CANCELLED;
+    case "HANDED_OFF":
+      return NOTICE.STOP_HANDED_OFF;
+    case "COMMITTED":
+      return NOTICE.STOP_COMMITTED;
+    case "RECONCILE_REQUIRED":
+      return NOTICE.STOP_RECONCILE;
+    default:
+      return NOTICE.STOP_DEFERRED;
+  }
+}
+
+/**
+ * 停止の**失敗**を通知コードへ写す。
+ *
+ * **「停止できない」と「今は決められない」を畳まない。** 並行更新や進行中は、
+ * D10により停止できない状態ではなく、読み直して再試行してよい状態。同じ赤い
+ * 文言にすると、店長は再試行をやめる。
+ */
+function stopFailureNoticeOf(code: ErrorCode): NoticeCode {
+  switch (code) {
+    case ERROR_CODES.CASE_STOPPED:
+      return NOTICE.STOP_ALREADY;
+    case ERROR_CODES.RECONCILE_REQUIRED:
+      return NOTICE.STOP_CONFLICT;
+    case ERROR_CODES.OPERATION_CONFLICT:
+      return NOTICE.CASE_CONFLICT;
+    default:
+      return NOTICE.STOP_NOT_ALLOWED;
+  }
+}
+
+export async function stopCaseAction(formData: FormData): Promise<void> {
+  const operationId = String(formData.get("operationId") ?? "");
+  const caseId = String(formData.get("caseId") ?? "");
+  if (!operationId || !caseId) back("/manager", NOTICE.INPUT_MISSING);
+
+  const services = buildAppServices();
+  let result;
+  try {
+    // 画面からの停止は店長の明示的な意思。期限・上限による停止は worker が行う。
+    result = await services.stopCase({ operationId, caseId, cause: "MANAGER_STOP" });
+  } catch (error) {
+    if (error instanceof TaskcalError) {
+      revalidatePath("/manager");
+      back("/manager", stopFailureNoticeOf(error.code));
+    }
+    throw error;
+  }
+
+  revalidatePath("/manager");
+  revalidatePath("/staff");
+  if (!result.ok) back("/manager", stopFailureNoticeOf(result.code));
+  back("/manager", stopNoticeOf(result.to), result.notified);
+}

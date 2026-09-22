@@ -1,6 +1,6 @@
 # 未決事項と決める時点
 
-更新：2026-09-22（Q01〜Q13を確定、Q14を追加）。以下の表は判断の一覧で、確定内容と条件は
+更新：2026-09-22（Q01〜Q13を確定、Q14・Q15を追加）。以下の表は判断の一覧で、確定内容と条件は
 「確定した選択」節に記載する。
 
 ## 業務・設計の選択
@@ -21,6 +21,7 @@
 | Q12 | 復旧しない`Attention`の終端 | **確定**：`Attention → HandedOff`を追加（条件はADR-022） | 現在`Attention`から終端へ行けず、読戻し・通知が復旧しない案件が永久に非終端になる。A13/A18の「既確定の事実を保持して引き継ぐ」を状態で表現できない | 2026-09-21 |
 | Q13 | 正式採用準備中の上限到達 | **確定**：`Preparing → HandedOff`を追加。未採用を確認できた場合に限る（条件はADR-022） | 現在`Preparing`から`HandedOff`へ行けない。正式採用の準備中に予算・期限が尽きた場合の経路が無い | 2026-09-21 |
 | Q14 | 受入fixtureとapplicationを結ぶ共通契約 | **未決**：既存のCommitment、SelectionResult、永続化ReplyInterpretationの契約草案とfixtureの対応付け、SelectionResultRepository／ScheduleUpdateRepository、worker lease/fenceをA・Bで共同確認する | `src/contracts/README.md`の共同所有・未固定の境界に残っている。Bが一方的に業務契約を追加してはならない | 未定 |
+| Q15 | 適格性の再検査へ渡す入力 | **確定**：案1（`EligibilityRecheckInput`へ月内勤務表とスタッフ条件を足し、`recheck`は同期のまま） | 担当B承認済み。可能時間は承諾した区間で代用し、**可能時間そのものは未検査** | 2026-09-22 |
 
 ## 確定した選択
 
@@ -267,6 +268,42 @@ Q11〜Q13はRFC-011 §5の状態図に出口が無い経路で、2026-09-21の�
 対応ADR：[016](adr/ADR-016-csv-adoption.md)、[018](adr/ADR-018-scope-open-decisions.md)。決定時は選んだ値・日付・理由を追記し、RFC・fixtureの期待値を同時に更新する。
 
 Q07は業務完了の時点だけが未決。案件・相手別対話・勤務表更新・メッセージ配送の状態を分離する方針は[ADR-017](adr/ADR-017-state-boundaries.md)で承認済み。
+
+### Q15：適格性の再検査へ渡す入力
+
+**確定（2026-09-22・担当B承認済み）：案1を採用した。**
+
+**経緯**：`EligibilityChecker.recheck` は正式採用の直前にもう一度通す（D08）。だが
+`EligibilityRecheckInput` が持つのは `SelectionInputs`——すなわち `monthlyCompleteness` と
+`missingDates` だけで、月内の実際の割当も本人の可能時間も持たなかった。
+PR #9 で入った `evaluateCandidateEligibility`（`src/domain/interval/index.ts`）は
+`MonthlyScheduleSnapshot`（月内の割当とスタッフ条件）を要求するため、契約のままでは
+繋げず、`recheck` は `NOT_IMPLEMENTED` を投げ続けていた。
+
+`EligibilityChecker.recheck` は**同期のまま**にし、必要な入力を呼出し側が渡す。
+`EligibilityRecheckInput` へ `businessDate` / `absentStaffId` / `monthlySchedule` /
+`staffProfiles` を足した。実装は `src/application/eligibility-recheck.ts` で、規則そのものは
+担当Bの `evaluateCandidateEligibility`（`src/domain/interval/`）を通す。
+
+**案2（`recheck`を非同期にして実装側が入力を取りに行く）を採らない理由**：口の中でDBや
+Gatewayを引くことになり、外部待ちを取引の中へ持ち込む（RFC-010 §5）。
+**案3（applicationが直接呼ぶ）を採らない理由**：「検査した前提」がapplication側へ散り、
+D08の再検査を一箇所で説明できなくなる。
+
+**条件：可能時間は検査していない。** 可能時間表がリポジトリに無いため、
+`availabilityWindows` には本人が承諾した区間を入れる（ADR-014 / Q09：本人の返信が
+唯一の根拠）。したがって可能時間の検査は事実上恒真であり、実際に効くのは在籍・店舗・
+職種・本人除外・勤務の重複・月次上限。**「可能時間を検査した」と書かないこと。**
+README の「動かないもの」と `runtime-status` に残している。
+
+**受入への影響**：A09（月内入力不足・月次上限）は正式採用の直前で実際に検査するように
+なった。**A17は検査したことにしない。** 可能時間が承諾区間そのものなので、それを既存勤務が
+分断するなら必ず提案区間とも重なり、分断判定より先に重複検査（`EXISTING_ASSIGNMENT_OVERLAP`）
+が止める。つまり分断の判定は現在の配線では到達しない。
+
+**もう一つの限界**：同じスタッフの承諾が複数ある場合、各件が同じスナップショットに対して
+独立に評価されるため、承諾どうしの重複も上限の合算も検査しない。Q02（各区間ちょうど1人・
+単一区間）の前提があるためMVPでは起きないが、前提を外すと黙って破れる。
 
 ## 外部情報の確認
 

@@ -113,6 +113,26 @@ export interface AbsenceCaseRepository {
       stop?: { cause: StopCause; at: string };
     },
   ): Promise<"UPDATED" | "VERSION_CONFLICT">;
+  /**
+   * 状態を動かさずに停止印だけ記録する（Q13 / ADR-022）。
+   *
+   * `PREPARING` 中に期限・上限へ達しても、**期限を検知しただけで引き継がない**。
+   * 並行する正式採用の結果を先に確定させる必要があるため、停止の事実だけを先に
+   * 確定させ、行き先は `resolvePreparingStop` を通して後から決める。
+   *
+   * 版は進める。進めないと、並行する正式採用が「案件は変わっていない」と読んで
+   * 直前再検査を素通りする（D08）。
+   *
+   * 停止は書き直さない。二度目は `ALREADY_STOPPED` を返し、理由を上書きしない。
+   */
+  recordStop(
+    tx: TxHandle,
+    input: {
+      caseId: string;
+      expectedVersion: number;
+      stop: { cause: StopCause; at: string };
+    },
+  ): Promise<"UPDATED" | "VERSION_CONFLICT" | "ALREADY_STOPPED">;
   /** 追記履歴。現在状態の正本ではない（RFC-009 §3）。 */
   recordEvent(
     tx: TxHandle,
@@ -215,6 +235,26 @@ export interface StoreSnapshot {
 
 export interface StoreRepository {
   findById(tx: TxHandle, storeId: string): Promise<StoreSnapshot | "NOT_FOUND">;
+}
+
+/** 適格性の再検査へ渡すスタッフ条件（Q15）。可能時間は呼出し側が入れる。 */
+export interface StaffConditions {
+  readonly staffId: string;
+  readonly storeId: string;
+  readonly active: boolean;
+  readonly roleCode: string;
+  /** Q06：月次「割当」上限。実労働時間の上限判定ではない。 */
+  readonly monthlyCapMinutes: number;
+}
+
+export interface StaffRepository {
+  /**
+   * 店舗の全スタッフの条件を読む。**在籍していない相手も返す。**
+   *
+   * 退職者を除いて返すと、選定済みの承諾がその後に無効化されたことを
+   * 「候補に居ない」と区別できない。判定は `evaluateCandidateEligibility` が行う。
+   */
+  listConditionsByStore(tx: TxHandle, storeId: string): Promise<readonly StaffConditions[]>;
 }
 
 /**
@@ -337,6 +377,8 @@ export const OPERATION_KINDS = [
   "INTERPRET_REPLY",
   "APPLY_UPDATE",
   "ADOPT_PLAN",
+  /** A18：店長停止・期限到達・上限到達。停止も操作IDで冪等にする（ADR-006）。 */
+  "STOP_CASE",
 ] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
@@ -371,6 +413,13 @@ export interface OperationResultStore {
     tx: TxHandle,
     input: { operationId: OperationId; status: OperationStatus; result: unknown },
   ): Promise<void>;
+  /**
+   * 保存済みの操作を読む。**`begin` を呼ばずに状態だけ見たいとき**に使う。
+   *
+   * `begin` は無ければ `IN_PROGRESS` を作ってしまうので、「他の経路が進行中か」を
+   * 確かめる用途には使えない（進行中でなくても進行中にしてしまう）。
+   */
+  findById(tx: TxHandle, operationId: OperationId): Promise<StoredOperationResult | "NOT_FOUND">;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,10 +445,16 @@ export interface OutboxItem {
 }
 
 export interface OutboxRepository {
+  /**
+   * 通知待ちを積む。操作IDが同じものはすでに積まれているので**足さない**。
+   *
+   * 戻り値で区別する。積んだ件数を画面へ出す経路が、実際には何も足していない
+   * 呼出しを数に入れると、送られない通知の件数を表示する。
+   */
   enqueue(
     tx: TxHandle,
     input: Omit<OutboxItem, "status" | "attempts" | "leaseToken">,
-  ): Promise<void>;
+  ): Promise<"ENQUEUED" | "ALREADY_ENQUEUED">;
   /**
    * 送信待ちを1件だけ確保する。
    *
@@ -407,6 +462,14 @@ export interface OutboxRepository {
    * 照合するまで再送しない（RFC-010 §7、AGENTS.md）。
    */
   claimNext(tx: TxHandle, input: { leaseMs: number }): Promise<OutboxItem | "NONE">;
+  /**
+   * A13：**結果不明の項目を照合するために**取り出す。送信のための取り出しではない。
+   *
+   * 呼出し元は `getSendResult` で照合し、送られたと確認できるまで送り直さない。
+   * 送信試行ではないので `attempts` は増やさない。`settle` は `claimNext` と共通で、
+   * ここで取った lease token をそのまま使う。
+   */
+  claimForReconcile(tx: TxHandle, input: { leaseMs: number }): Promise<OutboxItem | "NONE">;
   /** 送信結果を記録する。未送信（REFUSED）と配送失敗（FAILED）を同じ欄に畳まない。 */
   settle(
     tx: TxHandle,

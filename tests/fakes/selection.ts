@@ -1,9 +1,12 @@
 /**
- * `SelectionPlanner` と `EligibilityChecker.recheck` の偽物。**テスト専用。**
+ * `SelectionPlanner` の偽物。**テスト専用。**
  *
- * 本物（担当Bの `src/domain/selection/`・`src/domain/interval/`）はまだ無い。合成の根には
- * `NOT_IMPLEMENTED` を投げる実装が入っている。ここで作るのは、正式採用の手順
- * （A02〜A08）が選定の中身に依存せず正しく進むかを確かめるための台。
+ * 本物（担当Bの `src/domain/selection/`）はまだ無い。合成の根には `NOT_IMPLEMENTED` を
+ * 投げる実装が入っている。ここで作るのは、正式採用の手順（A02〜A08）が選定の中身に
+ * 依存せず正しく進むかを確かめるための台。
+ *
+ * **`EligibilityChecker.recheck` の台はもう無い**（2026-09-22 / Q15）。適格性の再検査は
+ * `src/application/eligibility-recheck.ts` が担当Bの規則を通すので、テストでも本物を使う。
  *
  * **選定規則そのものを模したものではない。** 渡された候補をそのまま選ぶだけで、
  * 必要枠の被覆・重複の排除（Q02）・月次上限は見ていない。これでA16・A17を
@@ -11,8 +14,6 @@
  */
 
 import type {
-  EligibilityChecker,
-  EligibilityRecheckResult,
   SelectionNotFeasibleReason,
   SelectionPlanInput,
   SelectionPlanner,
@@ -67,10 +68,4 @@ export function createFakeSelectionPlanner(
       };
     },
   };
-}
-
-export function createFakeEligibilityRecheck(
-  result: EligibilityRecheckResult = { ok: true },
-): Pick<EligibilityChecker, "recheck"> {
-  return { recheck: () => result };
 }

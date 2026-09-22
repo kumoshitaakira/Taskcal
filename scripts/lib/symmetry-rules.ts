@@ -223,6 +223,7 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
       { name: "async function adopt", file: "src/application/adopt-plan.ts" },
       { name: "async function settleNotAdopted", file: "src/application/adopt-plan.ts" },
       { name: "async function markReconcileRequired", file: "src/application/adopt-plan.ts" },
+      { name: "async function settle", file: "src/application/recover-case.ts" },
     ],
     // 片方だけで状態を決めると、更新は採用済みなのに案件は調整中、という食い違いが
     // できる。同じ finding を両方へ渡すこと。
@@ -236,6 +237,65 @@ export const SYMMETRY_RULES: readonly SymmetryRule[] = [
     ],
     // 取引の内側から呼ぶと、HTTP・ファイル待ちの間、案件行のロックを保持する。
     mustContain: ["assertOutsideTransaction"],
+  },
+  {
+    label: "直前再検査は取り直した月内勤務表と当時のスタッフ条件を見る（D08 / Q06 / A09 / Q15）",
+    members: [
+      { name: "export function buildRecheckInput", file: "src/application/eligibility-recheck.ts" },
+    ],
+    // 選定時に固定した値で検査すると、その後に別営業日の勤務やスタッフ条件が
+    // 変わっても気付けない。承諾した区間を可能時間として渡す規則もここに揃える。
+    mustContain: [
+      "input.reloaded",
+      "input.conditions",
+      "availabilityWindows",
+      "monthlyWorkLimits",
+      "staffIds",
+    ],
+  },
+  {
+    label: "停止は打診・承諾・通知をまとめて閉じる（A18 / D10 / Q07）",
+    members: [{ name: "async function closeOutreaches", file: "src/application/stop-case.ts" }],
+    // 打診だけ閉じて承諾を残すと、停止済みの案件の承諾が選定できる状態で残る。
+    // 通知を積まないと、返信した相手を待たせたままになる（Q07）。届いたと確認
+    // できていない相手へ募集終了を送らない規則も、ここに揃える。
+    mustContain: [
+      "isAllowedOutreachTransition",
+      "isAllowedCommitmentTransition",
+      "deps.outbox.enqueue",
+      "CASE_CLOSED_SKIPPED",
+    ],
+  },
+  {
+    label: "停止の行き先は状態と理由の両方で決める（A18 / Q13 / ADR-022）",
+    members: [{ name: "export function stopCase", file: "src/application/stop-case.ts" }],
+    // `PREPARING` を `COORDINATING` と同じに扱うと、外部へ適用済みかもしれない
+    // 計画を未採用と断定して終端へ落とす。未決の更新があるうちは行き先を保留する。
+    mustContain: ["resolvePreparingStop", "findOpenByCase", "recordStop", "handoffReasonOf"],
+  },
+  {
+    label: "結果不明の通知は照合するまで再送しない（A13 / A03）",
+    members: [
+      { name: "export function reconcileOutbox", file: "src/application/reconcile-outbox.ts" },
+    ],
+    // 照会できないことを「送っていない」と読み替えると、届いた通知をもう一度送る。
+    // `LOOKUP_UNAVAILABLE` と `CONFLICT` を未送信へ畳まない。
+    mustContain: [
+      "getSendResult",
+      "LOOKUP_UNAVAILABLE",
+      "CONFLICT",
+      "UNRESOLVED",
+      "assertOutsideTransaction",
+    ],
+  },
+  {
+    label: "要対応から戻すのは採用済みかつ読戻し一致のときだけ（Q12 / ADR-022 / A13）",
+    members: [
+      { name: "async function tryResumeReporting", file: "src/application/recover-case.ts" },
+    ],
+    // 読戻しを見ずに戻すと、成果物が壊れたまま完了まで進む。採用事実を見ずに
+    // 戻すと、採用していない案件を通知処理へ送る。
+    mustContain: ["canResumeReporting", "verifyAdoptedArtifact", "adoptionFact"],
   },
   {
     label: "採用後の照合は内部表と成果物の両方を見る（RFC-010 §4 手順7 / D09）",
