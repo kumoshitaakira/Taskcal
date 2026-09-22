@@ -113,6 +113,8 @@ const MUST_BE_CALLED: { readonly name: string; readonly from: readonly string[] 
     // 届いた訂正を見落とす（A05）。
     from: ["src/application/case-view.ts", "src/application/adopt-plan.ts"],
   },
+  // 定義して呼ばない状態を止める。円換算は表示経路だけが呼ぶ（RFC-004 §7）。
+  { name: "toJpyForDisplay", from: ["src/application/model-usage-view.ts"] },
   { name: "resolveReconcile", from: ["src/application/adopt-plan.ts"] },
   { name: "resolveCaseReconcile", from: ["src/application/adopt-plan.ts"] },
   // Q13／ADR-022：`PREPARING` 中の停止は行き先が変わる。期限検知だけで引き継がない。

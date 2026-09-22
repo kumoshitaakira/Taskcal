@@ -20,6 +20,7 @@ loadDotenv({ path: ".env", quiet: true });
 const KEYS = [
   "ORCA_BASE_URL",
   "ORCA_API_KEY",
+  "ORCA_MODEL",
   "ORCA_CASE_SPEND_LIMIT_MICRO_USD",
   "ORCA_RUN_SPEND_LIMIT_MICRO_USD",
   "ORCA_CASE_CALL_LIMIT",
@@ -56,7 +57,8 @@ if (!parsed.success) {
     );
   }
 
-  const connectionReady = Boolean(env.ORCA_BASE_URL && env.ORCA_API_KEY);
+  // モデルIDも接続情報のうち。どれを呼ぶか決まっていなければ単価も決まらない。
+  const connectionReady = Boolean(env.ORCA_BASE_URL && env.ORCA_API_KEY && env.ORCA_MODEL);
   const budgetReady =
     env.ORCA_CASE_SPEND_LIMIT_MICRO_USD !== undefined &&
     env.ORCA_RUN_SPEND_LIMIT_MICRO_USD !== undefined &&

@@ -1,6 +1,10 @@
 # src/agent
 
-**担当A** — 観測、返信解釈、次行動の選択、費用記録（作業U08）。未実装。
+**担当A** — 観測、返信解釈、次行動の選択、費用記録（作業U08）。
+
+呼出し経路と費用記録は実装済み（`src/adapters/orca/`、`src/application/interpret-reply.ts`、
+`src/application/model-usage-view.ts`）。次行動の選択（`SELECT_ACTION`）は未実装。
+実推論を行ったかどうかは、ルートREADMEの「現時点で動かないもの」に書く。
 
 境界（ADR-004、AGENTS.md）：
 

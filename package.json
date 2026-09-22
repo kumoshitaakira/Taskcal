@@ -13,6 +13,7 @@
     "migrate": "tsx scripts/migrate.ts",
     "seed:dev": "tsx scripts/seed-dev.ts",
     "check:orca": "tsx scripts/check-orca.ts",
+    "check:orca:call": "tsx --conditions=react-server scripts/check-orca-call.ts",
     "check:consistency": "tsx scripts/check-consistency.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint",

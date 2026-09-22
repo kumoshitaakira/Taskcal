@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { getManagerView } from "@/application/case-view";
+import { getModelUsageView } from "@/application/model-usage-view";
 import { getRuntimeStatus } from "@/application/runtime-status";
 import { CasePanel } from "../_components/case-panel";
 import { Notice } from "../_components/notice";
 import { NotImplementedList, StatusPanel } from "../_components/status-panel";
+import { UsagePanel } from "../_components/usage-panel";
 import { adoptPlanAction, createAbsenceCaseAction, startOutreachAction } from "./actions";
 
 // 起動状態と案件を毎回確認する。
@@ -63,6 +65,8 @@ export default async function ManagerPage({
   const noticeCount = typeof params.c === "string" ? params.c : undefined;
   const now = new Date().toISOString();
   const [status, view] = await Promise.all([getRuntimeStatus(), getManagerView(now)]);
+  // 実測・推定・取得不能を分けて出す（RFC-004 §8）。案件が無ければ読まない。
+  const usage = view.activeCase ? await getModelUsageView(view.activeCase.caseId) : undefined;
 
   // 操作IDは描画時に作る。二重クリック・再読込・戻る操作が同じキーになり、
   // operation_result の照合で REPLAY になる（ADR-006 / D07）。
@@ -196,6 +200,13 @@ export default async function ManagerPage({
           <div className="notice">
             Q04により欠勤は元勤務の全時間です。部分欠勤・日跨ぎは範囲外として拒否します。
           </div>
+        </>
+      ) : null}
+
+      {usage ? (
+        <>
+          <h2>モデル呼出しと費用</h2>
+          <UsagePanel usage={usage} />
         </>
       ) : null}
 
