@@ -31,9 +31,11 @@ import {
   resolveReconcileStall,
   handoffReasonOf,
   ADOPTION_FACT,
+  STOP_CAUSE,
   type AdoptionFact,
   type CaseState,
 } from "../contracts/case-state";
+import { ERROR_CODES, TaskcalError } from "../contracts/errors";
 import {
   isOutcomeUnknown,
   RECONCILE_FINDING,
@@ -148,19 +150,6 @@ export function recoverCase(deps: RecoverCaseDeps) {
     };
   }
 
-  /** 正式版参照が、この更新を採用元として指しているか（D11）。 */
-  async function adoptedInternally(
-    tx: Tx,
-    snapshot: CaseSnapshot,
-    update: ScheduleUpdateSnapshot,
-  ): Promise<boolean> {
-    const ref = await deps.authoritative.get(tx, {
-      connectionId: snapshot.connectionId,
-      scheduleId: snapshot.scheduleId,
-    });
-    return ref !== "NOT_FOUND" && ref.adoptedByScheduleUpdateId === update.scheduleUpdateId;
-  }
-
   /** `ATTENTION` から通知処理へ戻せるか（Q12）。戻せないときは何も動かさない。 */
   async function tryResumeReporting(caseId: string): Promise<RecoverCaseOutcome> {
     const prepared = await withTransaction(async (tx) => {
@@ -244,19 +233,42 @@ export function recoverCase(deps: RecoverCaseDeps) {
       const snapshot = await deps.cases.findById(tx, caseId);
       if (snapshot === "NOT_FOUND") return undefined;
       const open = await deps.scheduleUpdates.findOpenByCase(tx, caseId);
-      if (open === "NONE") return { snapshot, update: undefined, adopted: false };
-      return { snapshot, update: open, adopted: await adoptedInternally(tx, snapshot, open) };
+      // 未決の更新が無くても、**正式版参照を見てから**でなければ未採用と言えない。
+      // 採用済みの更新は終端なので `findOpenByCase` では引けない（D11：参照から始める）。
+      const ref = await deps.authoritative.get(tx, {
+        connectionId: snapshot.connectionId,
+        scheduleId: snapshot.scheduleId,
+      });
+      const adoptedId = ref === "NOT_FOUND" ? undefined : ref.adoptedByScheduleUpdateId;
+      if (open === "NONE") {
+        const adoptedHere = adoptedId
+          ? await deps.scheduleUpdates.findById(tx, adoptedId)
+          : "NOT_FOUND";
+        const belongs = adoptedHere !== "NOT_FOUND" && adoptedHere.caseId === caseId;
+        return { snapshot, update: undefined, adopted: belongs };
+      }
+      return { snapshot, update: open, adopted: adoptedId === open.scheduleUpdateId };
     });
     if (!prepared) return { handled: false };
     const { snapshot, update } = prepared;
 
     if (!update) {
-      // 未決の更新が無い。停止保留の案件なら、ここで未採用として決着できる。
-      return settle(snapshot, undefined, {
-        finding: RECONCILE_FINDING.CONFIRMED_NOT_ADOPTED,
-        lookupStillPossible: deps.gateway.capabilities.supportsResultLookup,
-        detail: "未決の勤務表更新がありません。",
-      });
+      // 未決の更新が無い。正式版参照がこの案件の採用を指していれば採用済み。
+      return settle(
+        snapshot,
+        undefined,
+        prepared.adopted
+          ? {
+              finding: RECONCILE_FINDING.CONFIRMED_ADOPTED,
+              lookupStillPossible: true,
+              detail: "正式版参照がこの案件の採用を指しています。",
+            }
+          : {
+              finding: RECONCILE_FINDING.CONFIRMED_NOT_ADOPTED,
+              lookupStillPossible: deps.gateway.capabilities.supportsResultLookup,
+              detail: "未決の勤務表更新が無く、正式版参照も採用を指していません。",
+            },
+      );
     }
 
     const found: Finding = prepared.adopted
@@ -288,9 +300,18 @@ export function recoverCase(deps: RecoverCaseDeps) {
 
       // 停止を保留した案件（Q13）と、照合待ちの案件（Q11）で、案件側の行き先だけが違う。
       // 更新側は同じ `resolveReconcile` を通す——同じ照合結果から両方を決める。
+      // `PREPARING` をここで拾うのは停止印がある案件だけ（取り出しの `where`）。
+      // DBは `stop_cause` と `stopped_at` を対で要求するので、印があれば理由もある。
+      const stopCause = locked.stopCause;
+      if (locked.state === "PREPARING" && !stopCause) {
+        throw new TaskcalError(
+          ERROR_CODES.INVALID_INPUT,
+          `案件 ${locked.caseId} に停止理由がありません。`,
+        );
+      }
       const to: CaseState =
-        locked.state === "PREPARING"
-          ? resolvePreparingStop({ adoptionFact, cause: locked.stopCause ?? "MANAGER_STOP" })
+        locked.state === "PREPARING" && stopCause
+          ? resolvePreparingStop({ adoptionFact, cause: stopCause })
           : found.finding === RECONCILE_FINDING.STILL_UNKNOWN
             ? // Q11：照合が継続不能なら要対応へ。未採用とも採用済みとも断定しない。
               resolveReconcileStall({ lookupStillPossible: found.lookupStillPossible })
@@ -316,7 +337,7 @@ export function recoverCase(deps: RecoverCaseDeps) {
         ...(to === "HANDED_OFF"
           ? {
               handoff: {
-                reason: handoffReasonOf(locked.stopCause ?? "DEADLINE"),
+                reason: handoffReasonOf(stopCause ?? STOP_CAUSE.DEADLINE),
                 adoptionFact,
                 handedOffAt: now,
               },

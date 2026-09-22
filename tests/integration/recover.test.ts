@@ -592,6 +592,23 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
     expect(gateway.calls.getUpdateResult).toBe(0);
   });
 
+  it("A03：未決の更新が無くても、正式版参照が採用を指していれば未採用と断定しない", async () => {
+    // 採用取引は commit したが、案件の状態だけが照合待ちで残った場合。採用済みの
+    // 更新は終端なので `findOpenByCase` では引けない。参照を見ずに「未決の更新が
+    // 無い＝未採用」と読むと、確定済みの勤務があるまま調整中へ戻して二重採用する。
+    await adoptedCase("RECONCILE_REQUIRED");
+    const gateway = stubGateway({ supportsResultLookup: false });
+
+    const outcome = await runUntilMine(
+      recover(gateway),
+      (o) => "caseId" in o && o.caseId === caseId,
+    );
+    expect(outcome).toMatchObject({ to: "COMMITTED" });
+    const row = await caseRow();
+    expect(row.state).toBe("COMMITTED");
+    expect(row.adoption_fact).toBe("ADOPTED");
+  });
+
   it("A03：照会で反映されていないと確認できたら、調整中へ戻して再計画できる", async () => {
     await preparedUpdate("RECONCILE_REQUIRED");
     const gateway = stubGateway({ lookup: "NOT_APPLIED" });
