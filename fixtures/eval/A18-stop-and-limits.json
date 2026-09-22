@@ -1,0 +1,231 @@
+{
+  "fixtureVersion": 1,
+  "caseId": "A18",
+  "title": "店長停止、予算・回数・期限到達",
+  "scenarios": [
+    {
+      "scenarioId": "A18-manager-stop-before-adoption",
+      "boundary": "BEFORE_FORMAL_ADOPTION",
+      "input": {
+        "caseId": "case-a18-stop",
+        "caseVersion": 30,
+        "caseState": "COORDINATING",
+        "stopCause": "MANAGER_STOP",
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": []
+        }
+      },
+      "operations": [],
+      "expected": {
+        "caseState": "CANCELLED",
+        "adoptionFact": "NOT_ADOPTED",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": [],
+        "newOutreachCount": 0,
+        "formalAdoptionOccurred": false
+      },
+      "forbiddenExternalEffects": ["NEW_OUTREACH", "FORMAL_SCHEDULE_ADOPTION"],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "店長停止の排他検査と停止後の新規作用抑止をapplicationへ接続していないため",
+        "requires": ["停止操作のoperationId・requestHash永続化", "停止後の送信・採用ガード"]
+      }
+    },
+    {
+      "scenarioId": "A18-call-limit-in-coordinating",
+      "boundary": "BEFORE_FORMAL_ADOPTION",
+      "input": {
+        "caseId": "case-a18-call-limit",
+        "caseVersion": 31,
+        "caseState": "COORDINATING",
+        "stopCause": "LIMIT",
+        "limitKind": "CALL_LIMIT",
+        "callLimit": 24,
+        "callsUsed": 24,
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": []
+        }
+      },
+      "operations": [],
+      "expected": {
+        "caseState": "HANDED_OFF",
+        "adoptionFact": "NOT_ADOPTED",
+        "handoffReason": "LIMIT_REACHED",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": [],
+        "newOutreachCount": 0,
+        "formalAdoptionOccurred": false
+      },
+      "forbiddenExternalEffects": ["NEW_MODEL_CALL", "NEW_OUTREACH", "FORMAL_SCHEDULE_ADOPTION"],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "共有回数予約と上限到達時の案件引き継ぎを実装していないため",
+        "requires": ["case_call_limitの原子的な予約", "上限到達後に新規打診と採用を止めるworker"]
+      }
+    },
+    {
+      "scenarioId": "A18-spend-limit-in-coordinating",
+      "boundary": "BEFORE_FORMAL_ADOPTION",
+      "input": {
+        "caseId": "case-a18-spend-limit",
+        "caseVersion": 32,
+        "caseState": "COORDINATING",
+        "stopCause": "LIMIT",
+        "limitKind": "SPEND_LIMIT",
+        "spendLimitMicroUsd": 1000,
+        "reservedMicroUsd": 1000,
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": []
+        }
+      },
+      "operations": [],
+      "expected": {
+        "caseState": "HANDED_OFF",
+        "adoptionFact": "NOT_ADOPTED",
+        "handoffReason": "LIMIT_REACHED",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": [],
+        "newModelCallCount": 0,
+        "newOutreachCount": 0,
+        "formalAdoptionOccurred": false
+      },
+      "forbiddenExternalEffects": [
+        "NEW_PAID_MODEL_CALL",
+        "NEW_OUTREACH",
+        "FORMAL_SCHEDULE_ADOPTION"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "費用上限の原子的予約と未設定単価・結果不明の扱いを案件へ接続していないため",
+        "requires": ["USD micro単位の費用予約台帳", "上限到達時に有料呼出しを開始しないガード"]
+      }
+    },
+    {
+      "scenarioId": "A18-deadline-in-coordinating",
+      "boundary": "BEFORE_FORMAL_ADOPTION",
+      "input": {
+        "caseId": "case-a18-deadline",
+        "caseVersion": 33,
+        "caseState": "COORDINATING",
+        "stopCause": "DEADLINE",
+        "deadline": "2026-09-21T17:00:00+09:00",
+        "observedAt": "2026-09-21T17:01:00+09:00",
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": []
+        }
+      },
+      "operations": [],
+      "expected": {
+        "caseState": "HANDED_OFF",
+        "adoptionFact": "NOT_ADOPTED",
+        "handoffReason": "DEADLINE_REACHED",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": [],
+        "newOutreachCount": 0,
+        "formalAdoptionOccurred": false
+      },
+      "forbiddenExternalEffects": ["NEW_OUTREACH", "FORMAL_SCHEDULE_ADOPTION"],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "期限検知と案件状態遷移を永続workerへ接続していないため",
+        "requires": ["店舗timezoneでの期限判定", "期限後の送信・正式採用抑止"]
+      }
+    },
+    {
+      "scenarioId": "A18-preparing-limit-with-unknown-adoption",
+      "boundary": "FORMAL_ADOPTION_RESULT_UNKNOWN",
+      "input": {
+        "caseId": "case-a18-preparing-unknown",
+        "caseVersion": 34,
+        "caseState": "PREPARING",
+        "stopCause": "LIMIT",
+        "limitKind": "CALL_LIMIT",
+        "callLimit": 24,
+        "callsUsed": 24,
+        "lookupStillPossible": false,
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r1",
+          "assignmentIds": ["shift-replacement-a18"]
+        }
+      },
+      "operations": [],
+      "expected": {
+        "caseState": "RECONCILE_REQUIRED",
+        "adoptionFact": "UNKNOWN",
+        "authoritativeSourceRevision": "demo-schedule-r1",
+        "resultKinds": ["UNKNOWN"],
+        "newOutreachCount": 0,
+        "formalAdoptionOccurred": "UNKNOWN",
+        "mustResolveAdoptionBeforeHandoff": true
+      },
+      "forbiddenExternalEffects": [
+        "ASSUME_NOT_ADOPTED",
+        "NEW_FORMAL_SCHEDULE_ADOPTION",
+        "NEW_OUTREACH"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "PREPARING中の上限到達で採用結果を先に確定する排他処理を接続していないため",
+        "requires": [
+          "停止・正式採用結果の同一排他規則",
+          "照会不能時にUNKNOWNを保持する引き継ぎ処理"
+        ]
+      }
+    },
+    {
+      "scenarioId": "A18-preparing-limit-after-adopted",
+      "boundary": "AFTER_FORMAL_ADOPTION",
+      "input": {
+        "caseId": "case-a18-preparing-adopted",
+        "caseVersion": 35,
+        "caseState": "PREPARING",
+        "stopCause": "LIMIT",
+        "limitKind": "SPEND_LIMIT",
+        "lookupStillPossible": true,
+        "schedule": {
+          "scheduleId": "schedule-demo-2026-09",
+          "sourceRevision": "demo-schedule-r1",
+          "formalSourceRevision": "demo-schedule-r2-a18",
+          "assignmentIds": ["shift-replacement-a18"]
+        }
+      },
+      "operations": [],
+      "expected": {
+        "caseState": "COMMITTED",
+        "adoptionFact": "ADOPTED",
+        "authoritativeSourceRevision": "demo-schedule-r2-a18",
+        "resultKinds": ["APPLIED"],
+        "newOutreachCount": 0,
+        "formalAdoptionOccurred": true,
+        "adoptedAssignmentIds": ["shift-replacement-a18"]
+      },
+      "forbiddenExternalEffects": [
+        "CANCEL_ADOPTED_ASSIGNMENT",
+        "ROLLBACK_TO_OLD_REVISION",
+        "NEW_OUTREACH"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "上限到達後も確定済みの採用事実を保持する案件状態と正式版参照の結合が未実装のため",
+        "requires": [
+          "ADOPTED事実を取り消さない状態遷移",
+          "採用済み勤務を保持した通知・引き継ぎ処理"
+        ]
+      }
+    }
+  ]
+}

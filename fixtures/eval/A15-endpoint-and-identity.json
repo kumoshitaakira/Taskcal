@@ -1,0 +1,171 @@
+{
+  "fixtureVersion": 1,
+  "caseId": "A15",
+  "title": "宛先変更・接続別重複・本人同一性",
+  "scenarios": [
+    {
+      "scenarioId": "A15-endpoint-version-changed",
+      "boundary": "BEFORE_MESSAGE_EXTERNAL_EFFECT",
+      "input": {
+        "caseId": "case-a15-endpoint",
+        "caseVersion": 20,
+        "outreachStaffId": "staff-01",
+        "fixedEndpoint": {
+          "provider": "mock-inbox",
+          "connectionId": "mock-connection-a",
+          "endpointKey": "staff-01-endpoint",
+          "endpointVersion": 1
+        },
+        "currentEndpoint": {
+          "provider": "mock-inbox",
+          "connectionId": "mock-connection-a",
+          "endpointKey": "staff-01-endpoint",
+          "endpointVersion": 2
+        }
+      },
+      "operations": [
+        {
+          "kind": "MESSAGE_SEND",
+          "operationId": "op-a15-endpoint-offer",
+          "provider": "mock-inbox",
+          "connectionId": "mock-connection-a",
+          "endpointVersion": 1,
+          "requestPayload": {
+            "to": {
+              "provider": "mock-inbox",
+              "connectionId": "mock-connection-a",
+              "endpointKey": "staff-01-endpoint",
+              "endpointVersion": 1
+            },
+            "kind": "INITIAL_OFFER",
+            "body": "case-a15の提示条件を確認してください。"
+          },
+          "requestHash": "8f1ffca7886121e14bce5055711bb483b7a151a0a0ba9237187d085fce2f7c0b"
+        }
+      ],
+      "expected": {
+        "messageOutcomes": ["ENDPOINT_CHANGED"],
+        "sendExternalEffect": false,
+        "endpointCheck": "CHANGED",
+        "commitmentCreated": false
+      },
+      "forbiddenExternalEffects": [
+        "SEND_TO_CHANGED_ENDPOINT",
+        "CREATE_COMMITMENT_FROM_REFUSED_SEND"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "宛先版を送信直前に再検査する模擬受信箱とOutreach永続化を接続していないため",
+        "requires": [
+          "ContactEndpointRefのprovider・connectionId・endpointVersion比較",
+          "送信拒否を外部送信なしとしてOutreachへ保存する処理"
+        ]
+      }
+    },
+    {
+      "scenarioId": "A15-event-id-is-scoped-by-connection",
+      "boundary": "BEFORE_INBOUND_EVENT_PERSISTENCE",
+      "input": {
+        "caseId": "case-a15-duplicate",
+        "caseVersion": 21,
+        "events": [
+          {
+            "provider": "mock-inbox",
+            "connectionId": "mock-connection-a",
+            "eventId": "event-a15-same-id",
+            "occurredAt": "2026-09-22T10:00:00+09:00",
+            "receivedAt": "2026-09-22T10:00:01+09:00",
+            "from": {
+              "provider": "mock-inbox",
+              "connectionId": "mock-connection-a",
+              "endpointKey": "staff-01-endpoint",
+              "endpointVersion": 1
+            },
+            "body": "大丈夫です",
+            "channelVerified": true
+          },
+          {
+            "provider": "mock-inbox",
+            "connectionId": "mock-connection-b",
+            "eventId": "event-a15-same-id",
+            "occurredAt": "2026-09-22T10:00:00+09:00",
+            "receivedAt": "2026-09-22T10:00:02+09:00",
+            "from": {
+              "provider": "mock-inbox",
+              "connectionId": "mock-connection-b",
+              "endpointKey": "staff-01-endpoint",
+              "endpointVersion": 1
+            },
+            "body": "大丈夫です",
+            "channelVerified": true
+          }
+        ]
+      },
+      "operations": [],
+      "expected": {
+        "persistedEventCount": 2,
+        "deduplicationKey": ["provider", "connectionId", "eventId"],
+        "sameEventIdAcrossConnectionsIsDuplicate": false,
+        "receivedOrderSource": "receivedSeq",
+        "commitmentCreated": false
+      },
+      "forbiddenExternalEffects": [
+        "DROP_SECOND_CONNECTION_EVENT",
+        "ORDER_BY_MODEL_COMPLETION_TIME"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "受信イベントの永続化・案件内receivedSeq採番・重複排除repositoryが未実装のため",
+        "requires": [
+          "provider・connectionId・eventIdを含む一意制約",
+          "モデル処理前の受信イベント保存"
+        ]
+      }
+    },
+    {
+      "scenarioId": "A15-reply-from-another-person",
+      "boundary": "BEFORE_COMMITMENT_CREATION",
+      "input": {
+        "caseId": "case-a15-identity",
+        "caseVersion": 22,
+        "outreachStaffId": "staff-01",
+        "authenticatedRespondentStaffId": "staff-02",
+        "event": {
+          "provider": "mock-inbox",
+          "connectionId": "mock-connection-a",
+          "eventId": "event-a15-other-person",
+          "occurredAt": "2026-09-22T11:00:00+09:00",
+          "receivedAt": "2026-09-22T11:00:01+09:00",
+          "from": {
+            "provider": "mock-inbox",
+            "connectionId": "mock-connection-a",
+            "endpointKey": "staff-02-endpoint",
+            "endpointVersion": 1
+          },
+          "body": "大丈夫です",
+          "channelVerified": true
+        }
+      },
+      "operations": [],
+      "expected": {
+        "replyAcceptance": "NOT_ACCEPTED",
+        "authenticatedRespondentMatchesOutreach": false,
+        "channelVerifiedIsNotIdentityProof": true,
+        "commitmentCreated": false,
+        "eventPersistedBeforeRejection": true
+      },
+      "forbiddenExternalEffects": [
+        "CREATE_COMMITMENT_FOR_ANOTHER_STAFF",
+        "TRUST_STAFF_ID_IN_MESSAGE_BODY"
+      ],
+      "applicationAcceptance": {
+        "status": "UNEXECUTED",
+        "reason": "認証済み回答者と打診対象の本人同一性を検査する返信永続化・承諾生成経路が未実装のため",
+        "requires": [
+          "認証済み回答者を受信経路から解決する処理",
+          "元打診のstaffId・endpointと返信者を比較してCommitment作成前に拒否する処理"
+        ]
+      }
+    }
+  ]
+}
