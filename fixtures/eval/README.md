@@ -56,5 +56,8 @@ CSV更新fixtureへ独自のフィールドを足していない。
 この変更ではJSONと構造検証だけを実行する。各シナリオの`applicationAcceptance.reason`
 と`requires`に、未実行理由と必要な結合条件を残している。
 
+この共通契約の不足は[Q14](../../docs/OPEN-QUESTIONS.md)として未決のまま記録している。
+fixtureの文字列参照をCommitment等の正式な業務契約と読み替えない。
+
 fake Gatewayの結果を確認するテストを追加しても、application全体の受入合格へ昇格させない。
 このworktreeは`origin/main`起点であり、別worktreeのfake Gateway実装は取り込まない。

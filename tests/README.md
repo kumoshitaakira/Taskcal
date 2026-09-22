@@ -3,6 +3,8 @@
 - `unit/` : 純粋な業務規則（B中心）
 - `integration/` : 実DB・プロセス障害・競合（B中心、Aの結合部分を含む）
 - `e2e/` : 主要画面・デモ初期化
+- `unit/eval-fixtures.test.ts` : `fixtures/eval/`の構造・既存契約値・操作ハッシュの検証。
+  application、DB、Gatewayを接続しないため、A02〜A18の受入合格を主張しない。
 
 テスト名または追跡情報に受入ケースID（A01〜A18）を使う（AGENTS.md）。
 決定的テストと、OrcaRouterを使う実モデル評価を分ける。実行していない受入ケースを
@@ -23,3 +25,11 @@
 現在そのまま再現できているのは A11・A12・A15 と A18 の一部（予算・回数上限）です。
 A01・A03・A05・A06・A13 は前提または一部のみで、正式採用・CSV往復が入るまで
 完全には再現できません。README の「現時点で動かないもの」と揃えてください。
+受入fixtureだけを検査する場合は、リポジトリルートから次を実行する。
+
+```bash
+npx vitest run tests/unit/eval-fixtures.test.ts
+```
+
+このテストが成功しても、各fixtureの`applicationAcceptance.status`は`UNEXECUTED`のまま
+である。実行していない結合ケースを合格と記録しない。

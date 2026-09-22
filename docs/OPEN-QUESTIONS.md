@@ -1,6 +1,6 @@
 # 未決事項と決める時点
 
-更新：2026-09-21（Q01〜Q13をすべて確定）。以下の表は判断の一覧で、確定内容と条件は
+更新：2026-09-22（Q01〜Q13を確定、Q14を追加）。以下の表は判断の一覧で、確定内容と条件は
 「確定した選択」節に記載する。
 
 ## 業務・設計の選択
@@ -20,6 +20,7 @@
 | Q11 | 照合が恒久的に不能な案件の出口 | **確定**：RFC-011 §5の図に`ReconcileRequired → Attention`を追加（条件はADR-022） | 図には`Committed`か`Coordinating`しか出口が無く、どちらも持っていない事実の断定になる。§5本文は「ReconcileRequiredまたはAttentionとして人の対応を記録」と書いており本文と図が食い違う | 2026-09-21 |
 | Q12 | 復旧しない`Attention`の終端 | **確定**：`Attention → HandedOff`を追加（条件はADR-022） | 現在`Attention`から終端へ行けず、読戻し・通知が復旧しない案件が永久に非終端になる。A13/A18の「既確定の事実を保持して引き継ぐ」を状態で表現できない | 2026-09-21 |
 | Q13 | 正式採用準備中の上限到達 | **確定**：`Preparing → HandedOff`を追加。未採用を確認できた場合に限る（条件はADR-022） | 現在`Preparing`から`HandedOff`へ行けない。正式採用の準備中に予算・期限が尽きた場合の経路が無い | 2026-09-21 |
+| Q14 | 受入fixtureとapplicationを結ぶ共通契約 | **未決**：Commitment、SelectionResult、永続化ReplyInterpretation、worker lease/fenceの形とfixtureからの対応付けをA・Bで共同確認する | `src/contracts/README.md`で不足が列挙されている。Bが一方的に業務契約を追加してはならない | 未定 |
 
 ## 確定した選択
 
@@ -148,6 +149,23 @@ fixtureは例文だけにしない。元打診、既存の承諾、確定前か�
 
 案件を終端にすること自体はA13/A18の必須条件ではない。事実を保持して人へ渡せればよく、
 案件を終わらせる目的で不明状態を消さない（RFC-011 §5末尾）。
+
+### Q14：受入fixtureとapplicationを結ぶ共通契約
+
+**未決。** `src/contracts/README.md`に記載されたCommitment、SelectionResult、永続化した
+ReplyInterpretation、workerのlease/fence tokenは、fixture作成時点で最終形が定義されていない。
+今回のfixtureは既存の案件状態・ScheduleUpdate・Gateway契約にある値と、文字列参照だけを使い、
+これらの不足を推測して`src/contracts/`へ追加しない。
+
+A側の案件applicationとB側fixtureを結合する前に、次を共同確認する。
+
+- 承諾のID・版・`supersedes`と、選定結果が参照する承諾版。
+- 返信の`messageId`・`receivedSeq`・案件版・model callの対応付け。
+- 同じ受信イベントや操作を一つだけ処理するworker lease/fenceの保存境界。
+- fixtureの`caseVersion`、`sourceRevision`、操作IDを永続モデルへ写す方法。
+
+Q14はプロダクトの業務意味をこのfixtureブランチで確定する質問ではなく、結合前の共有契約を
+確認するための未決事項である。
 
 ## 実装上の停止条件
 

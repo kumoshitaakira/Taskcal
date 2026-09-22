@@ -76,13 +76,26 @@
   テストが見ている判定と実際に走る判定が別物だった。
 - `date` 列を `Date` で受けると、JSTでは `toISOString()` が前日になり営業日が1日ずれた。
   SQL側で `to_char` して文字列で受ける形に統一し、対称性検査へ規則を追加した。
-
 ## 2026-09-22：Q03の可能時間窓の扱いを明確化
 
 - 独立した複数の可能時間窓は、候補時間がいずれか1つへ完全に収まる場合に許可する。
 - 既存勤務の差し引きで1つの可能時間窓が分断された場合は、従来どおり`OUT_OF_SCOPE`で拒否する。
 - 月次CSVからdomain snapshotへの変換と完全性検証をapplication層へ置き、`sourceRevision`を保持する。
 - これはQ03の高位の「分断を丸めず拒否する」判断を置換せず、適用対象を明確化する変更である。
+
+## 2026-09-22：Bの決定的な受入fixtureを追加
+
+- A02、A03、A04、A07、A08、A14、A15、A18の入力、期待終状態、採用事実、最後に確認した
+  `sourceRevision`、禁止する外部作用、操作ID・`requestHash`・接続範囲を`fixtures/eval/`へ追加した。
+- `UNKNOWN`、`PARTIAL`、`CONFLICT`、`EXPORTED_ONLY`、`PREPARED`を正式採用や確定失敗へ
+  黙って丸めない期待値を固定した。A15では`provider`・`connectionId`・`endpointVersion`を
+  メッセージ契約に合わせて記録した。
+- `tests/unit/eval-fixtures.test.ts`はJSONの構造と既存契約の値を検査するだけで、fake Gateway
+  やfixture検証の成功をapplication全体の受入合格とは扱わない。案件状態機械、Commitment／
+  SelectionResult永続化、正式採用transaction、模擬受信箱の結合は未実行として各fixtureへ記録した。
+- 共通契約に未定義のCommitment、SelectionResult、ReplyInterpretation、worker lease/fenceは
+  `src/contracts/`へ追加していない。Q14として、結合時にA側と決める必要がある条件を
+  `docs/OPEN-QUESTIONS.md`へ記録し、各fixtureの未実行理由にも残した。
 
 ## 2026-09-22：mainへのSquash merge運用を明文化
 
