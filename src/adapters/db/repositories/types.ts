@@ -15,12 +15,19 @@ export const READ_BACK_STATUS = {
 
 export type ReadBackStatus = (typeof READ_BACK_STATUS)[keyof typeof READ_BACK_STATUS];
 
-export interface ReadBackObservation {
-  readonly status: ReadBackStatus;
-  readonly sourceRevision?: string;
-  readonly artifactRef?: string;
-  readonly detail?: string;
-}
+export type ReadBackObservation =
+  | {
+      readonly status: Exclude<ReadBackStatus, "MATCHED">;
+      readonly sourceRevision?: string;
+      readonly artifactRef?: string;
+      readonly detail?: string;
+    }
+  | {
+      readonly status: "MATCHED";
+      readonly sourceRevision: string;
+      readonly artifactRef: string;
+      readonly detail?: string;
+    };
 
 export interface ResultMapping {
   readonly commitmentId: string;
@@ -38,8 +45,10 @@ export interface ScheduleUpdateRecord {
   readonly operation: OperationRef;
   readonly expectedSourceRevision: string;
   readonly sourceRevisionAfter?: string;
+  readonly revisionCheckEnforced: boolean;
   readonly artifactRef?: string;
   readonly state: ScheduleUpdateState;
+  readonly externalAttemptState: ExternalAttemptState;
   readonly resultKind?: UpdateResultKind;
   readonly readBack: ReadBackObservation;
   /** 案件状態と別に保持する採用済み事実。 */
@@ -66,6 +75,7 @@ export interface RecordScheduleUpdateOutcomeInput {
   readonly state: ScheduleUpdateState;
   readonly resultKind?: UpdateResultKind;
   readonly sourceRevisionAfter?: string;
+  readonly revisionCheckEnforced: boolean;
   readonly artifactRef?: string;
   readonly readBack: ReadBackObservation;
   readonly adoptionFact: AdoptionFact;
@@ -78,6 +88,26 @@ export interface OperationWrite<T> {
   readonly record: T;
 }
 
+export const RESULT_WRITE_MATCH = {
+  APPLIED: "APPLIED",
+  REPLAY: "REPLAY",
+} as const;
+
+export type ResultWriteMatch = (typeof RESULT_WRITE_MATCH)[keyof typeof RESULT_WRITE_MATCH];
+
+export interface ResultWrite<T> {
+  readonly match: ResultWriteMatch;
+  readonly record: T;
+}
+
+export const EXTERNAL_ATTEMPT_STATE = {
+  IN_FLIGHT: "IN_FLIGHT",
+  RESULT_RECORDED: "RESULT_RECORDED",
+} as const;
+
+export type ExternalAttemptState =
+  (typeof EXTERNAL_ATTEMPT_STATE)[keyof typeof EXTERNAL_ATTEMPT_STATE];
+
 export const OUTBOUND_OPERATION_STATE = {
   NEW: "NEW",
   IN_FLIGHT: "IN_FLIGHT",
@@ -89,6 +119,20 @@ export const OUTBOUND_OPERATION_STATE = {
 
 export type OutboundOperationState =
   (typeof OUTBOUND_OPERATION_STATE)[keyof typeof OUTBOUND_OPERATION_STATE];
+
+export const EXTERNAL_ATTEMPT_DECISION = {
+  START: "START",
+  LOOKUP_REQUIRED: "LOOKUP_REQUIRED",
+  REPLAY: "REPLAY",
+} as const;
+
+export type ExternalAttemptDecision =
+  (typeof EXTERNAL_ATTEMPT_DECISION)[keyof typeof EXTERNAL_ATTEMPT_DECISION];
+
+export interface ExternalAttemptResult {
+  readonly decision: ExternalAttemptDecision;
+  readonly record: OutboundOperationRecord;
+}
 
 export interface OutboundOperationRecord {
   readonly outboundOperationId: string;

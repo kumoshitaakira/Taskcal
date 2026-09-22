@@ -1,10 +1,18 @@
 import type { QueryResultRow } from "pg";
-import { matchStoredRequest } from "./operation-match";
+import { computeRequestHash } from "@/contracts/operation";
+import { ERROR_CODES, TaskcalError } from "@/contracts/errors";
+import {
+  decideExternalAttempt,
+  isAllowedOutboundTransition,
+  matchStoredRequest,
+} from "./operation-match";
 import type {
+  ExternalAttemptResult,
   OperationWrite,
   OutboundOperationRecord,
   RecordOutboundOperationResultInput,
   RepositoryTx,
+  ResultWrite,
   ReserveOutboundOperationInput,
 } from "./types";
 
@@ -46,17 +54,26 @@ export interface OutboundOperationRepository {
     tx: RepositoryTx,
     input: ReserveOutboundOperationInput,
   ): Promise<OperationWrite<OutboundOperationRecord>>;
+  beginExternalAttempt(
+    tx: RepositoryTx,
+    input: {
+      readonly provider: string;
+      readonly connectionId: string;
+      readonly operation: RecordOutboundOperationResultInput["operation"];
+    },
+  ): Promise<ExternalAttemptResult>;
   recordResult(
     tx: RepositoryTx,
     input: RecordOutboundOperationResultInput,
-  ): Promise<OutboundOperationRecord>;
+  ): Promise<ResultWrite<OutboundOperationRecord>>;
 }
 
 /**
  * 外部作用の結果照合境界の下書き。
  *
- * reserveは外部providerを呼ばない。NEW／REPLAYを確定してからapplicationが外部作用を
- * 呼び、応答不明時はUNKNOWNまたはRECONCILE_REQUIREDをrecordResultへ保存する。
+ * reserveは外部providerを呼ばない。applicationはbeginExternalAttemptでNEWから
+ * IN_FLIGHTを同じ取引へ保存してから外部作用を行う。IN_FLIGHT／UNKNOWN／
+ * RECONCILE_REQUIREDではproviderの照会を先に行い、無条件の再送をしない。
  */
 export class PgOutboundOperationRepository implements OutboundOperationRepository {
   async findByOperation(
@@ -118,7 +135,10 @@ export class PgOutboundOperationRepository implements OutboundOperationRepositor
       operationId: input.operation.operationId,
     });
     if (!raced) {
-      throw new Error("outbound operation insert conflict could not be read back");
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        "outbound operationの保存結果を照合できません。外部作用を再実行しないでください。",
+      );
     }
     const match = matchStoredRequest(raced.operation.requestHash, input.operation.requestHash);
     return { match, record: raced };
@@ -127,16 +147,35 @@ export class PgOutboundOperationRepository implements OutboundOperationRepositor
   async recordResult(
     tx: RepositoryTx,
     input: RecordOutboundOperationResultInput,
-  ): Promise<OutboundOperationRecord> {
-    const existing = await this.findByOperation(tx, {
+  ): Promise<ResultWrite<OutboundOperationRecord>> {
+    if (input.state === "NEW" || input.state === "IN_FLIGHT") {
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "外部作用の結果にはNEWまたはIN_FLIGHT以外の状態を指定してください。",
+      );
+    }
+    const existing = await this.findByOperationForUpdate(tx, {
       provider: input.provider,
       connectionId: input.connectionId,
       operationId: input.operation.operationId,
     });
     if (!existing) {
-      throw new Error("outbound operation must be reserved before its result is recorded");
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "outbound operationをreserveせずに結果を保存できません。",
+      );
     }
     matchStoredRequest(existing.operation.requestHash, input.operation.requestHash);
+
+    if (sameOutboundResult(existing, input)) {
+      return { match: "REPLAY", record: existing };
+    }
+    if (!isAllowedOutboundTransition(existing.state, input.state)) {
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        `outbound operationの状態を${existing.state}から${input.state}へ変更できません。照合が必要です。`,
+      );
+    }
 
     const { rows } = await tx.query<OutboundOperationRow>(
       `update outbound_operation
@@ -145,7 +184,7 @@ export class PgOutboundOperationRepository implements OutboundOperationRepositor
               artifact_ref = $3,
               result_metadata = $4::jsonb,
               updated_at = now()
-        where provider = $5 and connection_id = $6 and operation_id = $7
+        where provider = $5 and connection_id = $6 and operation_id = $7 and state = $8
         returning ${OUTBOUND_OPERATION_COLUMNS}`,
       [
         input.state,
@@ -155,14 +194,98 @@ export class PgOutboundOperationRepository implements OutboundOperationRepositor
         input.provider,
         input.connectionId,
         input.operation.operationId,
+        existing.state,
       ],
     );
     const row = rows[0];
     if (!row) {
-      throw new Error("outbound operation result could not be read back");
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        "outbound operationの結果保存後の読出しを照合できません。",
+      );
     }
-    return toOutboundOperationRecord(row);
+    return { match: "APPLIED", record: toOutboundOperationRecord(row) };
   }
+
+  async beginExternalAttempt(
+    tx: RepositoryTx,
+    input: {
+      readonly provider: string;
+      readonly connectionId: string;
+      readonly operation: RecordOutboundOperationResultInput["operation"];
+    },
+  ): Promise<ExternalAttemptResult> {
+    const existing = await this.findByOperationForUpdate(tx, {
+      provider: input.provider,
+      connectionId: input.connectionId,
+      operationId: input.operation.operationId,
+    });
+    if (!existing) {
+      throw new TaskcalError(
+        ERROR_CODES.INVALID_INPUT,
+        "外部作用を開始するには、先にreserveで操作を保存してください。",
+      );
+    }
+    const decision = decideExternalAttempt(
+      existing.state,
+      existing.operation.requestHash,
+      input.operation.requestHash,
+    );
+    if (decision !== "START") {
+      return { decision, record: existing };
+    }
+
+    const { rows } = await tx.query<OutboundOperationRow>(
+      `update outbound_operation
+          set state = 'IN_FLIGHT', updated_at = now()
+        where provider = $1 and connection_id = $2 and operation_id = $3
+          and state = 'NEW'
+        returning ${OUTBOUND_OPERATION_COLUMNS}`,
+      [input.provider, input.connectionId, input.operation.operationId],
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new TaskcalError(
+        ERROR_CODES.RECONCILE_REQUIRED,
+        "外部作用開始の永続化結果を照合できません。再送せず照会してください。",
+      );
+    }
+    return { decision, record: toOutboundOperationRecord(row) };
+  }
+
+  private async findByOperationForUpdate(
+    tx: RepositoryTx,
+    ref: { readonly provider: string; readonly connectionId: string; readonly operationId: string },
+  ): Promise<OutboundOperationRecord | undefined> {
+    const { rows } = await tx.query<OutboundOperationRow>(
+      `select ${OUTBOUND_OPERATION_COLUMNS}
+         from outbound_operation
+        where provider = $1 and connection_id = $2 and operation_id = $3
+        for update`,
+      [ref.provider, ref.connectionId, ref.operationId],
+    );
+    return rows[0] ? toOutboundOperationRecord(rows[0]) : undefined;
+  }
+}
+
+function sameOutboundResult(
+  existing: OutboundOperationRecord,
+  input: RecordOutboundOperationResultInput,
+): boolean {
+  return (
+    computeRequestHash({
+      state: input.state,
+      providerOperationRef: input.providerOperationRef,
+      artifactRef: input.artifactRef,
+      resultMetadata: input.resultMetadata,
+    }) ===
+    computeRequestHash({
+      state: existing.state,
+      providerOperationRef: existing.providerOperationRef,
+      artifactRef: existing.artifactRef,
+      resultMetadata: existing.resultMetadata,
+    })
+  );
 }
 
 function toOutboundOperationRecord(row: OutboundOperationRow): OutboundOperationRecord {
