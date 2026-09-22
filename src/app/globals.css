@@ -144,3 +144,81 @@ nav.links a {
   padding: 8px 14px;
   text-decoration: none;
 }
+
+/* 打診の一覧。状態ごとにタグを分けて出すため、1行に複数のタグが並ぶ。 */
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.95rem;
+}
+
+table.grid th,
+table.grid td {
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+table.grid th {
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+table.grid tr:last-child td {
+  border-bottom: none;
+}
+
+.tags {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+form.panel label,
+.panel label {
+  color: var(--muted);
+}
+
+.panel select,
+.panel input,
+.panel textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  max-width: 100%;
+}
+
+.panel textarea {
+  width: 100%;
+  margin: 0.3rem 0 0.5rem;
+}
+
+.panel button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+  margin-top: 0.6rem;
+}
+
+.panel button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+pre.message {
+  margin: 0 0 0.6rem;
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--text);
+}

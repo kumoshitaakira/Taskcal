@@ -490,27 +490,26 @@ export class OrcaRouterClient implements ModelGateway {
  * 結果不明の呼出し。**確定失敗として扱わない。**
  * 再実行の前に結果照会・照合を行うために、使用量（費用UNKNOWN）を持ち歩く。
  */
-export class UnknownOutcomeError extends Error {
-  readonly code = ERROR_CODES.RECONCILE_REQUIRED;
-
+export class UnknownOutcomeError extends TaskcalError {
   constructor(
     readonly usage: UsageRecord,
     message: string,
   ) {
-    super(message);
+    // **TaskcalError を継承する。** 呼出し元は `instanceof TaskcalError` で
+    // 「意味のある失敗」を拾い、案件を止めずに保留へ回す。ここが素の Error だと
+    // 呼出し元まで素通りし、同じ受信を選び続けて後続の返信が処理できなくなる。
+    super(ERROR_CODES.RECONCILE_REQUIRED, message);
     this.name = "UnknownOutcomeError";
   }
 }
 
 /** 呼出しは成立したがモデル出力が契約に合わない。使用量は実測値を保持する。 */
-export class InvalidModelOutputError extends Error {
-  readonly code = ERROR_CODES.INVALID_INPUT;
-
+export class InvalidModelOutputError extends TaskcalError {
   constructor(
     readonly usage: UsageRecord,
     message: string,
   ) {
-    super(message);
+    super(ERROR_CODES.INVALID_INPUT, message);
     this.name = "InvalidModelOutputError";
   }
 }

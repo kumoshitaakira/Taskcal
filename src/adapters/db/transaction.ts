@@ -17,6 +17,7 @@
 import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PoolClient } from "pg";
+import { ERROR_CODES, TaskcalError } from "../../contracts/errors";
 import { getPool } from "./pool";
 
 export type Tx = PoolClient;
@@ -71,5 +72,24 @@ export async function withTransaction<T>(
       client.release(true);
     }
     throw error;
+  }
+}
+
+/**
+ * 取引の外でだけ行ってよい処理の前に置く。
+ *
+ * `withTransaction` は入れ子を検出して外側の取引へ合流する。これは一括性を守るため
+ * だが、副作用として「取引の内側からモデル呼出しや送信を呼んでも動いてしまう」。
+ * その場合、HTTP待ちのあいだ案件行のロックを保持し続け、同時に届いた他の返信が
+ * 止まる（RFC-010 §5：外部API待ちやCSV生成中に長いDB取引を保持しない）。
+ *
+ * 型では表せないため、外部作用の入口で明示的に検査する。
+ */
+export function assertOutsideTransaction(label: string): void {
+  if (currentTx.getStore()) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      `${label}は取引の外で行ってください（外部待ちの間ロックを保持しない：RFC-010 §5）`,
+    );
   }
 }

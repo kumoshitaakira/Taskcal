@@ -4,7 +4,7 @@ Taskcalサービスのリポジトリ
 
 飲食店の突発欠勤に対し、既存スタッフへの打診、返信の解釈、再調整、勤務条件の検査、シフト反映を進めるAIエージェントです。
 
-ハッカソン向けの実装を開始しました（2026-09-21、Day 1）。開発環境の起動（アプリ・DB・worker）、共通契約の下書きに加え、Bの第1段階として固定形式の月内CSV取込・正規化出力と架空fixtureを追加しました。欠勤登録、打診、返信解釈、正式採用、CSVの画面接続は未実装です。実モデル接続・業務全体の受入試験も未実施です。
+ハッカソン向けの実装中です（Day 2、2026-09-22）。現時点で動くのは**欠勤の登録から、適格候補への同時打診、模擬受信箱への送信、返信の受信と永続化まで**です。返信の解釈はOrcaRouterが未設定のため実行できません。CSV取込・候補選定・正式採用は未実装です。
 
 ## まず読む文書
 
@@ -46,17 +46,34 @@ cp .env.example .env.local     # 初回のみ。.env.local はコミットしな
 npm install
 docker compose up -d db        # PostgreSQL 18（ホスト側ポート 5433）
 npm run migrate                # 番号付きSQL migration を適用
+npm run seed:dev               # 架空の店舗・スタッフ・勤務表を入れる
 npm run dev                    # http://localhost:3000
-npm run worker                 # 別ターミナルで常駐worker
+npm run worker                 # 別ターミナルで常駐worker（送信と解釈を回す）
 ```
 
 画面：`/`（導線）、`/manager`（店長）、`/staff`（スタッフ役）、`/api/health`（起動状態のJSON）。
 
+`npm run seed:dev` が入れるのは**架空データで、CSVの取込みではありません**。担当Bの
+`parseMonthlyCsv`（正規化・安定ID・月内完全性）は入っていますが、アプリのDB・画面へは
+まだ繋がっていません（`ScheduleGateway` 本体が未実装）。`authoritative_schedule_ref.source_revision`
+にもCSVの内容hashではなくseedの目印が入ります。取込み済みと読まないでください。
+
 初期状態へ戻す（データを消す）：
 
 ```bash
-docker compose down -v && docker compose up -d db && npm run migrate
+docker compose down -v && docker compose up -d db && npm run migrate && npm run seed:dev
 ```
+
+### 通しで動かす
+
+1. `/manager` で「欠勤する勤務」と回答期限を選び、**欠勤を登録する**。
+2. 同じ画面で**打診を開始する**。欠勤者本人を除く同職種の全員へ個別に打診を積む。
+   送信はworkerが取引の外で行う。
+3. `/staff` に打診が届く。いずれかのスタッフ役から**返信する**。
+4. `/manager` に「回答済み／受付済み／承諾なし／受信順 N（未処理）」が出る。
+
+返信の解釈（承諾にするかどうか）はOrcaRouterが未設定のため動きません。画面と
+`/api/health` の「未実装」にその旨を出します。
 
 ### 確認コマンド
 
@@ -74,6 +91,7 @@ npm run build          # 本番ビルド
 
 ```bash
 npm run format         # prettier --write
+npm run seed:dev       # 架空データの投入（進行中の案件だけ片付けて入れ直す）
 npm run check:consistency  # コードと文書、コード同士の食い違い（7項目。詳細はスクリプト冒頭）
 npm run test:unit      # 単体のみ（DB不要）
 npm run test:integration  # 統合のみ（起動中のDBが必要）
@@ -109,15 +127,15 @@ Codexによるレビューは、リポジトリに入れたGitHub Appが担当�
 RFC-012 §3.1の所有範囲に対応します。所有は排他的な編集権ではなく、設計・完了・説明の責任です。
 
 ```text
-src/app/                  A  店長画面・スタッフ画面・Route Handlers
-src/application/          A  use case、状態遷移、正式採用の進行制御
-src/agent/                A  返信解釈、action選択、費用記録
+src/app/                  A  店長画面・スタッフ画面・Server Action・Route Handler
+src/application/          A  use case、状態遷移、取引境界
+src/agent/                A  返信解釈の境界（README のみ。呼出しは application）
 src/adapters/orca/        A  OrcaRouter、予算予約、使用量記録
-src/adapters/db/          A  接続、transaction、migration runner
-src/adapters/db/migrations/ B作成・A承認（0001はworker基盤でA、業務は0002以降）
+src/adapters/db/          A  接続、transaction、migration runner、repository
+src/adapters/db/migrations/ 番号帯で分ける（0002-0019=A、0020-=B。理由は同ディレクトリのREADME）
 src/adapters/channel/     A  模擬メッセージ受信箱
-src/worker/               A  常駐worker
-src/contracts/            共同 API・イベント・モデル出力のschema
+src/worker/               A  常駐worker（送信・解釈）
+src/contracts/            共同 API・イベント・モデル出力・永続化の契約
 src/config/               A  環境変数の検査
 src/domain/interval/      B  時間区間、重複、充足計算（README のみ。実装は未着手）
 src/domain/selection/     B  候補評価、勤務計画の選定（同上）
@@ -125,16 +143,38 @@ src/adapters/csv/         B  固定CSV正規化・安定ID（Gateway本体は未
 fixtures/ tests/          B中心 デモデータ、単体・統合・受入試験
 ```
 
-`src/contracts/` はDay 1に共同で固定します。以後の変更は、変更者でない側の確認を必須とします（ADR-021）。
-現時点では**下書き**で、承諾（Commitment）・選定結果・永続化した解釈の型がまだありません。
-不足の一覧は [`src/contracts/README.md`](src/contracts/README.md) にあります。
+各層の規則はディレクトリのREADMEにあります。とくに
+[`src/application/README.md`](src/application/README.md)（取引の中と外）と
+[`src/app/README.md`](src/app/README.md)（Server Actionと冪等キー）を先に読んでください。
+
+`src/contracts/` はA・Bの共同所有です。変更は、変更者でない側の確認を必須とします（ADR-021）。
+Day 2で承諾（Commitment）・選定結果・打診の遷移・永続化の口を追加しました。Bの確認待ちです。
+残る不足は [`src/contracts/README.md`](src/contracts/README.md) にあります。
 
 ### 現時点で動かないもの
 
-RFC-012 §4のDay 1共同ゲートのうち、以下は**未達**です。デモや進捗報告で完成扱いにしないでください。
+デモや進捗報告で完成扱いにしないでください。
 
-- CSVを読んで画面表示（未実装）。並べ替え後の勤務ID維持はBのCLI・単体テストで確認する
-- 実推論1回のモデル・費用状態の保存（OrcaRouterの接続情報と金額予算が未取得。Q10未決）
+| 未達 | 理由 |
+|---|---|
+| CSVを読んで画面表示（A06のID往復はBのCLIと単体テストで確認済み） | 担当Bの `parseMonthlyCsv` は入ったが、`ScheduleGateway` 本体と画面・DBへの接続は未実装。画面が読む勤務表は `npm run seed:dev` が入れた架空データで、**CSVから往復したものではない** |
+| 適格性の検査（可能時間・月次上限・勤務の重複） | 担当B。打診の候補は**名簿だけ**で選んでいる。正式採用の直前の再検査は `NOT_IMPLEMENTED` を投げる |
+| 候補選定・勤務計画の決定（A16・A17） | 担当B |
+| 返信解釈の実行、実推論1回のモデル・費用状態の保存 | OrcaRouterの接続情報と金額予算が未取得。**模擬結果は返しません** |
+| 正式採用・CSV生成・読戻し・結果照合（A01〜A08、A14） | 次段階 |
+| 送信結果が不明・配送に失敗した通知の復旧 | 未実装。`UNKNOWN` と `FAILED` の項目は**再送せず止まったまま**になる。同じ内容の再送は保存済み結果を返すだけなので、自動再送は空回りにしかならない。`getSendResult` での照合経路が要る |
+| 期限の検知、案件の停止・再開、要対応からの復旧（A18の期限側） | Day 3 |
+| worker の fence token | 通知待ちの lease はアイテム単位のみ |
+
+そのまま再現できている受入ケースは **A11・A12・A15** と **A18の一部**（予算・回数上限）
+だけです。A01・A03・A05・A06・A13 はテスト名に出てきますが、**前提または一部のみ**で、
+前提を fixture で直接作っている場合があります（例：A13は「採用済み」をfixtureで作っており、
+確定通知の失敗からの復旧は検証していません）。テスト名の付け方は
+[`tests/README.md`](tests/README.md) にあります。設計や fixture があることを合格と
+読まないでください。
+
+`0002` の勤務重複の排他制約は `btree_gist` を使います。拡張を作れない環境で制約を落とす場合は、
+落とした事実をここへ必ず記録してください（黙って外さない）。
 
 `/api/health` の `orcaRouter` は、接続設定があっても `CONFIGURED_UNVERIFIED`（設定あり・
 未検証）までしか返しません。実接続を一度も確認していないため「正常」とは表示しません。

@@ -111,6 +111,17 @@ export interface InboundEvent {
   /** こちらが受信した時刻。occurredAt と分ける（RFC-011 §4）。 */
   readonly receivedAt: string;
   readonly from: ContactEndpointRef;
+  /**
+   * 返信の対象になった送信Messageの不変参照（RFC-011 §3）。
+   *
+   * **宛先だけで打診を逆引きしない。** 同じ相手へ過去の案件でも打診していると、
+   * 古い打診への返信を現在の案件の承諾として扱ってしまう。対象を特定できない
+   * 返信は記録するが、承諾には使わない。
+   *
+   * 将来のLINE等、対象参照を持たない経路では省略され得る。その場合は本人と
+   * 確認できない受信として扱う。
+   */
+  readonly inReplyToMessageId?: string;
   /** 本文なしのイベントがあり得る。 */
   readonly body?: string;
   /**
