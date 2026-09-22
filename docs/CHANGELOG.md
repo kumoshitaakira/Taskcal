@@ -55,7 +55,7 @@ ADR-022 で確定した三つの経路（Q11・Q12・Q13）は、判定関数が
   入ったが、`EligibilityRecheckInput`（`src/contracts/selection.ts`）が持つのは
   `monthlyCompleteness` と `missingDates` だけで、月内の実割当・可能時間を渡せない。
   繋ぐには `src/contracts/` の変更が要り、ADR-021 により担当Bの確認が必須。
-  **Q14 として未決事項へ起こした。** 初期推奨は「`EligibilityRecheckInput` へ
+  **Q15 として未決事項へ起こした。** 初期推奨は「`EligibilityRecheckInput` へ
   `MonthlyScheduleSnapshot` を足す（`recheck` は同期のまま）」。契約は変えていない。
 - **実CSV `ScheduleGateway`。** `main` にも開いているPRにも無い。
   `createUnimplementedScheduleGateway` は残した。

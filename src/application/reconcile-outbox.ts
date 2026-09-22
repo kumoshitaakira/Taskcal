@@ -57,10 +57,23 @@ export function reconcileOutbox(deps: ReconcileOutboxDeps) {
     const claimed = await withTransaction((tx) => deps.outbox.claimForReconcile(tx, { leaseMs }));
     if (claimed === "NONE") return { handled: false };
 
+    // 照会は provider と接続範囲で絞る（A15）。宛先は打診時に固定した版をそのまま使う。
+    const target = await withTransaction(async (tx) => {
+      const outreach = claimed.outreachId
+        ? await deps.outreaches.findById(tx, claimed.outreachId)
+        : "NOT_FOUND";
+      return outreach === "NOT_FOUND" ? undefined : outreach;
+    });
+    if (!target) {
+      // どの接続へ送ったか特定できない。照会範囲を推測しない（A15）。
+      throw new Error(`通知待ち ${claimed.outboxId} に対応する打診がありません。`);
+    }
+
     // 照会も外部作用。取引の外で行う（RFC-010 §5）。
     assertOutsideTransaction("送信結果の照会");
     const found = await deps.messaging.getSendResult({
       operationId: claimed.operation.operationId,
+      provider: target.endpoint.provider,
       connectionId: claimed.connectionId,
       // 内容ハッシュまで一致を求める。宛先だけ差し替えた別の送信を同じ操作と
       // 読まない（A15 / D07）。
