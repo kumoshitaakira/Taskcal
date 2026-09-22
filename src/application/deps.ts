@@ -144,6 +144,7 @@ export function buildAppServices() {
       selections,
       schedules,
       authoritative,
+      operations,
       gateway,
       clock,
     }),

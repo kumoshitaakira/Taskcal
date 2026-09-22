@@ -121,6 +121,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       "CSV生成・読戻し・結果照会（ScheduleGateway の実装）。正式採用の進行は実装済みだが、この口が NOT_IMPLEMENTED を投げるため成立しない（担当B）",
       "配送に失敗した通知の再送。UNKNOWN は getSendResult で照合するが、FAILED は止まったまま（attempt を含む操作IDが要る）",
       "停止の取消（案件の再開）。停止は取り消せない（D10）",
+      "予算・回数上限に達した案件の停止。上限到達はモデル呼出しを断るだけで、案件は調整中のまま残る（A18の上限側）",
       "復旧しない要対応の案件を人が引き取る操作。自動では終端へ落とさない（ADR-022）",
       "採用済み勤務の取消・変更（D10：確定済みの取消は別の変更操作）",
       "worker の fence token（通知待ちの lease はアイテム単位のみ）",

@@ -48,6 +48,7 @@ import type {
   AuthoritativeScheduleRefRepository,
   CaseSnapshot,
   Clock,
+  OperationResultStore,
   ScheduleUpdateRepository,
   ScheduleUpdateSnapshot,
   SelectionResultRepository,
@@ -72,6 +73,7 @@ export interface RecoverCaseDeps {
   readonly selections: SelectionResultRepository;
   readonly schedules: ScheduleReadRepository;
   readonly authoritative: AuthoritativeScheduleRefRepository;
+  readonly operations: OperationResultStore;
   readonly gateway: Pick<ScheduleGateway, "capabilities" | "getUpdateResult" | "readBack">;
   readonly clock: Clock;
 }
@@ -245,9 +247,21 @@ export function recoverCase(deps: RecoverCaseDeps) {
           ? await deps.scheduleUpdates.findById(tx, adoptedId)
           : "NOT_FOUND";
         const belongs = adoptedHere !== "NOT_FOUND" && adoptedHere.caseId === caseId;
-        return { snapshot, update: undefined, adopted: belongs };
+        return { snapshot, update: undefined, adopted: belongs, inFlight: false };
       }
-      return { snapshot, update: open, adopted: adoptedId === open.scheduleUpdateId };
+      // **進行中の正式採用を「未採用」と断定しない（A03 / D09）。**
+      // `adopt-plan.ts` の `applyUpdate` は取引の外で行われ、その間 adopt 側は
+      // 案件行のロックも版も持たない。その窓で停止が成立するとここへ来るが、
+      // 外部作用がまだ届いていないだけの照会結果を「反映されていない」と読むと、
+      // 直後に成功した適用を内部だけ未採用として確定させる。
+      const applying = await deps.operations.findById(tx, open.operationId);
+      const inFlight = applying !== "NOT_FOUND" && applying.status === "IN_PROGRESS";
+      return {
+        snapshot,
+        update: open,
+        adopted: adoptedId === open.scheduleUpdateId,
+        inFlight,
+      };
     });
     if (!prepared) return { handled: false };
     const { snapshot, update } = prepared;
@@ -269,6 +283,19 @@ export function recoverCase(deps: RecoverCaseDeps) {
               detail: "未決の勤務表更新が無く、正式版参照も採用を指していません。",
             },
       );
+    }
+
+    if (prepared.inFlight) {
+      // **何も動かさない。** 案件も更新も、進行中の採用が書き込む対象そのもの。
+      // 版を進めるだけでも、戻ってきた採用取引が直前再検査で落ちて成果物を捨てる。
+      await withTransaction((tx) =>
+        deps.cases.recordEvent(tx, {
+          caseId: snapshot.caseId,
+          kind: "RECOVER_SKIPPED_IN_FLIGHT",
+          detail: { operationId: update.operationId },
+        }),
+      );
+      return { handled: true, caseId: snapshot.caseId, to: "WAITING" };
     }
 
     const found: Finding = prepared.adopted
@@ -300,17 +327,21 @@ export function recoverCase(deps: RecoverCaseDeps) {
 
       // 停止を保留した案件（Q13）と、照合待ちの案件（Q11）で、案件側の行き先だけが違う。
       // 更新側は同じ `resolveReconcile` を通す——同じ照合結果から両方を決める。
-      // `PREPARING` をここで拾うのは停止印がある案件だけ（取り出しの `where`）。
+      // **状態ではなく停止印で分岐する（ADR-025）。**
+      // `PREPARING` かどうかで分けると、停止した案件が一度 `RECONCILE_REQUIRED` を
+      // 経由したあと `COORDINATING`（調整中）へ復帰する。停止印が付いたままの案件が
+      // 調整中に見え、停止理由に応じた終端も引き継ぎ記録も作られない（D10 / A18）。
+      //
       // DBは `stop_cause` と `stopped_at` を対で要求するので、印があれば理由もある。
       const stopCause = locked.stopCause;
-      if (locked.state === "PREPARING" && !stopCause) {
+      if (locked.stoppedAt && !stopCause) {
         throw new TaskcalError(
           ERROR_CODES.INVALID_INPUT,
           `案件 ${locked.caseId} に停止理由がありません。`,
         );
       }
       const to: CaseState =
-        locked.state === "PREPARING" && stopCause
+        locked.stoppedAt && stopCause
           ? resolvePreparingStop({ adoptionFact, cause: stopCause })
           : found.finding === RECONCILE_FINDING.STILL_UNKNOWN
             ? // Q11：照合が継続不能なら要対応へ。未採用とも採用済みとも断定しない。

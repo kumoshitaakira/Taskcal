@@ -393,6 +393,13 @@ export interface OperationResultStore {
     tx: TxHandle,
     input: { operationId: OperationId; status: OperationStatus; result: unknown },
   ): Promise<void>;
+  /**
+   * 保存済みの操作を読む。**`begin` を呼ばずに状態だけ見たいとき**に使う。
+   *
+   * `begin` は無ければ `IN_PROGRESS` を作ってしまうので、「他の経路が進行中か」を
+   * 確かめる用途には使えない（進行中でなくても進行中にしてしまう）。
+   */
+  findById(tx: TxHandle, operationId: OperationId): Promise<StoredOperationResult | "NOT_FOUND">;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,10 +425,16 @@ export interface OutboxItem {
 }
 
 export interface OutboxRepository {
+  /**
+   * 通知待ちを積む。操作IDが同じものはすでに積まれているので**足さない**。
+   *
+   * 戻り値で区別する。積んだ件数を画面へ出す経路が、実際には何も足していない
+   * 呼出しを数に入れると、送られない通知の件数を表示する。
+   */
   enqueue(
     tx: TxHandle,
     input: Omit<OutboxItem, "status" | "attempts" | "leaseToken">,
-  ): Promise<void>;
+  ): Promise<"ENQUEUED" | "ALREADY_ENQUEUED">;
   /**
    * 送信待ちを1件だけ確保する。
    *

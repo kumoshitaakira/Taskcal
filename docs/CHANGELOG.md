@@ -82,6 +82,33 @@ ADR-022 で確定した三つの経路（Q11・Q12・Q13）は、判定関数が
 - README の「動かないもの」と受入状況表、`runtime-status` の `notImplemented` を
   実態に合わせた。**動くようになった行だけ**を書き換え、それ以外は減らしていない。
 
+### 読み取り専用レビューの指摘を反映した
+
+`taskcal-domain-reviewer` と `taskcal-delivery-reviewer` へ委譲し、指摘を直した。
+
+- **停止した案件が「調整中」へ復帰する経路があった**（高）。`recover-case` の停止分岐が
+  **状態**（`PREPARING`）で判定していたため、一度 `RECONCILE_REQUIRED` を経由した停止済み
+  案件が `resolveCaseReconcile` の `COORDINATING` へ落ちていた。停止印（`stoppedAt`）で
+  判定するよう直し、`RECONCILE_REQUIRED` からの終端を [ADR-025](adr/ADR-025-stopped-case-reconcile-exit.md)
+  として記録した。RFC-011 §5 の図と `ALLOWED_CASE_TRANSITIONS` も更新した。
+- **進行中の正式採用を「未採用」と断定しうる経路があった**（中〜高）。`applyUpdate` は取引の
+  外で行われ、その間 adopt 側は案件のロックも版も持たない。その窓で停止が成立すると
+  `recover-case` が拾い、外部作用がまだ届いていないだけの照会を「反映されていない」と
+  読んでいた。`apply:{selectionId}` の操作が `IN_PROGRESS` なら**何も動かさない**。
+  そのために `OperationResultStore.findById` を足した（`begin` は無ければ `IN_PROGRESS` を
+  作ってしまうので、状態を見る用途には使えない）。
+- **期限停止の操作が `IN_PROGRESS` のまま commit されうる**（中）。操作IDが
+  `stop:{caseId}:deadline` で固定なので、一度残るとその案件は二度と期限停止できない。
+  並行更新は値を返さず例外にして取引ごと巻き戻す。
+- **A18を「本番経路でそのまま再現」と書いていた**（高）。`STOP_CAUSE.LIMIT` に呼出し元が
+  なく、予算・回数上限に達しても案件は調整中のまま残る。README・`tests/README.md` を
+  「A18のうち店長停止・期限到達」へ戻し、上限側を未実装として3か所へ記録した。
+- 停止の**失敗**が「停止できない」に畳まれていた。並行更新・進行中は再試行してよい状態
+  なので分けた（`STOP_CONFLICT`）。`STOP_HANDED_OFF` は緑（成功）ではなく警告へ移した
+  ——引き継ぎは片付いたことではなく、欠勤枠は埋まっていない。
+- 通知件数が水増しになりうる。`enqueue` は `on conflict do nothing` なので、実際に積んだ
+  ときだけ数えるよう戻り値を足した。
+
 ### 機械的検査
 
 `MUST_BE_CALLED` へ `resolveReconcileStall`・`canResumeReporting`・`handoffReasonOf` を

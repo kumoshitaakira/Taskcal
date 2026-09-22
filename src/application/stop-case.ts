@@ -80,6 +80,20 @@ function fail(code: ErrorCode, detail: string): StopCaseResult {
 }
 
 /**
+ * 並行更新で止まったことを、**取引を巻き戻して**伝える。
+ *
+ * ここで値を返すと取引が commit し、`operations.begin` が作った `IN_PROGRESS` が
+ * 残る。期限停止の操作IDは `stop:{caseId}:deadline` で固定なので、一度でも残ると
+ * 以後その案件は「同じ操作が進行中です」を返し続け、**二度と期限停止できなくなる**。
+ *
+ * 自分で弾いた拒否（`refuse`）とは別物であることに注意する。あちらは確定した拒否で、
+ * 保存して再実行を防ぐのが目的。こちらは再試行してよい一時的な競合。
+ */
+function abortOnConflict(detail: string): never {
+  throw new TaskcalError(ERROR_CODES.RECONCILE_REQUIRED, detail);
+}
+
+/**
  * 検査で弾いたことを操作結果へ確定させる。IN_PROGRESS のまま閉じない
  * （`start-outreach.ts` の `refuse` と同じ理由）。
  */
@@ -111,7 +125,7 @@ export function stopCase(deps: StopCaseDeps) {
   /**
    * 打診・承諾を失効させ、募集終了を積む。停止と**同じ取引**で行う。
    *
-   * 返すのは積んだ通知の件数。
+   * 返すのは**この呼出しで積んだ**通知の件数。すでに積まれていたものは数えない。
    */
   async function closeOutreaches(tx: TxHandle, snapshot: CaseSnapshot): Promise<number> {
     const store = await deps.stores.findById(tx, snapshot.storeId);
@@ -147,7 +161,7 @@ export function stopCase(deps: StopCaseDeps) {
         // 宛先を丸ごとハッシュに含める（A15）。操作IDは正式採用時の募集終了通知と
         // 同じ規則なので、採用後の停止でも二重に積まれない（on conflict do nothing）。
         const payload: SendPayloadForHash = { to: outreach.endpoint, kind: "CASE_CLOSED", body };
-        await deps.outbox.enqueue(tx, {
+        const enqueued = await deps.outbox.enqueue(tx, {
           outboxId: deps.ids.next(),
           caseId: snapshot.caseId,
           outreachId: outreach.outreachId,
@@ -159,7 +173,8 @@ export function stopCase(deps: StopCaseDeps) {
           },
           connectionId: snapshot.connectionId,
         });
-        notified += 1;
+        // 正式採用時にすでに積んだ募集終了は足さない。画面の件数が水増しになる。
+        if (enqueued === "ENQUEUED") notified += 1;
       }
 
       // 矢印だけで動かさない。遷移表を通す。
@@ -261,7 +276,7 @@ export function stopCase(deps: StopCaseDeps) {
             : {}),
         });
         if (moved === "VERSION_CONFLICT") {
-          return fail(ERROR_CODES.RECONCILE_REQUIRED, "案件が同時に更新されました。");
+          abortOnConflict("案件が同時に更新されました。");
         }
         await deps.cases.recordEvent(tx, {
           caseId: snapshot.caseId,
@@ -292,7 +307,7 @@ export function stopCase(deps: StopCaseDeps) {
             stop: { cause: command.cause, at: now },
           });
           if (marked !== "UPDATED") {
-            return fail(ERROR_CODES.RECONCILE_REQUIRED, "案件が同時に更新されました。");
+            abortOnConflict("案件が同時に更新されました。");
           }
           await deps.cases.recordEvent(tx, {
             caseId: snapshot.caseId,
@@ -329,7 +344,7 @@ export function stopCase(deps: StopCaseDeps) {
             : {}),
         });
         if (moved === "VERSION_CONFLICT") {
-          return fail(ERROR_CODES.RECONCILE_REQUIRED, "案件が同時に更新されました。");
+          abortOnConflict("案件が同時に更新されました。");
         }
         await deps.cases.recordEvent(tx, {
           caseId: snapshot.caseId,

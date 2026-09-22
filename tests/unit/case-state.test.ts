@@ -36,6 +36,10 @@ const FIGURE_EDGES: readonly [CaseState, CaseState][] = [
   ["RECONCILE_REQUIRED", "ATTENTION"],
   ["ATTENTION", "HANDED_OFF"],
   ["PREPARING", "HANDED_OFF"],
+  // ADR-025：停止が成立していて未採用を確認できた場合だけ。停止した案件を
+  // COORDINATING（調整中）へ戻さないための出口。
+  ["RECONCILE_REQUIRED", "CANCELLED"],
+  ["RECONCILE_REQUIRED", "HANDED_OFF"],
 ];
 
 describe("案件状態の遷移（RFC-011 §5）", () => {
@@ -69,7 +73,12 @@ describe("案件状態の遷移（RFC-011 §5）", () => {
     expect(isAllowedCaseTransition("COMMITTED", "CANCELLED")).toBe(false);
   });
 
-  it("9x9の全組合せが図＋ADR-022の追加分と一致する", () => {
+  it("停止した案件は調整中へ戻さず、停止理由に応じた終端へ出せる（ADR-025 / A18の前提）", () => {
+    expect(isAllowedCaseTransition("RECONCILE_REQUIRED", "CANCELLED")).toBe(true);
+    expect(isAllowedCaseTransition("RECONCILE_REQUIRED", "HANDED_OFF")).toBe(true);
+  });
+
+  it("9x9の全組合せが図＋ADR-022・ADR-025の追加分と一致する", () => {
     const expected = new Set(FIGURE_EDGES.map(([from, to]) => `${from}->${to}`));
     const actual = new Set<string>();
     for (const from of CASE_STATES) {

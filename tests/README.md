@@ -12,6 +12,14 @@
 
 `integration/` は起動中のPostgreSQLを必要とする（`docker compose up -d db`）。
 
+**`npm run worker` を止めてから実行する。** workerの取り出しは接続範囲を持たない
+（期限の検知・結果の照合・復旧は全案件・全通知を対象にする）。走らせたままだと、
+テストが用意した案件や通知をworkerが先に処理して落ちる。Day 3でworkerの仕事が
+増えたため、送信だけだった頃より影響が大きい。
+
+同じ理由で、接続範囲を持たない口を叩くテストは**自分の案件・通知で絞る**こと
+（`stop-case.test.ts` の `claimNext`、`recover.test.ts` の `runUntilMine`）。
+
 ## 受入ケースIDの付け方
 
 実行していない受入ケースを合格と読ませない（AGENTS.md「品質と証拠」）。
@@ -22,9 +30,12 @@
 | `A13の一部：…` | ケースの一部だけ。前提を fixture で作っている場合を含む |
 | `A06の前提：…` | ケースが成り立つための下位の規則だけ。ケース自体は未実行 |
 
-**本番経路でそのまま再現**できているのは A11・A12・A15・A18（店長停止・期限到達・予算・
-回数上限）と、A13 のうち**通知の照合**（`integration/recover.test.ts` の
-`reconcileOutbox`）です。停止（`integration/stop-case.test.ts`）は台を使っていません。
+**本番経路でそのまま再現**できているのは A11・A12・A15、**A18のうち店長停止と期限到達**、
+A13 のうち**通知の照合**（`integration/recover.test.ts` の `reconcileOutbox`）です。
+停止（`integration/stop-case.test.ts`）は台を使っていません。
+
+A18の**上限側は未実装**です。`STOP_CAUSE.LIMIT` に呼出し元がなく、予算・回数上限に達しても
+案件は調整中のまま残ります（README「動かないもの」）。A18 を無印で書かないでください。
 
 `integration/adopt-plan.test.ts` の A02・A03・A05・A08（および A04・A07・A13 の一部）は、
 **担当Bの口を `tests/stubs/fake-gateways.ts` の台に差し替えて手順だけを確認**したものです。同じ「確認済み」

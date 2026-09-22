@@ -62,7 +62,7 @@ export function createPgOutboxRepository(): OutboxRepository {
   return {
     async enqueue(handle: TxHandle, input) {
       const tx = handle as Tx;
-      await tx.query(
+      const { rowCount } = await tx.query(
         `insert into notification_outbox
            (outbox_id, case_id, outreach_id, kind, body, operation_id, request_hash, connection_id)
          values ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -78,6 +78,7 @@ export function createPgOutboxRepository(): OutboxRepository {
           input.connectionId,
         ],
       );
+      return rowCount === 1 ? "ENQUEUED" : "ALREADY_ENQUEUED";
     },
 
     async claimNext(handle: TxHandle, input) {

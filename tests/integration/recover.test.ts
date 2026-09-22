@@ -104,6 +104,7 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
     scheduleUpdates: import("@/contracts/repository").ScheduleUpdateRepository;
     selections: import("@/contracts/repository").SelectionResultRepository;
     authoritative: import("@/contracts/repository").AuthoritativeScheduleRefRepository;
+    operations: import("@/contracts/repository").OperationResultStore;
     schedules: import("@/adapters/db/schedule-repository").ScheduleReadRepository;
   };
 
@@ -132,6 +133,7 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
       selections: repos.selections,
       schedules: repos.schedules,
       authoritative: repos.authoritative,
+      operations: repos.operations,
       gateway,
       clock: { now: () => NOW },
     });
@@ -361,6 +363,7 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
       authoritative: (
         await import("@/adapters/db/authoritative-ref-repository")
       ).createPgAuthoritativeScheduleRefRepository(),
+      operations,
       schedules: (
         await import("@/adapters/db/schedule-repository")
       ).createPgScheduleReadRepository(),
@@ -625,14 +628,7 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
   });
 
   it("Q13：停止を保留した準備中は、成否を確かめてから行き先を決める", async () => {
-    await preparedUpdate("PREPARING");
-    await withTransaction((tx) =>
-      tx.query(
-        `update absence_case set stop_cause = 'DEADLINE', stopped_at = $2, version = version + 1
-          where case_id = $1`,
-        [caseId, NOW],
-      ),
-    );
+    await preparedUpdate("PREPARING", { stopped: "DEADLINE" });
     const gateway = stubGateway({ lookup: "NOT_APPLIED" });
 
     const outcome = await runUntilMine(
@@ -648,14 +644,7 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
   });
 
   it("Q13：停止を保留した準備中でも、成否が不明なら引き継がず照合へ回す", async () => {
-    await preparedUpdate("PREPARING");
-    await withTransaction((tx) =>
-      tx.query(
-        `update absence_case set stop_cause = 'DEADLINE', stopped_at = $2, version = version + 1
-          where case_id = $1`,
-        [caseId, NOW],
-      ),
-    );
+    await preparedUpdate("PREPARING", { stopped: "DEADLINE" });
     const gateway = stubGateway({ lookup: "LOOKUP_UNAVAILABLE" });
 
     const outcome = await runUntilMine(
@@ -669,8 +658,51 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
     expect(row.adoption_fact).toBe("UNKNOWN");
   });
 
+  it("A18／ADR-025：停止した案件を、照合の結果で調整中へ戻さない", async () => {
+    // 停止を保留したまま一度 `RECONCILE_REQUIRED` を経由した案件。ここで未採用と
+    // 確認できたとき、停止印を無視して `COORDINATING` へ戻すと、停止済みの案件が
+    // 「調整中」として復帰し、終端にも引き継ぎ記録にも到達しない（D10 / A18）。
+    await preparedUpdate("RECONCILE_REQUIRED", { stopped: "DEADLINE" });
+    const gateway = stubGateway({ lookup: "NOT_APPLIED" });
+
+    const outcome = await runUntilMine(
+      recover(gateway),
+      (o) => "caseId" in o && o.caseId === caseId,
+    );
+    expect(outcome).toMatchObject({ to: "HANDED_OFF" });
+    const row = await caseRow();
+    expect(row.state).toBe("HANDED_OFF");
+    expect(row.handoff_reason).toBe("DEADLINE_REACHED");
+    expect(row.adoption_fact).toBe("NOT_ADOPTED");
+  });
+
+  it("A03：進行中の正式採用を、照会結果だけで未採用と断定しない", async () => {
+    // `applyUpdate` は取引の外で行われ、その間 adopt 側は案件のロックも版も持たない。
+    // その窓で停止が成立するとここへ来るが、外部作用がまだ届いていないだけの照会を
+    // 「反映されていない」と読むと、直後に成功した適用を未採用として確定させる。
+    await preparedUpdate("PREPARING", { operationStatus: "IN_PROGRESS", stopped: "DEADLINE" });
+    const gateway = stubGateway({ lookup: "NOT_APPLIED" });
+
+    const outcome = await runUntilMine(
+      recover(gateway),
+      (o) => "caseId" in o && o.caseId === caseId,
+    );
+    // 動かさない。照会もしない。
+    expect(outcome).toMatchObject({ to: "WAITING" });
+    expect(gateway.calls.getUpdateResult).toBe(0);
+    const row = await caseRow();
+    expect(row.state).toBe("PREPARING");
+    expect(row.adoption_fact).toBe("UNKNOWN");
+  });
+
   /** 未決（PREPARED）の勤務表更新を持つ案件を作る。 */
-  async function preparedUpdate(state: "RECONCILE_REQUIRED" | "PREPARING"): Promise<void> {
+  async function preparedUpdate(
+    state: "RECONCILE_REQUIRED" | "PREPARING",
+    options?: {
+      operationStatus?: "UNKNOWN" | "IN_PROGRESS";
+      stopped?: "DEADLINE" | "MANAGER_STOP";
+    },
+  ): Promise<void> {
     const selectionId = randomUUID();
     const operationId = `apply:${selectionId}`;
     await withTransaction(async (tx) => {
@@ -684,8 +716,8 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
       await tx.query(
         `insert into operation_result
            (operation_id, request_hash, operation_kind, connection_id, case_id, status)
-         values ($1, $2, 'APPLY_UPDATE', $3, $4, 'UNKNOWN')`,
-        [operationId, HASH, CONNECTION, caseId],
+         values ($1, $2, 'APPLY_UPDATE', $3, $4, $5)`,
+        [operationId, HASH, CONNECTION, caseId, options?.operationStatus ?? "UNKNOWN"],
       );
       await tx.query(
         `insert into schedule_update
@@ -695,9 +727,10 @@ describe.skipIf(!connectionString)("通知と照合の復旧（DATABASE_URL 必�
         [randomUUID(), caseId, selectionId, operationId, CONNECTION, scheduleId, REVISION],
       );
       await tx.query(
-        `update absence_case set state = $2, adoption_fact = 'UNKNOWN', version = version + 1
+        `update absence_case set state = $2, adoption_fact = 'UNKNOWN', version = version + 1,
+            stop_cause = $3, stopped_at = case when $3::text is null then null else $4::timestamptz end
           where case_id = $1`,
-        [caseId, state],
+        [caseId, state, options?.stopped ?? null, NOW],
       );
     });
   }
