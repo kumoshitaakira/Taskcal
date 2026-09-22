@@ -19,10 +19,15 @@
 import { randomUUID } from "node:crypto";
 import { config as loadDotenv } from "dotenv";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { ScheduleGateway } from "@/contracts/schedule-gateway";
+import type {
+  LoadedAssignment,
+  LoadedSchedule,
+  ScheduleGateway,
+  SourceCapabilities,
+} from "@/contracts/schedule-gateway";
 import type { ShiftAssignmentRepository } from "@/contracts/repository";
 import { computeRequestHash } from "@/contracts/operation";
-import { createFakeScheduleGateway } from "../fakes/schedule-gateway";
+import { FakeScheduleGateway } from "../stubs/fake-gateways";
 import { createFakeEligibilityRecheck, createFakeSelectionPlanner } from "../fakes/selection";
 
 loadDotenv({ path: ".env.local", quiet: true });
@@ -42,6 +47,15 @@ const DEADLINE = "2026-09-26T16:00:00+09:00";
 const SHIFT_START = "2026-09-26T18:00:00+09:00";
 const SHIFT_END = "2026-09-26T22:00:00+09:00";
 const BUSINESS_DATE = "2026-09-26";
+
+/** 台の既定の能力。個別に落として、落ちた側の振る舞いを確かめる。 */
+const DEFAULT_CAPABILITIES: SourceCapabilities = {
+  canReadRevision: true,
+  canConditionalUpdate: true,
+  supportsIdempotencyKey: true,
+  supportsResultLookup: true,
+  supportsAtomicBatch: true,
+};
 
 describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () => {
   let closePool: () => Promise<void>;
@@ -75,6 +89,60 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   let outreachIds: string[];
   let commitmentIds: string[];
 
+  /**
+   * 勤務表の台。`initialSchedule` に**欠勤対象の元勤務を入れておく。**
+   *
+   * 読戻しは現在の勤務表へ欠勤と追加を重ねて作られるので、元勤務が無いと
+   * 「欠勤が `ABSENT` で往復すること」を確かめられない（A07）。
+   */
+  function newGateway(options?: {
+    completeness?: LoadedSchedule["completeness"];
+    missingDates?: readonly string[];
+    capabilities?: Partial<SourceCapabilities>;
+  }): FakeScheduleGateway {
+    const initialSchedule: LoadedSchedule = {
+      scheduleId,
+      sourceRevision: REVISION,
+      requestedRange: { fromDate: "2026-09-01", toDate: "2026-10-01" },
+      completeness: options?.completeness ?? "COMPLETE",
+      missingDates: [...(options?.missingDates ?? [])],
+      assignments: [
+        {
+          shiftAssignmentId: absentShift,
+          staffId: absentStaff,
+          roleCode: "FLOOR",
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+          status: "SCHEDULED",
+        },
+      ],
+    };
+    return new FakeScheduleGateway({
+      initialSchedule,
+      capabilities: { ...DEFAULT_CAPABILITIES, ...options?.capabilities },
+    });
+  }
+
+  /**
+   * 読戻しの内容だけをずらす（A07）。台が返した結果を写像する。
+   *
+   * 追加勤務のIDは選定のたびに採番されるので、期待値を先に書けない。台の出力を
+   * 受け取って変形する形にして、**何を落としたか**をテスト側に残す。
+   */
+  function gatewayWithReadBackShift<T extends ScheduleGateway>(
+    gateway: T,
+    transform: (assignments: readonly LoadedAssignment[]) => readonly LoadedAssignment[],
+  ): T {
+    const wrapped = Object.create(gateway) as T;
+    Object.defineProperty(wrapped, "readBack", {
+      value: async (ref: Parameters<ScheduleGateway["readBack"]>[0]) => {
+        const result = await gateway.readBack(ref);
+        return { ...result, assignments: transform(result.assignments) };
+      },
+    });
+    return wrapped;
+  }
+
   function build(options: {
     gateway?: ScheduleGateway;
     assignments?: ShiftAssignmentRepository;
@@ -84,7 +152,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     return adoptPlan({
       ...repos,
       assignments: options.assignments ?? repos.assignments,
-      gateway: options.gateway ?? createFakeScheduleGateway({ sourceRevision: REVISION }),
+      gateway: options.gateway ?? newGateway(),
       planner: options.planner ?? createFakeSelectionPlanner(),
       eligibility: options.eligibility ?? createFakeEligibilityRecheck(),
       clock: { now: () => NOW },
@@ -101,7 +169,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       selections: repos.selections,
       schedules: repos.schedules,
       // 手順7は成果物も読み直す。台を渡さない場合は要求どおり返す台を使う。
-      gateway: gateway ?? createFakeScheduleGateway({ sourceRevision: REVISION }),
+      gateway: gateway ?? newGateway(),
     });
   }
 
@@ -147,18 +215,39 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   }
 
   /** 準備が終わった後に届いた変更を模す。読戻しの直後、採用取引の直前に起きる。 */
-  function gatewayWithSideEffect(
-    gateway: ScheduleGateway,
+  function gatewayWithSideEffect<T extends ScheduleGateway>(
+    gateway: T,
     effect: () => Promise<void>,
-  ): ScheduleGateway {
-    return {
-      ...gateway,
-      async readBack(ref) {
+  ): T {
+    // **spread で包まない。** `FakeScheduleGateway` は class なので、展開すると
+    // prototype 側のメソッドが落ちて `applyUpdate is not a function` になる。
+    // 委譲する側を prototype に持つオブジェクトを作り、1つだけ差し替える。
+    const wrapped = Object.create(gateway) as T;
+    Object.defineProperty(wrapped, "readBack", {
+      value: async (ref: Parameters<ScheduleGateway["readBack"]>[0]) => {
         const result = await gateway.readBack(ref);
         await effect();
         return result;
       },
-    };
+    });
+    return wrapped;
+  }
+
+  /**
+   * `applyUpdate` が外部作用の**後**で落ちる状況（A03）。
+   *
+   * 台の中で作用は成立させ、応答だけを失わせる。先に投げると台に何も残らず、
+   * 「照会すれば分かる」経路を確かめられない。
+   */
+  function gatewayLosingApplyResponse<T extends ScheduleGateway>(gateway: T, error: Error): T {
+    const wrapped = Object.create(gateway) as T;
+    Object.defineProperty(wrapped, "applyUpdate", {
+      value: async (command: Parameters<ScheduleGateway["applyUpdate"]>[0]) => {
+        await gateway.applyUpdate(command);
+        throw error;
+      },
+    });
+    return wrapped;
   }
 
   /**
@@ -412,7 +501,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("D06：正式採用は勤務・欠勤・正式版参照・採用事実・通知を同じ取引で確定させる", async () => {
-    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    const gateway = newGateway();
     const result = await build({ gateway })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
       caseId,
@@ -454,18 +543,15 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("A02：準備が終わった後に停止した案件を正式採用しない（未採用の成果物を勤務として数えない）", async () => {
-    const gateway = gatewayWithSideEffect(
-      createFakeScheduleGateway({ sourceRevision: REVISION }),
-      async () => {
-        await withTransaction((tx) =>
-          tx.query(
-            `update absence_case set stop_cause = 'MANAGER_STOP', stopped_at = $2
+    const gateway = gatewayWithSideEffect(newGateway(), async () => {
+      await withTransaction((tx) =>
+        tx.query(
+          `update absence_case set stop_cause = 'MANAGER_STOP', stopped_at = $2
               where case_id = $1`,
-            [caseId, NOW],
-          ),
-        );
-      },
-    );
+          [caseId, NOW],
+        ),
+      );
+    });
 
     const result = await build({ gateway })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
@@ -482,15 +568,15 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("A03：更新の成否が不明なら再実行せず、照会で照合できるまで未採用と断定しない", async () => {
-    const gateway = createFakeScheduleGateway({
-      sourceRevision: REVISION,
-      applyThrows: new Error("timeout"),
-    });
+    const base = newGateway();
+    // 照会しても分からない状況。台に結果を残さない。
+    base.setNextApplyOutcome({ kind: "PREPARED", lookup: "UNAVAILABLE" });
+    const gateway = gatewayLosingApplyResponse(base, new Error("timeout"));
     const run = build({ gateway });
 
     const first = await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     expect(first).toMatchObject({ ok: false, outcome: "RECONCILE_REQUIRED" });
-    expect(gateway.calls.applyUpdate).toBe(1);
+    expect(base.applyCalls).toHaveLength(1);
     expect(await updateRow()).toMatchObject({ state: "RECONCILE_REQUIRED" });
     // 未採用へ丸めない。確認できるまで成否不明のまま持つ。
     expect(await caseRow()).toMatchObject({
@@ -501,8 +587,8 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     const second = await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     expect(second).toMatchObject({ ok: false, outcome: "RECONCILE_REQUIRED" });
     // **再実行していない。** 照会だけを行う。
-    expect(gateway.calls.applyUpdate).toBe(1);
-    expect(gateway.calls.getUpdateResult).toBe(1);
+    expect(base.applyCalls).toHaveLength(1);
+    expect(base.resultLookupCalls).toHaveLength(1);
     expect(await additionalShifts()).toHaveLength(0);
   });
 
@@ -565,13 +651,11 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("A05：準備中に届いた未処理の返信を、正式採用の直前に検知する", async () => {
-    const gateway = gatewayWithSideEffect(
-      createFakeScheduleGateway({ sourceRevision: REVISION }),
-      async () => {
-        // 訂正が届いたが、まだ解釈を適用していない（received_seq > last_applied_seq）。
-        await withTransaction((tx) =>
-          tx.query(
-            `insert into inbound_event
+    const gateway = gatewayWithSideEffect(newGateway(), async () => {
+      // 訂正が届いたが、まだ解釈を適用していない（received_seq > last_applied_seq）。
+      await withTransaction((tx) =>
+        tx.query(
+          `insert into inbound_event
                (inbound_event_id, case_id, outreach_id, received_seq, provider, connection_id,
                 provider_event_id, occurred_at, received_at, from_provider, from_connection_id,
                 from_endpoint_key, from_endpoint_version, body, channel_verified,
@@ -580,11 +664,10 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
                     'staff:x', 1, 'やっぱり20時から', true, 'VERIFIED_OUTREACH_TARGET', m.message_id
                from outreach_message m
               where m.outreach_id = $6 and m.direction = 'OUTBOUND'`,
-            [randomUUID(), caseId, CONNECTION, `evt-late-${caseId}`, NOW, outreachIds[0]],
-          ),
-        );
-      },
-    );
+          [randomUUID(), caseId, CONNECTION, `evt-late-${caseId}`, NOW, outreachIds[0]],
+        ),
+      );
+    });
 
     const result = await build({ gateway })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
@@ -599,10 +682,10 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("A07の一部：読戻しが一致しない成果物を採用せず、完了にもしない", async () => {
-    const gateway = createFakeScheduleGateway({
-      sourceRevision: REVISION,
-      // 1件だけ落として返す。件数の検査が拾う。
-      readBackOverride: (expected) => expected.slice(1),
+    // 追加勤務を1件だけ落として返す。件数の検査が拾う。
+    const gateway = gatewayWithReadBackShift(newGateway(), (assignments) => {
+      const dropped = assignments.findIndex((a) => Boolean(a.sourceCaseId));
+      return assignments.filter((_, index) => index !== dropped);
     });
 
     const result = await build({ gateway })({
@@ -678,10 +761,8 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   it("A14：出力のみモードの成果物を正式採用しない（元原本へ未反映）", async () => {
     // 読取専用の接続からファイル出力しただけ。成果物はできているが、元原本には
     // 反映されていない。ここで採用すると「勤務確定済み」と誤表示する。
-    const gateway = createFakeScheduleGateway({
-      sourceRevision: REVISION,
-      applyKind: "EXPORTED_ONLY",
-    });
+    const gateway = newGateway();
+    gateway.setNextApplyOutcome({ kind: "EXPORTED_ONLY" });
     const result = await build({ gateway })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
       caseId,
@@ -706,24 +787,24 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
       }),
     );
 
-    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    const gateway = newGateway();
     const second = await build({ gateway })({ operationId, caseId });
 
     // 2本目は断る。再開経路へ落とすと、1本目の待機中に照会して案件を
     // 照合待ちへ落とし、戻ってきた1本目が版競合で成果物を捨てる。
     expect(second).toMatchObject({ ok: false, code: "RECONCILE_REQUIRED" });
-    expect(gateway.calls.applyUpdate).toBe(0);
-    expect(gateway.calls.getUpdateResult).toBe(0);
+    expect(gateway.applyCalls).toHaveLength(0);
+    expect(gateway.resultLookupCalls).toHaveLength(0);
     expect(await caseRow()).toMatchObject({ state: "COORDINATING" });
   });
 
   it("D08：採用の直前に月内入力を取り直し、完全でなければ採用しない（Q06 / A09）", async () => {
     // 選定時は COMPLETE。読戻しの後（採用の直前）に取り直すと INCOMPLETE になる。
     let loads = 0;
-    const base = createFakeScheduleGateway({ sourceRevision: REVISION });
-    const drifting: ScheduleGateway = {
-      ...base,
-      loadSchedule: async (ref) => {
+    const base = newGateway();
+    const drifting: ScheduleGateway = Object.create(base) as ScheduleGateway;
+    Object.defineProperty(drifting, "loadSchedule", {
+      value: async (ref: Parameters<ScheduleGateway["loadSchedule"]>[0]) => {
         loads += 1;
         const loaded = await base.loadSchedule(ref);
         // 2回目（採用直前の取り直し）で月内入力が欠ける。
@@ -731,7 +812,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
           ? loaded
           : { ...loaded, completeness: "INCOMPLETE" as const, missingDates: ["2026-09-10"] };
       },
-    };
+    });
 
     const result = await build({ gateway: drifting })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
@@ -745,14 +826,38 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     expect(await refRow()).toMatchObject({ version: 1 });
   });
 
+  it("A07：読戻しに余分な代替勤務が生えていたら採用しない（件数も照合する）", async () => {
+    // 計画した2件はすべて一致している。IDごとの照合だけでは、同じ案件から生えた
+    // 3件目に気付けない。件数を落とすとこの経路が素通りする。
+    const gateway = gatewayWithReadBackShift(newGateway(), (assignments) => [
+      ...assignments,
+      {
+        shiftAssignmentId: `${absentShift}-extra`,
+        staffId: candidates[0],
+        roleCode: "FLOOR",
+        startAt: SHIFT_START,
+        endAt: SHIFT_END,
+        status: "SCHEDULED" as const,
+        sourceCaseId: caseId,
+      },
+    ]);
+
+    const result = await build({ gateway })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    expect(await additionalShifts()).toHaveLength(0);
+    expect(await refRow()).toMatchObject({ version: 1 });
+  });
+
   it("A07：読戻しが追加勤務を取消・欠勤として返したら採用しない（状態も照合する）", async () => {
     // ID・担当・区間・件数は合っているが、状態が SCHEDULED でない。これを通すと
     // 必要枠が実際には埋まっていないのに正式採用してしまう。
-    const gateway = createFakeScheduleGateway({
-      sourceRevision: REVISION,
-      readBackOverride: (expected) =>
-        expected.map((a) => (a.sourceCaseId ? { ...a, status: "CANCELLED" as const } : a)),
-    });
+    const gateway = gatewayWithReadBackShift(newGateway(), (assignments) =>
+      assignments.map((a) => (a.sourceCaseId ? { ...a, status: "CANCELLED" as const } : a)),
+    );
     const result = await build({ gateway })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
       caseId,
@@ -766,17 +871,17 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   it("手順7で成果物が読めなければ、採用を保持したまま要対応にする（D09）", async () => {
     // 手順4（採用前の読戻し）は通し、手順7（採用後の再取得）だけ失敗させる。
     // 内部表は一致したままなので、成果物を読み直していなければ気付けない。
-    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    const gateway = newGateway();
     let readBacks = 0;
-    const vanishing: ScheduleGateway = {
-      ...gateway,
-      readBack: (ref) => {
+    const vanishing: ScheduleGateway = Object.create(gateway) as ScheduleGateway;
+    Object.defineProperty(vanishing, "readBack", {
+      value: (ref: Parameters<ScheduleGateway["readBack"]>[0]) => {
         readBacks += 1;
         return readBacks > 1
           ? Promise.reject(new Error("成果物が消えました"))
           : gateway.readBack(ref);
       },
-    };
+    });
 
     const result = await build({ gateway: vanishing })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
@@ -828,11 +933,9 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
 
   it("A03の続き：照会で確定できたら、そこから採用まで進む（未採用と断定しない）", async () => {
     // 1回目は成否不明。2回目の再開で照会が確定結果を返す。
-    const gateway = createFakeScheduleGateway({
-      sourceRevision: REVISION,
-      applyThrows: new Error("timeout"),
-      lookup: "PREPARED",
-    });
+    // 台の中で作用は成立させ、応答だけを失わせる。照会すれば結果が残っている。
+    const base = newGateway();
+    const gateway = gatewayLosingApplyResponse(base, new Error("timeout"));
     const run = build({ gateway });
 
     await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
@@ -841,17 +944,17 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     const second = await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     expect(second).toMatchObject({ ok: true, outcome: "ADOPTED", adopted: 2 });
     // **再実行していない。** 照会で確定してから採用している。
-    expect(gateway.calls.applyUpdate).toBe(1);
+    expect(base.applyCalls).toHaveLength(1);
     expect(await additionalShifts()).toHaveLength(2);
     expect(await updateRow()).toMatchObject({ state: "ADOPTED" });
     expect(await caseRow()).toMatchObject({ state: "REPORTING", adoption_fact: "ADOPTED" });
   });
 
   it("A03：作成済みの更新を再開しても applyUpdate をやり直さない", async () => {
-    const gateway = createFakeScheduleGateway({
-      sourceRevision: REVISION,
-      applyThrows: new Error("timeout"),
-    });
+    const base = newGateway();
+    // 照会しても分からない接続。未実行を確認できない状況にする。
+    base.setNextApplyOutcome({ kind: "PREPARED", lookup: "UNAVAILABLE" });
+    const gateway = gatewayLosingApplyResponse(base, new Error("timeout"));
     const run = build({ gateway });
     await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
 
@@ -867,8 +970,8 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     const resumed = await run({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     expect(resumed).toMatchObject({ ok: false, outcome: "RECONCILE_REQUIRED" });
     // 未実行を確認できないので送り直さない。照会だけを行う。
-    expect(gateway.calls.applyUpdate).toBe(1);
-    expect(gateway.calls.getUpdateResult).toBeGreaterThan(0);
+    expect(base.applyCalls).toHaveLength(1);
+    expect(base.resultLookupCalls.length).toBeGreaterThan(0);
     expect(await additionalShifts()).toHaveLength(0);
   });
 
@@ -900,7 +1003,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("手順7の前に落ちた案件を、workerが読み直して進める（RFC-010 §4 手順7）", async () => {
-    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    const gateway = newGateway();
     await build({ gateway })({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     // 採用取引は commit したが、手順7の前に落ちた状態を作る。
     await withTransaction((tx) =>
@@ -913,11 +1016,11 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     // 確定済みの勤務は触らない。
     expect(await additionalShifts()).toHaveLength(2);
     // **内部表だけでなく成果物も読み直している**（RFC-010 §4 手順7）。
-    expect(gateway.calls.readBack).toBeGreaterThan(1);
+    expect(gateway.readBackCalls.length).toBeGreaterThan(1);
   });
 
   it("採用後に成果物が読めなくなったら、勤務を残したまま要対応にする（D09）", async () => {
-    const gateway = createFakeScheduleGateway({ sourceRevision: REVISION });
+    const gateway = newGateway();
     await build({ gateway })({ operationId: `adopt:${caseId}:${randomUUID()}`, caseId });
     await withTransaction((tx) =>
       tx.query("update absence_case set state = 'COMMITTED' where case_id = $1", [caseId]),
@@ -925,10 +1028,10 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
 
     // 採用後にCSVが消えた状態を作る。内部表は一致したままなので、成果物を
     // 読み直していなければ気付けない。
-    const brokenGateway: ScheduleGateway = {
-      ...gateway,
-      readBack: () => Promise.reject(new Error("成果物がありません")),
-    };
+    const brokenGateway: ScheduleGateway = Object.create(gateway) as ScheduleGateway;
+    Object.defineProperty(brokenGateway, "readBack", {
+      value: () => Promise.reject(new Error("成果物がありません")),
+    });
     const outcome = await settle(brokenGateway)();
 
     expect(outcome).toMatchObject({ handled: true, to: "ATTENTION" });
@@ -969,11 +1072,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
   });
 
   it("月内入力が完全でなければ、採用の直前で止める（Q06 / A09）", async () => {
-    const gateway = createFakeScheduleGateway({
-      sourceRevision: REVISION,
-      completeness: "INCOMPLETE",
-      missingDates: ["2026-09-10"],
-    });
+    const gateway = newGateway({ completeness: "INCOMPLETE", missingDates: ["2026-09-10"] });
     const result = await build({ gateway })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
       caseId,

@@ -58,6 +58,21 @@ ADR-022 で確定した三つの経路（Q11・Q12・Q13）は、判定関数が
 - **実CSV `ScheduleGateway`。** `main` にも開いているPRにも無い。
   `createUnimplementedScheduleGateway` は残した。
 
+### テストの台を一本化した
+
+`ScheduleGateway` の台が `tests/fakes/schedule-gateway.ts`（Day 2・担当A）と
+`tests/stubs/fake-gateways.ts`（PR #8・担当B）の二つあった。同じ口に台が二つあると、
+どちらで確かめたのかが分からなくなる。`integration/adopt-plan.test.ts` を担当Bの台へ
+寄せ、自分の台は削除した。担当Bの台は状態を持ち、冪等replay・版競合・読戻し不一致を
+再現できる。呼出しの記録も回数ではなく**呼出し内容の配列**なので、「再実行していない」
+の検査は維持できる。
+
+移行の過程で、`matchesExpected` の**件数の検査がどのテストにも守られていなかった**
+ことが分かった（読戻しから1件落とす既存のテストは、その前のIDごとの照合で先に落ちる）。
+余分な代替勤務が生えた場合のテストを足した。検査を外すと実際に落ちることを確認している。
+
+`tests/fakes/selection.ts`（担当Bの実装待ち）と `tests/fakes/model-gateway.ts` は残した。
+
 ### 文書の追随
 
 - RFC-011 §5 の状態図に ADR-022 の三つの経路を追加した。ADR-022 の「更新範囲」が

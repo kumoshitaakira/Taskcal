@@ -27,7 +27,7 @@
 `reconcileOutbox`）です。停止（`integration/stop-case.test.ts`）は台を使っていません。
 
 `integration/adopt-plan.test.ts` の A02・A03・A05・A08（および A04・A07・A13 の一部）は、
-**担当Bの口を `tests/fakes/` の台に差し替えて手順だけを確認**したものです。同じ「確認済み」
+**担当Bの口を `tests/stubs/fake-gateways.ts` の台に差し替えて手順だけを確認**したものです。同じ「確認済み」
 で括らないでください。`SelectionPlanner`・`EligibilityChecker`・`ScheduleGateway` が台なので、
 Q02の被覆・重複、月次上限、CSVの往復は動いていません。A16・A17・A01・A06・A14 は未実行です。
 
@@ -38,8 +38,8 @@ A04 は二重採用を止めるDB制約（部分一意索引・期待版付きCA
 台に差し替えています。照会と読戻しの**結果に対する分岐**は確かめましたが、CSVの実際の
 往復は動いていません。`reconcileOutbox` の側は模擬受信箱（本番と同じ実装）を使っています。
 
-`tests/fakes/` は**テスト専用**です。`src/` へ入れないでください。合成の根
-（`src/application/deps.ts`）には `NOT_IMPLEMENTED` を投げる実装だけを置きます。
+`tests/stubs/` と `tests/fakes/` は**テスト専用**です。`src/` へ入れないでください。
+合成の根（`src/application/deps.ts`）には `NOT_IMPLEMENTED` を投げる実装だけを置きます。
 
 受入fixtureだけを検査する場合は、リポジトリルートから次を実行する。
 
@@ -49,3 +49,12 @@ npx vitest run tests/unit/eval-fixtures.test.ts
 
 このテストが成功しても、各fixtureの`applicationAcceptance.status`は`UNEXECUTED`のまま
 である。実行していない結合ケースを合格と記録しない。
+
+## 台の置き場所
+
+`ScheduleGateway`・`MessagingGateway` の台は `tests/stubs/fake-gateways.ts` に**一本化**
+しています。同じ口に台が二つあると、片方だけが冪等replay・版競合・読戻し不一致を
+再現でき、どちらで確かめたのかが分からなくなります。
+
+`tests/fakes/selection.ts`（`SelectionPlanner`・`EligibilityChecker`）は担当Bの実装が
+入るまで残します。`tests/fakes/model-gateway.ts` は `ModelGateway` の台です。

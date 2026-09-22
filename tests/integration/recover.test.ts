@@ -44,8 +44,9 @@ type RecoverGateway = Pick<ScheduleGateway, "capabilities" | "getUpdateResult" |
 /**
  * 照会と読戻しだけを持つ台。**正式採用は行わない。**
  *
- * `tests/fakes/schedule-gateway.ts` は `applyUpdate` を先に呼ぶ前提なので、
- * 「落ちた後の再開」を作るには使えない。ここは結果だけを固定する。
+ * `tests/stubs/fake-gateways.ts` の `FakeScheduleGateway` は `applyUpdate` を先に
+ * 呼んだ操作の結果しか返さない。落ちた**後**から再開する経路はその前提を満たせない
+ * ので、ここは照会と読戻しの結果だけを固定する。
  */
 function stubGateway(options: {
   lookup?: UpdateResultKind | "LOOKUP_UNAVAILABLE" | "CONFLICT";
