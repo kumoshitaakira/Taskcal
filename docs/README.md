@@ -40,6 +40,7 @@ RFCは要件・設計・実装と検証の契約、ADRは選択理由・代替�
 | [022 引き継ぎと採用事実](adr/ADR-022-handoff-and-outcome-retention.md) | HandedOffの意味、採用事実の保持、追加する遷移の条件 | **ユーザー承認済み（2026-09-21）**。契約と画面へ反映済み |
 | [023 mainへのSquash merge](adr/ADR-023-squash-merge-workflow.md) | mainへの統合方式とSquash後の履歴同期 | **採用（2026-09-22）**。開発運用の明文化 |
 | [024 Server Actionの採用](adr/ADR-024-server-action-entry.md) | 状態変更の入口、冪等キーをフォームへ埋める | 実装済み（2026-09-22・Day 2） |
+| [025 停止した案件の照合後の終端](adr/ADR-025-stopped-case-reconcile-exit.md) | `ReconcileRequired`から停止理由に応じた終端へ出す条件 | **ユーザー承認待ち**（2026-09-22・Day 3）。ADR-022の適用範囲を1状態ぶん広げる |
 
 ## 過去RFCの適用範囲
 
