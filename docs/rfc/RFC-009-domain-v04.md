@@ -73,7 +73,7 @@ classDiagram
 
 ## 5. 時間と月次計算
 
-TimeRangeは半開区間 `[start,end)`、start < end。表示と月境界はStore.timezoneに従う。可能時間から既存勤務を差し引いた結果は区間集合になり得る。Outreach.offeredTimeを単一のままにするなら、分断した結果は範囲外として明示的に拒否する（Q03）。中間の勤務済み時間を埋めた一つの区間へ戻さない。
+TimeRangeは半開区間 `[start,end)`、start < end。表示と月境界はStore.timezoneに従う。可能時間から既存勤務を差し引いた結果は区間集合になり得る。独立した複数の可能時間窓は、Outreach.offeredTimeがいずれか1つの窓に完全に収まるなら許可する。1つの窓が既存勤務の差し引きで分断される場合は、Outreach.offeredTimeを単一のままにするため範囲外として明示的に拒否する（Q03）。中間の勤務済み時間を埋めた一つの区間へ戻さない。
 
 勤務の正本は正式採用されたCSVの勤務集合で、Scheduleはその共通表現。通常・代替を同じShiftAssignmentとして集計し、ScheduleUpdateから二重加算しない。
 
