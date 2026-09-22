@@ -269,6 +269,7 @@ describe.skipIf(!connectionString)("模擬メッセージ受信箱（DATABASE_UR
     await setFaultMode("NONE");
     const looked = await gateway.getSendResult({
       operationId,
+      provider: to.provider,
       connectionId: CONNECTION,
       expectedRequestHash: requestHash,
     });
@@ -280,6 +281,7 @@ describe.skipIf(!connectionString)("模擬メッセージ受信箱（DATABASE_UR
     const { operationId } = await enqueueAndSend({ body: "照合の確認" });
     const looked = await gateway.getSendResult({
       operationId,
+      provider: to.provider,
       connectionId: CONNECTION,
       expectedRequestHash: "f".repeat(64),
     });
@@ -290,6 +292,7 @@ describe.skipIf(!connectionString)("模擬メッセージ受信箱（DATABASE_UR
     await setFaultMode("NONE");
     const looked = (await gateway.getSendResult({
       operationId: `send-${randomUUID()}`,
+      provider: to.provider,
       connectionId: CONNECTION,
     })) as SendResult;
     expect(looked).toMatchObject({ state: "QUEUED", match: "NEW" });
@@ -301,6 +304,7 @@ describe.skipIf(!connectionString)("模擬メッセージ受信箱（DATABASE_UR
     await setFaultMode("LOOKUP_UNAVAILABLE");
     const looked = await gateway.getSendResult({
       operationId,
+      provider: to.provider,
       connectionId: CONNECTION,
       expectedRequestHash: requestHash,
     });

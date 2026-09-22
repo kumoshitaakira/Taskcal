@@ -201,6 +201,7 @@ export function createMockMessagingGateway(deps: MockInboxDeps): MessagingGatewa
 
     async getSendResult(ref: {
       operationId: OperationId;
+      provider: string;
       connectionId: string;
       expectedRequestHash?: RequestHash;
     }): Promise<SendResult | "LOOKUP_UNAVAILABLE" | "CONFLICT"> {
@@ -219,15 +220,16 @@ export function createMockMessagingGateway(deps: MockInboxDeps): MessagingGatewa
                   -- 照会不能は**この操作の宛先**で判定する。接続に1件でもあれば
                   -- 返す形にすると、無関係な操作まで照会不能になる。
                   (select ce.mock_fault_mode
-                     from contact_endpoint ce
+                    from contact_endpoint ce
                      join mock_inbox_item mi on mi.staff_id = ce.staff_id
                     where mi.message_id = d.message_id
+                      and ce.provider = $3
                       and ce.connection_id = o.connection_id
                     limit 1) as fault
              from operation_result o
              left join message_delivery d on d.operation_id = o.operation_id
             where o.operation_id = $1 and o.connection_id = $2`,
-          [ref.operationId, ref.connectionId],
+          [ref.operationId, ref.connectionId, ref.provider],
         );
 
         const row = rows[0];
