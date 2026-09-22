@@ -70,7 +70,9 @@ describe.skipIf(!connectionString)("起動の結合確認（DATABASE_URL 必須�
          from information_schema.table_constraints tc
          join information_schema.key_column_usage kcu
            on kcu.constraint_name = tc.constraint_name
-        where tc.table_name = 'worker_heartbeat'
+        where tc.table_schema = current_schema()
+          and kcu.table_schema = current_schema()
+          and tc.table_name = 'worker_heartbeat'
           and tc.constraint_type = 'PRIMARY KEY'`,
     );
     expect(rows.map((r) => r.column_name)).toEqual(["worker_name"]);
