@@ -4,6 +4,9 @@
 
 ドメイン規則・adapter・画面から分けて、「どの手順を取引の中でやるか」をここで決める。
 
+`monthly-schedule.ts` に、CSV adapterの結果を完全性検証済みのdomain snapshotへ変換する
+application責務を置く。業務のuse case本体、状態遷移、正式採用の進行制御は未実装。
+
 ## use case
 
 | ファイル | 内容 | 主に守る条件 |
