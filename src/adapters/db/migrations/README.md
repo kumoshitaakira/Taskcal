@@ -58,3 +58,17 @@ CSV原本の取込み・正規化（担当B、`src/adapters/csv/`）は未実装
 `npm run seed:dev` が入れる。
 
 `schema_migrations` テーブルはrunnerが自動で作る。ここに書かない。
+
+## `codex/b-db-migration-draft` の下書き
+
+このブランチの `0002_schedule_update.sql` と `0003_outbound_operations.sql` は、
+repository境界を検討するための**仮置き・A確認待ち**である。Aの承認前にmigrationを
+完成済み・統合済みとは扱わない。
+
+- `ScheduleUpdate`の操作ID、requestHash、sourceRevision、artifactRef、readBack結果、
+  `UNKNOWN`／`RECONCILE_REQUIRED`相当の保持欄を置く。
+- 採用済み事実は `adoption_fact` として、ScheduleUpdateの状態や案件状態とは別に保存する。
+- outbound operationは `provider`・`connection_id`・`operation_id` の範囲で冪等性記録を
+  持つ。同じIDの異なるrequestHashはrepository境界で衝突拒否する。
+- Commitment、SelectionResult、ReplyInterpretation、worker lease/fenceの最終schemaや
+  外部キーは定義しない。未決の参照はSQLコメントとrepository READMEへ残す。
