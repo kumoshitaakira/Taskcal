@@ -1,5 +1,63 @@
 # 設計記録の変更履歴
 
+## 2026-09-22：Day 4（担当A・B）— 担当Bの残タスクを合流し、正式採用を本番経路で通した
+
+Day 1〜3で担当Aが台（fake）に対して書いていた正式採用の進行に、担当Bの実装を繋いだ。
+`npm run reset:dev` から店長画面・スタッフ画面の通し操作で、欠勤登録→打診→返信→解釈
+（OrcaRouter実呼出し）→承諾→選定→CSV管理版の生成・読戻し→一括採用→通知→完了まで確認した。
+
+- **`ScheduleGateway` のCSV実装**（`src/adapters/csv/csv-schedule-gateway.ts`・`csv-store.ts`）。
+  管理版は内容アドレスの不変ストア `var/schedule/<接続>/revisions/<内容hash>/` に置き、正式版は
+  DBの参照だけが決める。能力の意味、「記録が無い＝未反映」の限定、出力のみモード（A14）は
+  [ADR-026](adr/ADR-026-csv-revision-store.md)。`unimplemented-schedule-gateway.ts` は削除した。
+- **候補選定**（`src/domain/selection/index.ts`、`planExactlyOneCoverage`）。Q02の各区間ちょうど1人で
+  必要枠を覆う組合せを列挙して選ぶ。はみ出す承諾は切り詰めずに除外し（ADR-005）、和集合では覆えるが
+  重ならずに覆えない場合を `OVERLAP` として `NOT_COVERED` と区別する（A16）。
+- **打診先の適格性**（`src/application/outreach-eligibility.ts`）。名簿だけで打診せず、打診の直前に
+  正式版参照から月内勤務表を読み、担当Bの規則で同日の勤務との重複・月次上限・在籍を検査する。
+  外した相手は `CANDIDATES_EXCLUDED` として理由つきで履歴に残す。月内入力が完全でなければ打診を
+  始めない（A09）。`start-outreach.ts` は「操作登録→勤務表読込み（取引の外）→ロックして積む」の
+  3段に分けた（RFC-010 §5）。
+- **契約の変更**（`src/contracts/`、共同所有）：`EligibilityInput` へ判定の入力を足し、
+  `listEligible` の戻りを `EligibilityListing`（適格＋除外理由）にした。
+  `AuthoritativeScheduleRefRepository.advanceSiblings` を足した。担当Bの実装として合流させたが、
+  契約変更の相互確認（ADR-021）は事後になる。
+- **同月の参照の同期**：管理版は月単位、参照は営業日単位なので、採用取引で同月の他営業日の参照も
+  同じ版へ進める。進めないと次の案件が旧版を読み、代替勤務を月次上限に数えない（A01／A09）。
+- **取込み経路**：`seed:dev` は固定fixtureをCSV経路で取り込む（初回のみ）。`reset:dev` を追加し、
+  業務テーブルと管理版ストアを全て消して取り込み直す（Day 4の「初期化からデモを再現」）。
+  fixtureの9/25の勤務は、DBの外部キー（0004）が実在しない案件を拒否するため、由来なしの通常勤務へ戻した。
+- **時刻の写し替え** `toJstFixedFormat` を `src/domain/interval/` へ移し、application と CSV adapter で共有。
+- **画面**：「未実装として断る」文言を外し、打診時・採用時の検査内容へ差し替えた。成果物の表示は
+  勤務表更新の状態に応じて「正式版／未採用」を出す。
+- **検査**：`check:consistency` に、本物の実装が合成の根へ繋がっていること（`createCsvScheduleGateway`
+  等）と `advanceSiblings`・`buildListEligibleInput` の呼出しを足した。
+
+### 合流時の読み取り専用レビューで直したもの
+
+`taskcal-domain-reviewer`・`taskcal-delivery-reviewer` の指摘に同日対応した。
+
+- **打診開始が途中で落ちると案件が二度と打診できなくなる**（高）。操作IDが案件固定のまま取引を分けた
+  ため、取引Aの後に落ちると「進行中」が残る。打診が1件も無ければ何も効いていないので同じ操作から
+  続きを進めるようにし、名簿の上限超過も確定した拒否として閉じる。並行実行が先に積んでいれば、その
+  結果を再生して `SUCCEEDED` を上書きしない。
+- **月次上限の対象集合を名簿から作っていた**（中）。CSVの範囲宣言に無い相手が「勤務0件＝残枠あり」で
+  通る（A09）。`LoadedSchedule.declaredStaffIds` を足し、打診時・採用直前の両方でそこから作る。
+- **`reset:dev` が管理版ストアをDBのcommit前に消していた**（中）。退避してからDBを消し、commitできたら
+  退避先を消す。失敗したら戻す。接続先がローカルでなければ `--yes` 無しに止める。
+- `seed:dev` の片付けは採用事実が未採用の案件だけにした（採用済み・成否不明は触らない）。
+- `advanceSiblings` を対象日と同じ店舗に絞った。取引Bで読んだ版が今も正式版かを再照合する。
+- 開始≧終了の承諾は黙って除外せず `INVALID_INPUT` で止める。
+- 文言：除外した相手は「画面には出ない。処理記録に残る」と明記。A02は「前提のみ」へ格下げ。
+  ADR-026の状態は「提案（実装済み・確認待ち）」。
+
+残る指摘（直していない）：別の描画からの再開が、進行中の `applyUpdate` を照会して `NOT_APPLIED` を
+受ける窓（fence token 未実装の一部。README「動かないもの」）。
+
+残る未実装は README「現時点で動かないもの」。とくに可能時間そのものの検査（A17）、A18の上限側、
+A04の2本並行、A14の合成の根への接続は未実行のまま。
+
+
 ## 2026-09-22：Day 3（担当A）— PR #15 のレビュー指摘を直した
 
 指摘6件のうち、対応が要る5件を直した。残り1件は注記として記録した。

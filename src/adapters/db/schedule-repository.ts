@@ -5,9 +5,10 @@
  * 勤務行を直接引かず、必ず参照を経由する。参照が無い勤務表は「取り込んでいない」の
  * であって「勤務が無い」ではない。
  *
- * **CSV原本の取込み・正規化は担当Bの `src/adapters/csv/` が行う（未実装）。**
- * ここが読むのは、取り込んだ結果が入るはずの内部表。現在の中身は
- * `npm run seed:dev` が入れた架空データで、CSVから往復したものではない。
+ * CSV原本の取込み・正規化は担当Bの `src/adapters/csv/` が行う。ここが読むのは、取り込んだ
+ * 結果が入る内部表。中身は `npm run seed:dev` / `reset:dev` が固定fixtureのCSVを
+ * `parseMonthlyCsv` で検査して入れたもので、正式版参照は同じ内容の管理版
+ * （`var/schedule/.../revisions/<sourceRevision>`）を指す（ADR-026）。
  */
 
 import "server-only";

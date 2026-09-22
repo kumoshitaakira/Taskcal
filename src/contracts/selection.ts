@@ -12,7 +12,11 @@ import { z } from "zod";
 // **型だけを取り込む。** 実行時の依存は増やさない。適格性の値型は担当Bが
 // `src/domain/interval/` で定義しており、契約側で同じ形を書き写すと、片方だけが
 // 変わったときに黙って食い違う（Q15 / ADR-021）。
-import type { MonthlyScheduleSnapshot, StaffProfile } from "@/domain/interval";
+import type {
+  CandidateIneligibility,
+  MonthlyScheduleSnapshot,
+  StaffProfile,
+} from "@/domain/interval";
 import type {
   ConnectionId,
   ScheduleId,
@@ -122,7 +126,7 @@ export interface SelectionPlanInput {
 }
 
 /**
- * 担当Bが `src/domain/selection/` で実装する純粋関数の口。
+ * 担当Bが `src/domain/selection/` で実装する純粋関数の口（`planExactlyOneCoverage`）。
  *
  * 承諾時間を自動で短縮しない（ADR-005）。実行可能な計画だけを返し、
  * `fullyCovered` と実行可能性を同じbooleanへ詰め込まない（RFC-009 §6）。
@@ -142,12 +146,50 @@ export interface EligibleCandidate {
   readonly offeredEndAt: string;
 }
 
+/** 名簿から引いた打診先。宛先は打診時点で固定する（RFC-011 §6）。 */
+export interface RosterCandidate {
+  readonly staffId: string;
+  readonly endpointKey: string;
+  readonly endpointVersion: number;
+}
+
+/**
+ * 打診先の適格性検査の入力（2026-09-22・Day 4で確定）。
+ *
+ * `recheck` と同じ方針（Q15）で、**必要な入力は呼出し側が渡す**。口の中でDBやGatewayを
+ * 引くと、外部待ちを取引の中へ持ち込む（RFC-010 §5）。`start-outreach.ts` が取引の外で
+ * 月内勤務表を読み、取引の中で名簿とスタッフ条件を読んでから渡す。
+ *
+ * **`availabilityWindows` には必要枠そのものを入れる。** 可能時間表が無く、打診の時点では
+ * 本人の返信も無いため、「この枠を頼めるか」を在籍・店舗・職種・本人除外・勤務の重複・
+ * 月次上限で判定する。可能時間そのものは検査していない。
+ */
 export interface EligibilityInput {
   readonly storeId: string;
   readonly requirement: CoverageRequirement;
   /** D01：欠勤者本人は代替候補から除く。 */
   readonly absentStaffId: string;
   readonly inputs: SelectionInputs;
+  /** 対象の営業日。月次上限は対象月で数える（Q06）。 */
+  readonly businessDate: string;
+  /** 名簿上の候補（同店舗・同職種・在籍中・本人除外）。ここから適格な相手を選ぶ。 */
+  readonly roster: readonly RosterCandidate[];
+  /** 打診の直前に読んだ月内勤務表。COMPLETE でなければ判定しない（Q06／A09）。 */
+  readonly monthlySchedule: MonthlyScheduleSnapshot;
+  readonly staffProfiles: readonly StaffProfile[];
+}
+
+/**
+ * 打診先の判定結果。**外した相手と理由も返す。** 打診されなかった人が記録にも画面にも
+ * 残らない状態を作らない（RFC-011 §2「適格な全員へ個別に打診」の対になる記録）。
+ */
+export interface EligibilityListing {
+  readonly eligible: readonly EligibleCandidate[];
+  readonly excluded: readonly {
+    readonly staffId: string;
+    /** 担当Bの規則の理由。`CONDITIONS_MISSING` はスタッフ条件を取れなかった場合。 */
+    readonly reason: CandidateIneligibility | "CONDITIONS_MISSING";
+  }[];
 }
 
 export interface EligibilityRecheckInput {
@@ -181,16 +223,18 @@ export type EligibilityRecheckResult =
   | { readonly ok: false; readonly reason: SelectionNotFeasibleReason; readonly staffId?: string };
 
 /**
- * 担当Bが `src/domain/interval/` と `src/domain/selection/` で実装する口。
+ * 担当Bの規則（`src/domain/interval/`）を、打診の直前と正式採用の直前の両方で通す口。
  *
  * `recheck` は正式採用の直前にもう一度通す（D08）。選定時の結果を再利用しない。
  * 月内入力が COMPLETE でなければ成立させない（Q06、A09）。
  *
- * Q15（2026-09-22確定）：`recheck` は同期のまま、必要な入力を**呼出し側が渡す**形に
- * した。口の中でDBやGatewayを引く形にすると、外部待ちを取引の中へ持ち込む
- * （RFC-010 §5）。実装は `src/application/eligibility-recheck.ts`。
+ * Q15（2026-09-22確定）：両方とも同期のまま、必要な入力を**呼出し側が渡す**形。
+ * 口の中でDBやGatewayを引く形にすると、外部待ちを取引の中へ持ち込む（RFC-010 §5）。
+ * 実装は `src/application/eligibility-recheck.ts`（recheck）と
+ * `src/application/outreach-eligibility.ts`（listEligible）。
  */
 export interface EligibilityChecker {
-  listEligible(input: EligibilityInput): readonly EligibleCandidate[];
+  /** 打診の直前。適格な相手だけへ打診し、外した相手は理由つきで返す。 */
+  listEligible(input: EligibilityInput): EligibilityListing;
   recheck(input: EligibilityRecheckInput): EligibilityRecheckResult;
 }

@@ -928,10 +928,31 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     expect(await additionalShifts()).toHaveLength(0);
   });
 
-  it("未実装のGatewayは未採用と確定させる。成否不明として照合待ちにしない", async () => {
-    const { createUnimplementedScheduleGateway } =
-      await import("@/adapters/csv/unimplemented-schedule-gateway");
-    const result = await build({ gateway: createUnimplementedScheduleGateway() })({
+  it("外部作用の前に断ったGatewayは未採用と確定させる。成否不明として照合待ちにしない", async () => {
+    // 未設定・未実装の adapter は「外部作用の前に断った」を意味する（schedule-gateway.ts）。
+    const { TaskcalError } = await import("@/contracts/errors");
+    const refusing: ScheduleGateway = {
+      capabilities: {
+        canReadRevision: false,
+        canConditionalUpdate: false,
+        supportsIdempotencyKey: false,
+        supportsResultLookup: false,
+        supportsAtomicBatch: false,
+      },
+      loadSchedule: async () => {
+        throw new TaskcalError("NOT_IMPLEMENTED", "テスト用：勤務表の読込みを断る。");
+      },
+      applyUpdate: async () => {
+        throw new TaskcalError("NOT_IMPLEMENTED", "テスト用：勤務表の更新を断る。");
+      },
+      getUpdateResult: async () => {
+        throw new TaskcalError("NOT_IMPLEMENTED", "テスト用：照会を断る。");
+      },
+      readBack: async () => {
+        throw new TaskcalError("NOT_IMPLEMENTED", "テスト用：読戻しを断る。");
+      },
+    };
+    const result = await build({ gateway: refusing })({
       operationId: `adopt:${caseId}:${randomUUID()}`,
       caseId,
     });

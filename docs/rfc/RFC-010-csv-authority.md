@@ -169,3 +169,13 @@ CSVに行があるだけでは、その日の全入力が取得できたとは�
 
 対象の証拠はA06のID往復と、A09の入力完全性部分。A09の月次算式検証やDay 1の画面表示、
 Day 2以降の業務受入が完了したことを意味しない。テストは`tests/unit/monthly-csv.test.ts`。
+
+### 2026-09-22（Day 4）：Gateway本体の実装
+
+本節の固定形式を入力として、`ScheduleGateway` の4操作を `src/adapters/csv/csv-schedule-gateway.ts` に
+実装した。管理版は内容アドレスの不変ストアに置き、正式版はDBの参照だけが決める。能力の意味と、
+月単位の管理版と営業日単位の参照を採用取引で同期する決定は[ADR-026](../adr/ADR-026-csv-revision-store.md)。
+`applyUpdate` は期待版から派生した次の版を作って `PREPARED` を返し、正式採用は§4手順5〜6の
+アプリケーション取引が行う。A01・A02・A16は本番経路の統合テストで、A06の前提・A07・A14は
+単体テストで確認した。取込みは固定fixtureを `scripts/lib/dev-seed.ts` が読むだけで、外部からの
+取込み経路は依然として無い。

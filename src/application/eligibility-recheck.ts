@@ -28,6 +28,7 @@ import type { CaseSnapshot, StaffConditions } from "../contracts/repository";
 import {
   CANDIDATE_INELIGIBILITY,
   evaluateCandidateEligibility,
+  toJstFixedFormat,
   type CandidateIneligibility,
 } from "@/domain/interval";
 import { ERROR_CODES, TaskcalError } from "../contracts/errors";
@@ -41,49 +42,16 @@ import {
   type SelectionNotFeasibleReason,
 } from "../contracts/selection";
 
-const JST_OFFSET_MINUTES = 9 * 60;
-
 /**
- * 明示のオフセットを持つ日時だけを受ける。
- *
- * `Date.parse` は `2026-09-26T18:00:00` や `2026-09-26` を**サーバのタイムゾーンで**
- * 解釈する。壁時計の時刻がサーバ次第で変わり、検査した区間と実際の勤務がずれる。
+ * 時刻の写し替えは担当Bの規則側（`src/domain/interval/`）に置いた。CSV adapter も同じ
+ * 変換を使うため、application だけが持つと二箇所に分かれる。ここでは再輸出だけする。
  */
-const HAS_EXPLICIT_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
+export { toJstFixedFormat };
 
 /** `YYYY-MM` の翌月。範囲の検査に使う。 */
 function nextMonth(month: string): string {
   const [year, index] = month.split("-").map(Number);
   return index === 12 ? `${year + 1}-01` : `${year}-${String(index + 1).padStart(2, "0")}`;
-}
-
-/**
- * 保存している瞬間を、担当Bの規則が受け取る Asia/Tokyo 固定形式へ写す。
- *
- * **丸めない。** 秒・ミリ秒が残っている値は、黙って切り捨てると検査した区間と
- * 実際の勤務がずれる。MVPは15分単位（`TIME_GRANULARITY_MINUTES`）なので、
- * ここへ来る時点で0のはず。0でなければ範囲外として拒否する。
- */
-export function toJstFixedFormat(instant: string): string {
-  if (!HAS_EXPLICIT_OFFSET.test(instant)) {
-    throw new TaskcalError(
-      ERROR_CODES.INVALID_INPUT,
-      `タイムゾーンの無い日時は受け取れません: ${instant}`,
-    );
-  }
-  const ms = Date.parse(instant);
-  if (Number.isNaN(ms)) {
-    throw new TaskcalError(ERROR_CODES.INVALID_INPUT, `日時を解釈できません: ${instant}`);
-  }
-  if (ms % 60_000 !== 0) {
-    throw new TaskcalError(ERROR_CODES.OUT_OF_SCOPE, `秒未満を含む日時は対象外です: ${instant}`);
-  }
-  const shifted = new Date(ms + JST_OFFSET_MINUTES * 60_000);
-  const pad = (value: number, width = 2) => String(value).padStart(width, "0");
-  return (
-    `${pad(shifted.getUTCFullYear(), 4)}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}` +
-    `T${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:00+09:00`
-  );
 }
 
 /**
@@ -132,8 +100,12 @@ export function buildRecheckInput(input: {
   // その月の」勤務しか見ない。無関係な行まで渡すと、他人の日跨ぎ勤務や未知の状態が
   // 1行あるだけで案件全体が未採用確定に落ちる（担当Bの検査は全行に効く）。
   const targetStaff = new Set(input.selected.map((chosen) => chosen.staffId));
+  // 月次上限の対象集合は範囲宣言から取る（`outreach-eligibility.ts` と同じ理由）。
+  const declared = input.reloaded.declaredStaffIds
+    ? new Set(input.reloaded.declaredStaffIds)
+    : targetStaff;
   const assignments = input.reloaded.assignments
-    .filter((assignment) => targetStaff.has(assignment.staffId))
+    .filter((assignment) => targetStaff.has(assignment.staffId) && declared.has(assignment.staffId))
     .map((assignment) => {
       const startAt = toJstFixedFormat(assignment.startAt);
       return {
@@ -173,7 +145,7 @@ export function buildRecheckInput(input: {
       sourceRevision: input.reloaded.sourceRevision,
       // 渡した行の範囲と揃える。勤務0件でも対象に含めるので、居ない相手を
       // 「上限に余裕あり」と読むことはない（`STAFF_NOT_IN_MONTHLY_SNAPSHOT`）。
-      staffIds: [...targetStaff],
+      staffIds: [...declared],
       completeness: input.reloaded.completeness,
       assignments,
     },

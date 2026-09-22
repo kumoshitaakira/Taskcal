@@ -1,14 +1,18 @@
 /**
- * 同時個別打診の開始と送信（RFC-011 §2、A11）を実PostgreSQLで確かめる。
+ * 同時個別打診の開始と送信（RFC-011 §2、D01、A11）を実PostgreSQLで確かめる。
  *   docker compose up -d db && npm run migrate
  *
  * 見るのは、一人の送信失敗で案件が閉じないこと、未送信と配送失敗の区別が
  * 打診の状態に正しく反映されること、結果不明を再送しないこと。
+ *
+ * 勤務表は**本物のCSV管理版ストア**（一時ディレクトリ）から読む。打診先は名簿だけでなく、
+ * 担当Bの規則（同日の勤務との重複・月次上限）で絞る。
  */
 
 import { randomUUID } from "node:crypto";
 import { config as loadDotenv } from "dotenv";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createCsvFixture, type CsvFixture } from "../stubs/csv-fixture";
 
 loadDotenv({ path: ".env.local", quiet: true });
 
@@ -25,6 +29,11 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
   let withTransaction: typeof import("@/adapters/db/transaction").withTransaction;
   let start: ReturnType<typeof import("@/application/start-outreach").startOutreach>;
   let drain: ReturnType<typeof import("@/application/send-outbox").sendOutbox>;
+  let buildStart: (
+    gateway: import("@/contracts/schedule-gateway").ScheduleGateway,
+  ) => ReturnType<typeof import("@/application/start-outreach").startOutreach>;
+  let fixture: CsvFixture;
+  const extraFixtures: CsvFixture[] = [];
 
   const storeId = randomUUID();
   const scheduleId = randomUUID();
@@ -32,6 +41,33 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
   const staff = Array.from({ length: 4 }, () => randomUUID());
   let caseId: string;
   const now = "2026-09-26T09:00:00+09:00";
+  const SHIFT_START = "2026-09-26T18:00:00+09:00";
+  const SHIFT_END = "2026-09-26T22:00:00+09:00";
+
+  /** 正式版参照を指定の版へ向ける（D11：勤務表は参照から読む）。 */
+  async function pointAuthoritativeAt(target: CsvFixture): Promise<void> {
+    await withTransaction((tx) =>
+      tx.query(
+        `insert into authoritative_schedule_ref
+           (connection_id, schedule_id, source_revision, artifact_ref, adopted_at, version)
+         values ($1, $2, $3, $4, $5, 1)
+         on conflict (connection_id, schedule_id)
+           do update set source_revision = excluded.source_revision,
+                         artifact_ref = excluded.artifact_ref`,
+        [CONNECTION, scheduleId, target.sourceRevision, target.artifactRef, now],
+      ),
+    );
+  }
+
+  async function caseEvents(kind: string): Promise<Record<string, unknown>[]> {
+    const { rows } = await withTransaction((tx) =>
+      tx.query<{ detail: Record<string, unknown> }>(
+        "select detail from case_processing_event where case_id = $1 and kind = $2",
+        [caseId, kind],
+      ),
+    );
+    return rows.map((r) => r.detail);
+  }
 
   function endpointKeyOf(staffId: string): string {
     return `staff:${staffId}`;
@@ -82,27 +118,55 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
     const { startOutreach } = await import("@/application/start-outreach");
     const { sendOutbox } = await import("@/application/send-outbox");
     const { createRosterEligibility } = await import("@/application/roster-eligibility");
+    const { createOutreachEligibility } = await import("@/application/outreach-eligibility");
     const { createPgAbsenceCaseRepository } = await import("@/adapters/db/case-repository");
-    const { createPgStoreRepository } = await import("@/adapters/db/store-repository");
+    const { createPgStoreRepository, createPgStaffRepository } =
+      await import("@/adapters/db/store-repository");
     const { createPgOutreachRepository } = await import("@/adapters/db/outreach-repository");
     const { createPgOutboxRepository } = await import("@/adapters/db/outbox-repository");
     const { createPgOperationResultStore } = await import("@/adapters/db/operation-result-store");
+    const { createPgAuthoritativeScheduleRefRepository } =
+      await import("@/adapters/db/authoritative-ref-repository");
     const { createDefaultMessagingGateway } = await import("@/adapters/channel");
 
     const operations = createPgOperationResultStore();
     const outreaches = createPgOutreachRepository();
     const outbox = createPgOutboxRepository();
 
-    start = startOutreach({
-      cases: createPgAbsenceCaseRepository(),
-      outreaches,
-      outbox,
-      operations,
-      roster: createRosterEligibility(),
-      stores: createPgStoreRepository(),
-      clock: { now: () => now },
-      ids: { next: () => randomUUID() },
+    // 本物のCSV管理版ストア。欠勤対象の元勤務だけを持つ9月の勤務表。
+    fixture = await createCsvFixture({
+      connectionId: CONNECTION,
+      storeId,
+      month: "2026-09",
+      roleCode: "FLOOR",
+      staffIds: staff,
+      shifts: [
+        {
+          shiftAssignmentId: absentShift,
+          staffId: staff[0],
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+        },
+      ],
+      scheduleIds: { "2026-09-26": scheduleId },
     });
+
+    buildStart = (gateway) =>
+      startOutreach({
+        cases: createPgAbsenceCaseRepository(),
+        outreaches,
+        outbox,
+        operations,
+        roster: createRosterEligibility(),
+        stores: createPgStoreRepository(),
+        staff: createPgStaffRepository(),
+        authoritative: createPgAuthoritativeScheduleRefRepository(),
+        gateway,
+        eligibility: createOutreachEligibility(),
+        clock: { now: () => now },
+        ids: { next: () => randomUUID() },
+      });
+    start = buildStart(fixture.gateway);
     drain = sendOutbox({
       outbox,
       outreaches,
@@ -144,6 +208,8 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
 
   beforeEach(async () => {
     caseId = randomUUID();
+    // 正式版参照を基準の版へ戻す。適格性のテストが別の版へ向けるため。
+    await pointAuthoritativeAt(fixture);
     await withTransaction(async (tx) => {
       await tx.query(
         `delete from message_delivery where message_id in
@@ -233,6 +299,9 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
         [storeId],
       );
       await tx.query("delete from absence_case where store_id = $1", [storeId]);
+      await tx.query("delete from authoritative_schedule_ref where connection_id = $1", [
+        CONNECTION,
+      ]);
       await tx.query("delete from shift_assignment where store_id = $1", [storeId]);
       await tx.query("delete from schedule where store_id = $1", [storeId]);
       await tx.query("delete from contact_endpoint where connection_id = $1", [CONNECTION]);
@@ -240,11 +309,13 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
       await tx.query("delete from store where store_id = $1", [storeId]);
     });
     await closePool();
+    await fixture.cleanup();
+    await Promise.all(extraFixtures.map((f) => f.cleanup()));
   });
 
   it("D01：欠勤者本人を除いた全員へ個別に打診を積む（送信はまだしない）", async () => {
     const result = await start({ operationId: `so-${randomUUID()}`, caseId });
-    expect(result).toMatchObject({ ok: true, started: 3 });
+    expect(result).toMatchObject({ ok: true, started: 3, excluded: 0 });
 
     const states = await outreachStates();
     expect(Object.keys(states)).toHaveLength(3);
@@ -368,5 +439,103 @@ describe.skipIf(!connectionString)("同時個別打診（DATABASE_URL 必須）"
     );
     const result = await start({ operationId: `so-${randomUUID()}`, caseId });
     expect(result).toMatchObject({ ok: false, code: "DEADLINE_EXCEEDED" });
+  });
+
+  it("打診先の適格性：同日の勤務と重なる相手は名簿に居ても打診せず、理由を記録する", async () => {
+    // staff[3] が 19〜21時に別の勤務を持つ版。必要枠 18〜22時と重なる。
+    const overlapping = await createCsvFixture({
+      connectionId: CONNECTION,
+      storeId,
+      month: "2026-09",
+      roleCode: "FLOOR",
+      staffIds: staff,
+      shifts: [
+        {
+          shiftAssignmentId: absentShift,
+          staffId: staff[0],
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+        },
+        {
+          shiftAssignmentId: randomUUID(),
+          staffId: staff[3],
+          startAt: "2026-09-26T19:00:00+09:00",
+          endAt: "2026-09-26T21:00:00+09:00",
+        },
+      ],
+      scheduleIds: { "2026-09-26": scheduleId },
+    });
+    extraFixtures.push(overlapping);
+    await pointAuthoritativeAt(overlapping);
+
+    const result = await buildStart(overlapping.gateway)({
+      operationId: `so-${randomUUID()}`,
+      caseId,
+    });
+    expect(result).toMatchObject({ ok: true, started: 2, excluded: 1 });
+
+    const states = await outreachStates();
+    expect(states[staff[3]]).toBeUndefined();
+    expect(states[staff[1]]).toBe("PENDING_SEND");
+    expect(states[staff[2]]).toBe("PENDING_SEND");
+    // 打診されなかった人が記録から消えない。
+    expect(await caseEvents("CANDIDATES_EXCLUDED")).toEqual([
+      { excluded: [{ staffId: staff[3], reason: "EXISTING_ASSIGNMENT_OVERLAP" }] },
+    ]);
+  });
+
+  it("進行中のまま残った同じ操作は、打診が1件も無ければ続きを進める（案件を塞がない）", async () => {
+    // 取引Aの後・取引Bの前でプロセスが落ちた状態を作る：操作だけが IN_PROGRESS で残る。
+    const operationId = `outreach:${caseId}`;
+    const { computeRequestHash } = await import("@/contracts/operation");
+    const { createPgOperationResultStore } = await import("@/adapters/db/operation-result-store");
+    await withTransaction((tx) =>
+      createPgOperationResultStore().begin(tx, {
+        operation: { operationId, requestHash: computeRequestHash({ caseId }) },
+        kind: "START_OUTREACH",
+        caseId,
+      }),
+    );
+    const result = await start({ operationId, caseId });
+    expect(result).toMatchObject({ ok: true, started: 3, replayed: false });
+    // 打診が積まれた後の同じ操作は再生になる。
+    const again = await start({ operationId, caseId });
+    expect(again).toMatchObject({ ok: true, started: 3, replayed: true });
+  });
+
+  it("A09の入口：月内入力が完全でなければ打診を始めない（欠けた日を0と推定しない）", async () => {
+    // 範囲宣言から1日を落とした版。COMPLETE でなくなる。
+    const { buildCsvInput } = await import("../stubs/csv-fixture");
+    const { importRevision, artifactRefOf } = await import("@/adapters/csv/csv-store");
+    const input = buildCsvInput({
+      connectionId: CONNECTION,
+      storeId,
+      month: "2026-09",
+      roleCode: "FLOOR",
+      staffIds: staff,
+      shifts: [
+        {
+          shiftAssignmentId: absentShift,
+          staffId: staff[0],
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+        },
+      ],
+      scheduleIds: { "2026-09-26": scheduleId },
+    });
+    input.manifest.days = input.manifest.days?.filter((day) => day.date !== "2026-09-30");
+    const { parsed } = await importRevision(fixture.root, CONNECTION, input);
+    expect(parsed.completeness).toBe("INCOMPLETE");
+    await withTransaction((tx) =>
+      tx.query(
+        `update authoritative_schedule_ref set source_revision = $3, artifact_ref = $4
+          where connection_id = $1 and schedule_id = $2`,
+        [CONNECTION, scheduleId, parsed.sourceRevision, artifactRefOf(parsed.sourceRevision)],
+      ),
+    );
+
+    const result = await start({ operationId: `so-${randomUUID()}`, caseId });
+    expect(result).toMatchObject({ ok: false, code: "INVALID_INPUT" });
+    expect(Object.keys(await outreachStates())).toHaveLength(0);
   });
 });

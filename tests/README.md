@@ -41,16 +41,22 @@ npm run migrate && npm run seed:dev
 | `A06の前提：…` | ケースが成り立つための下位の規則だけ。ケース自体は未実行 |
 
 **本番経路でそのまま再現**できているのは A11・A12・A15、**A18のうち店長停止と期限到達**、
-A13 のうち**通知の照合**（`integration/recover.test.ts` の `reconcileOutbox`）です。
-停止（`integration/stop-case.test.ts`）は台を使っていません。
+A13 のうち**通知の照合**（`integration/recover.test.ts` の `reconcileOutbox`）、そして
+2026-09-22（Day 4）から **A01・A16**（`integration/csv-adoption.test.ts`：本物のCSV管理版
+ストアと本物の選定規則で `adoptPlan` を正式採用まで通す）と、**打診先の適格性・A09の入口**
+（`integration/start-outreach.test.ts`）です。同じファイルの **A02 は前提だけ**（Gatewayを直接呼び、
+未採用の版が参照経由の勤務表と内部表に混ざらないことを確認。正式採用前の停止は注入していない）。停止（`integration/stop-case.test.ts`）は台を使っていません。
 
 A18の**上限側は未実装**です。`STOP_CAUSE.LIMIT` に呼出し元がなく、予算・回数上限に達しても
 案件は調整中のまま残ります（README「動かないもの」）。A18 を無印で書かないでください。
 
 `integration/adopt-plan.test.ts` の A02・A03・A05・A08（および A04・A07・A13 の一部）は、
-**担当Bの口を `tests/stubs/fake-gateways.ts` の台に差し替えて手順だけを確認**したものです。同じ「確認済み」
-で括らないでください。`SelectionPlanner`・`EligibilityChecker`・`ScheduleGateway` が台なので、
-Q02の被覆・重複、月次上限、CSVの往復は動いていません。A16・A17・A01・A06・A14 は未実行です。
+**`ScheduleGateway` と `SelectionPlanner` を `tests/stubs/fake-gateways.ts`・`tests/fakes/selection.ts`
+の台に差し替えて手順だけを確認**したものです。台で確かめているのは取引の切り方・再検査・照合・
+巻き戻しで、CSVの往復と選定規則そのものは `csv-adoption.test.ts` と単体テスト
+（`unit/csv-schedule-gateway.test.ts`：A06の前提・A07・A14、`unit/selection-planner.test.ts`：A16）が
+担います。**A17（分断・部分欠勤の拒否）は未実行**です——可能時間表が無く、分断判定に到達する
+配線がありません（`docs/OPEN-QUESTIONS.md` Q15）。
 
 A04 は二重採用を止めるDB制約（部分一意索引・期待版付きCAS）だけを確かめており、
 `adoptPlan` を2本走らせた競合は未実行です。
@@ -77,5 +83,7 @@ npx vitest run tests/unit/eval-fixtures.test.ts
 しています。同じ口に台が二つあると、片方だけが冪等replay・版競合・読戻し不一致を
 再現でき、どちらで確かめたのかが分からなくなります。
 
-`tests/fakes/selection.ts`（`SelectionPlanner`・`EligibilityChecker`）は担当Bの実装が
-入るまで残します。`tests/fakes/model-gateway.ts` は `ModelGateway` の台です。
+`tests/fakes/selection.ts`（`SelectionPlanner` の台）は、正式採用の**手順**を選定の中身に
+依存せず確かめるために残しています。本物は `src/domain/selection/`。
+`tests/stubs/csv-fixture.ts` は一時ディレクトリにCSV管理版ストアを作り、**本物の**
+`createCsvScheduleGateway` を返す足場です（台ではありません）。`tests/fakes/model-gateway.ts` は `ModelGateway` の台です。

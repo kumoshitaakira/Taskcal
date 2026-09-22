@@ -7,6 +7,9 @@
  * 防げない（RFC-010 §5）。読んでから書くまでの間に別の採用が通った場合、`swap` が
  * 1行も更新せず `REVISION_CONFLICT` を返す。同じ旧版から作った二つの計画の一方だけが
  * 正式版になる（A04）。
+ *
+ * 参照は営業日単位の行、CSVの管理版は月単位の成果物（ADR-026）。採用取引は対象日を
+ * `swap` で切り替えた後、同月の他営業日を `advanceSiblings` で同じ版へ進める。
  */
 
 import "server-only";
@@ -75,6 +78,53 @@ export function createPgAuthoritativeScheduleRefRepository(): AuthoritativeSched
         ],
       );
       return rowCount === 1 ? "UPDATED" : "REVISION_CONFLICT";
+    },
+
+    async advanceSiblings(handle: TxHandle, input) {
+      const tx = handle as Tx;
+      const monthStart = `${input.month}-01`;
+      const [year, index] = input.month.split("-").map(Number);
+      const nextMonthStart =
+        index === 12 ? `${year + 1}-01-01` : `${year}-${String(index + 1).padStart(2, "0")}-01`;
+      // 旧版を指す同月の他営業日だけを進める。版も進める（A04：CASの前提）。
+      const updated = await tx.query(
+        `update authoritative_schedule_ref r
+            set source_revision = $5,
+                artifact_ref = $6,
+                adopted_at = $7,
+                version = r.version + 1,
+                adopted_by_schedule_update_id = $8
+           from schedule s
+          where s.schedule_id = r.schedule_id
+            and r.connection_id = $1
+            and r.schedule_id <> $2
+            and s.store_id = (select store_id from schedule where schedule_id = $2)
+            and s.business_date >= $3 and s.business_date < $4
+            and r.source_revision = $9`,
+        [
+          input.connectionId,
+          input.scheduleId,
+          monthStart,
+          nextMonthStart,
+          input.sourceRevision,
+          input.artifactRef,
+          input.adoptedAt,
+          input.adoptedByScheduleUpdateId,
+          input.fromSourceRevision,
+        ],
+      );
+      // 新版以外を指す行が残っていれば、月内の参照が食い違っている。
+      const stale = await tx.query<{ n: number }>(
+        `select count(*)::int as n
+           from authoritative_schedule_ref r
+           join schedule s on s.schedule_id = r.schedule_id
+          where r.connection_id = $1
+            and s.store_id = (select store_id from schedule where schedule_id = $5)
+            and s.business_date >= $2 and s.business_date < $3
+            and r.source_revision <> $4`,
+        [input.connectionId, monthStart, nextMonthStart, input.sourceRevision, input.scheduleId],
+      );
+      return { updated: updated.rowCount ?? 0, stale: stale.rows[0]?.n ?? 0 };
     },
   };
 }

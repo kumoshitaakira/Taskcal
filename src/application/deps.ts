@@ -1,14 +1,17 @@
 /**
  * 合成の根。実装の組み合わせをここだけで決める。
  *
- * **fake をここへ入れない。** 未実装の依存は「未実装」を返す実装を置き、
- * 動いているように見せない（`UnconfiguredModelGateway` と同じ方針）。
+ * **fake をここへ入れない。** 未実装・未設定の依存は「未実装」「未設定」を返す実装を
+ * 置き、動いているように見せない（`UnconfiguredModelGateway` と同じ方針）。
+ *
+ * 2026-09-22（Day 4）：担当Bの `ScheduleGateway`（CSV管理版ストア）と `SelectionPlanner`
+ * （Q02の被覆選定）、打診先の適格性が入り、正式採用の本番経路が繋がった。
  */
 
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { createDefaultMessagingGateway } from "../adapters/channel";
-import { createUnimplementedScheduleGateway } from "../adapters/csv/unimplemented-schedule-gateway";
+import { createCsvScheduleGateway } from "../adapters/csv/csv-schedule-gateway";
 import { createPgAuthoritativeScheduleRefRepository } from "../adapters/db/authoritative-ref-repository";
 import { createPgBudgetLedger } from "../adapters/db/budget-ledger";
 import { createPgCommitmentRepository } from "../adapters/db/commitment-repository";
@@ -26,6 +29,7 @@ import { createPgShiftAssignmentRepository } from "../adapters/db/shift-assignme
 import { createPgStaffRepository, createPgStoreRepository } from "../adapters/db/store-repository";
 import type { Clock, IdGenerator } from "../contracts/repository";
 import { createModelGateway } from "../adapters/orca";
+import { createSelectionPlanner } from "@/domain/selection";
 import { adoptPlan } from "./adopt-plan";
 import { createAbsenceCase } from "./create-absence-case";
 import { detectDeadline } from "./detect-deadline";
@@ -35,7 +39,8 @@ import { receiveInboundEvent } from "./receive-inbound-event";
 import { reconcileOutbox } from "./reconcile-outbox";
 import { recoverCase } from "./recover-case";
 import { createEligibilityRecheck } from "./eligibility-recheck";
-import { createRosterEligibility, createUnimplementedSelectionPlanner } from "./roster-eligibility";
+import { createOutreachEligibility } from "./outreach-eligibility";
+import { createRosterEligibility } from "./roster-eligibility";
 import { sendOutbox } from "./send-outbox";
 import { settleReporting } from "./settle-reporting";
 import { startOutreach } from "./start-outreach";
@@ -67,13 +72,16 @@ export function buildAppServices() {
   const assignments = createPgShiftAssignmentRepository();
   const roster = createRosterEligibility();
   const messaging = createDefaultMessagingGateway({ operations });
-  // 担当Bの実装が入るまでの未実装の口。模擬結果を返さず NOT_IMPLEMENTED を投げる。
-  // 入ったらこの3行を差し替え、runtime-status の notImplemented から落とす。
-  const gateway = createUnimplementedScheduleGateway();
-  const planner = createUnimplementedSelectionPlanner();
+  // 担当BのCSV管理版ストア（`var/schedule`）。作業用成果物を作るだけで、正式版参照を
+  // 切り替えるのは採用取引（`adopt-plan.ts`）。
+  const gateway = createCsvScheduleGateway();
+  // Q02：各区間ちょうど1人で必要枠を覆う計画を選ぶ純粋関数。
+  const planner = createSelectionPlanner();
   // Q15（2026-09-22確定・担当B承認済み）：適格性の再検査は担当Bの規則を通す。
   // **可能時間表は無い。** 在籍・職種・勤務の重複・月次上限だけが実際に効く。
   const eligibility = createEligibilityRecheck();
+  // 打診の直前も同じ規則を通す。名簿だけで打診しない。
+  const outreachEligibility = createOutreachEligibility();
   const stop = stopCase({
     cases,
     outreaches,
@@ -132,6 +140,10 @@ export function buildAppServices() {
       operations,
       roster,
       stores,
+      staff,
+      authoritative,
+      gateway,
+      eligibility: outreachEligibility,
       clock,
       ids: idGenerator,
     }),

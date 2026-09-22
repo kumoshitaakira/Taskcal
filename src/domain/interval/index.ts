@@ -160,6 +160,41 @@ function parseJstTimestamp(value: string): number {
   return ms;
 }
 
+/**
+ * 明示のオフセットを持つ日時だけを受ける。
+ *
+ * `Date.parse` は `2026-09-26T18:00:00` や `2026-09-26` を**サーバのタイムゾーンで**
+ * 解釈する。壁時計の時刻がサーバ次第で変わり、検査した区間と実際の勤務がずれる。
+ */
+const HAS_EXPLICIT_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * 保存している瞬間（UTCのISO等）を、この規則が受け取る Asia/Tokyo 固定形式へ写す。
+ *
+ * **丸めない。** 秒・ミリ秒が残っている値は、黙って切り捨てると検査した区間と
+ * 実際の勤務がずれる。MVPは15分単位なので、ここへ来る時点で0のはず。
+ * 0でなければ範囲外として拒否する。
+ *
+ * 永続層（`Date.toISOString()`）とCSV adapter・時間規則（+09:00固定）の境界で使う。
+ * 変換は +09:00 固定で、店舗の `timezone` では計算しない（`MVP_TIMEZONE`）。
+ */
+export function toJstFixedFormat(instant: string): string {
+  if (!HAS_EXPLICIT_OFFSET.test(instant)) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      `タイムゾーンの無い日時は受け取れません: ${instant}`,
+    );
+  }
+  const ms = Date.parse(instant);
+  if (Number.isNaN(ms)) {
+    throw new TaskcalError(ERROR_CODES.INVALID_INPUT, `日時を解釈できません: ${instant}`);
+  }
+  if (ms % 60_000 !== 0) {
+    throw new TaskcalError(ERROR_CODES.OUT_OF_SCOPE, `秒未満を含む日時は対象外です: ${instant}`);
+  }
+  return formatJstTimestamp(ms);
+}
+
 function isActiveAssignment(status: AssignmentStatus): boolean {
   return ACTIVE_ASSIGNMENT_STATUSES.includes(status);
 }

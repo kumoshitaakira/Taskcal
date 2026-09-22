@@ -32,9 +32,12 @@
 `EligibilityChecker`（`src/contracts/selection.ts`）の中で使われる。提示できる区間の計算、
 既存勤務を差し引いた空き、Q03の分断判定、月次割当の集計がここに要る。
 
-`src/application/roster-eligibility.ts` は名簿だけで候補を並べるため、**可能時間を見ていない**。
-今回の`index.ts`は時間・勤務条件上の候補適格性を計算するが、既存use caseの打診・選定・
-正式採用へはまだ接続していない。
+2026-09-22（Day 4）時点で、`index.ts` の `evaluateCandidateEligibility` は打診の直前
+（`src/application/outreach-eligibility.ts`）と正式採用の直前（`eligibility-recheck.ts`）の
+両方から呼ばれている。可能時間表が無いため、`availabilityWindows` には打診時は必要枠、
+採用時は承諾した区間が入る。**可能時間そのものは検査していない**（Q15）。
+永続層のUTC ISOを固定形式へ写す `toJstFixedFormat` もここに置き、application と
+CSV adapter が共有する。
 
 ## 実装済みの純粋計算
 
@@ -50,5 +53,5 @@ snapshotには正式採用前の版再検査用に`sourceRevision`と、勤務0�
 - `evaluateCandidateEligibility`：在籍、店舗、職種、欠勤者除外、重複、可能時間、月次上限
 
 月次上限の不足・不完全な入力は0分へ推測せずエラーにする。分断空き、日跨ぎ、15分境界外、
-最長4時間超は`OUT_OF_SCOPE`として返す。候補の選定計画、承諾版の最新性、永続化・正式採用は
-`src/domain/selection/`とA側の共有契約・applicationへ接続するまで扱わない。
+最長4時間超は`OUT_OF_SCOPE`として返す。候補の選定計画は `src/domain/selection/`、
+承諾版の最新性・永続化・正式採用は application が扱う。
