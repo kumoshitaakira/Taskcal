@@ -93,7 +93,16 @@ API、イベント、モデル出力の共通契約。RFC-012 §3.1により**A�
 
 時刻の形式は境界でそろえます。永続層は `Date.toISOString()`（UTC）、担当Bの規則は
 `YYYY-MM-DDTHH:MM:00+09:00`（Asia/Tokyo固定）です。`toJstFixedFormat` が写し、
-秒未満を含む値は**黙って丸めず**範囲外として断ります。
+秒未満を含む値は**黙って丸めず**範囲外として断ります。オフセットの無い日時も断ります
+——`Date.parse` がサーバのタイムゾーンで解釈し、壁時計の時刻が実行環境で変わるためです。
+変換は **+09:00 固定**で、店舗の `timezone` で計算してはいません。店舗が別のタイムゾーン
+なら `MVP_TIMEZONE` の検査が拒否します。
+
+再検査へ渡すのは**判定に要る行だけ**です。月次上限も重複も可能時間も「その本人の、その月の」
+勤務しか見ないため、無関係な行まで渡すと、他人の日跨ぎ勤務が1行あるだけで案件全体が
+未採用確定に落ちます。あわせて `LoadedSchedule.requestedRange` が対象月を覆っているかを
+検査します。`completeness` は「取得を試みた範囲の中で揃っている」という意味でしかなく、
+範囲が狭いまま信じると取得していない日を0分として数えます（Q06 / A09）。
 
 `schedule-gateway.ts` の `commitmentId` は `commitment.ts` の `Commitment.commitmentId`
 を指します。`selection.ts` の `SelectionPlanner` は**担当Bが `src/domain/selection/` で

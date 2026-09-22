@@ -1098,7 +1098,7 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
 
     expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
     expect(result.ok === false && result.detail).toContain(
-      "適格性の再検査で外れました（MONTHLY_CAP）",
+      "適格性の再検査で外れました（MONTHLY_CAP／staffId=",
     );
     // 検査で外れた計画の勤務を作らない。
     expect(await additionalShifts()).toHaveLength(0);
@@ -1152,7 +1152,9 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
     expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
     // **理由の語だけを見ない。** DBの排他制約の文面にも OVERLAP が入るので、
     // 再検査を外しても素通りしてしまう。どの検査が止めたかまで見る。
-    expect(result.ok === false && result.detail).toContain("適格性の再検査で外れました（OVERLAP）");
+    expect(result.ok === false && result.detail).toContain(
+      "適格性の再検査で外れました（OVERLAP／staffId=",
+    );
     expect(await additionalShifts()).toHaveLength(0);
   });
 
@@ -1168,9 +1170,83 @@ describe.skipIf(!connectionString)("正式採用（DATABASE_URL 必須）", () =
 
     expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
     expect(result.ok === false && result.detail).toContain(
-      "適格性の再検査で外れました（NOT_COVERED）",
+      "適格性の再検査で外れました（NOT_COVERED／staffId=",
     );
     expect(await additionalShifts()).toHaveLength(0);
+  });
+
+  it("Q06／A09：取得範囲が対象月を覆っていなければ、COMPLETEでも採用しない", async () => {
+    // `completeness` は「取得を**試みた範囲**の中で揃っている」という意味でしかない。
+    // 範囲が対象月より狭いまま信じると、取得していない日を0分として数え、月次上限を
+    // 素通りさせる。欠けた日を0と推定しない（Q06）。
+    const gateway = newGateway();
+    gateway.setCurrentSchedule({
+      scheduleId,
+      sourceRevision: REVISION,
+      // 案件は2026-09-26。範囲が月の途中までしかない。
+      requestedRange: { fromDate: "2026-09-20", toDate: "2026-09-30" },
+      completeness: "COMPLETE",
+      missingDates: [],
+      // 読戻しは一致させる。ここで見たいのは範囲の検査であって、読戻しではない。
+      assignments: [
+        {
+          shiftAssignmentId: absentShift,
+          staffId: absentStaff,
+          roleCode: "FLOOR",
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+          status: "SCHEDULED",
+        },
+      ],
+    });
+
+    const result = await build({ gateway })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: false, outcome: "REJECTED" });
+    expect(result.ok === false && result.detail).toContain("対象月（2026-09）を覆っていません");
+    expect(await additionalShifts()).toHaveLength(0);
+  });
+
+  it("他人の対象外の勤務が混ざっていても、案件全体を止めない", async () => {
+    // 担当Bの検査は渡した全行に効く。無関係な相手の日跨ぎ勤務や対象月外の勤務まで
+    // 渡すと、それが1行あるだけで案件が未採用確定に落ちる。判定に要る行だけ渡す。
+    const gateway = newGateway();
+    gateway.setCurrentSchedule({
+      scheduleId,
+      sourceRevision: REVISION,
+      requestedRange: { fromDate: "2026-09-01", toDate: "2026-10-01" },
+      completeness: "COMPLETE",
+      missingDates: [],
+      assignments: [
+        {
+          shiftAssignmentId: absentShift,
+          staffId: absentStaff,
+          roleCode: "FLOOR",
+          startAt: SHIFT_START,
+          endAt: SHIFT_END,
+          status: "SCHEDULED",
+        },
+        {
+          // 無関係な相手の日跨ぎ勤務。担当Bの `validateTimeRange` が弾く形。
+          shiftAssignmentId: randomUUID(),
+          staffId: silentStaff,
+          roleCode: "FLOOR",
+          startAt: "2026-09-10T22:00:00+09:00",
+          endAt: "2026-09-11T01:00:00+09:00",
+          status: "SCHEDULED",
+        },
+      ],
+    });
+
+    const result = await build({ gateway })({
+      operationId: `adopt:${caseId}:${randomUUID()}`,
+      caseId,
+    });
+
+    expect(result).toMatchObject({ ok: true, outcome: "ADOPTED", adopted: 2 });
   });
 
   it("月内入力が完全でなければ、採用の直前で止める（Q06 / A09）", async () => {

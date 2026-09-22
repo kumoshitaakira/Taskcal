@@ -44,6 +44,20 @@ import {
 const JST_OFFSET_MINUTES = 9 * 60;
 
 /**
+ * 明示のオフセットを持つ日時だけを受ける。
+ *
+ * `Date.parse` は `2026-09-26T18:00:00` や `2026-09-26` を**サーバのタイムゾーンで**
+ * 解釈する。壁時計の時刻がサーバ次第で変わり、検査した区間と実際の勤務がずれる。
+ */
+const HAS_EXPLICIT_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/** `YYYY-MM` の翌月。範囲の検査に使う。 */
+function nextMonth(month: string): string {
+  const [year, index] = month.split("-").map(Number);
+  return index === 12 ? `${year + 1}-01` : `${year}-${String(index + 1).padStart(2, "0")}`;
+}
+
+/**
  * 保存している瞬間を、担当Bの規則が受け取る Asia/Tokyo 固定形式へ写す。
  *
  * **丸めない。** 秒・ミリ秒が残っている値は、黙って切り捨てると検査した区間と
@@ -51,6 +65,12 @@ const JST_OFFSET_MINUTES = 9 * 60;
  * ここへ来る時点で0のはず。0でなければ範囲外として拒否する。
  */
 export function toJstFixedFormat(instant: string): string {
+  if (!HAS_EXPLICIT_OFFSET.test(instant)) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      `タイムゾーンの無い日時は受け取れません: ${instant}`,
+    );
+  }
   const ms = Date.parse(instant);
   if (Number.isNaN(ms)) {
     throw new TaskcalError(ERROR_CODES.INVALID_INPUT, `日時を解釈できません: ${instant}`);
@@ -84,6 +104,19 @@ export function buildRecheckInput(input: {
   readonly inputs: SelectionInputs;
 }): EligibilityRecheckInput {
   const month = input.snapshot.businessDate.slice(0, 7);
+
+  // **`completeness` は「取得を試みた範囲の中で」揃っているという意味**であって、
+  // 対象月が揃っているという意味ではない（`schedule-gateway.ts` の `requestedRange`）。
+  // 範囲が対象月を覆っていないまま COMPLETE を信じると、取得していない日を0分として
+  // 数え、月次上限を素通りさせる（Q06 / A09：欠けた日を0と推定しない）。
+  const range = input.reloaded.requestedRange;
+  if (range.fromDate > `${month}-01` || range.toDate < `${nextMonth(month)}-01`) {
+    throw new TaskcalError(
+      ERROR_CODES.INVALID_INPUT,
+      `勤務表の取得範囲が対象月（${month}）を覆っていません: ${range.fromDate}〜${range.toDate}`,
+    );
+  }
+
   // 承諾した区間を可能時間として渡す。MVPには可能時間表が無い（ADR-014 / Q09）。
   const acceptedByStaff = new Map<string, { startAt: string; endAt: string }[]>();
   for (const chosen of input.selected) {
@@ -95,12 +128,35 @@ export function buildRecheckInput(input: {
     acceptedByStaff.set(chosen.staffId, windows);
   }
 
+  // **判定に要る行だけを渡す。** 月次上限も重複も可能時間も、すべて「その本人の、
+  // その月の」勤務しか見ない。無関係な行まで渡すと、他人の日跨ぎ勤務や未知の状態が
+  // 1行あるだけで案件全体が未採用確定に落ちる（担当Bの検査は全行に効く）。
+  const targetStaff = new Set(input.selected.map((chosen) => chosen.staffId));
+  const assignments = input.reloaded.assignments
+    .filter((assignment) => targetStaff.has(assignment.staffId))
+    .map((assignment) => {
+      const startAt = toJstFixedFormat(assignment.startAt);
+      return {
+        shiftAssignmentId: assignment.shiftAssignmentId,
+        // 営業日は区間の開始から決める。タイムゾーンはMVPで Asia/Tokyo 固定。
+        businessDate: startAt.slice(0, 10),
+        staffId: assignment.staffId,
+        roleCode: assignment.roleCode,
+        startAt,
+        endAt: toJstFixedFormat(assignment.endAt),
+        status: assignment.status,
+      };
+    })
+    .filter((assignment) => assignment.businessDate.slice(0, 7) === month);
+
   return {
     storeId: input.snapshot.storeId,
     requirement: {
       roleCode: input.snapshot.roleCode,
-      startAt: input.snapshot.requiredStartAt,
-      endAt: input.snapshot.requiredEndAt,
+      // 形式をそろえる。片方だけUTCのISOのまま残すと、後から時刻を見るように
+      // なったときに混ざる。
+      startAt: toJstFixedFormat(input.snapshot.requiredStartAt),
+      endAt: toJstFixedFormat(input.snapshot.requiredEndAt),
     },
     selected: input.selected.map((chosen) => ({
       ...chosen,
@@ -115,23 +171,11 @@ export function buildRecheckInput(input: {
       timezone: input.storeTimezone,
       month,
       sourceRevision: input.reloaded.sourceRevision,
-      // 勤務0件のスタッフも対象に含める。居ない相手を「上限に余裕あり」と読まない
-      // （`STAFF_NOT_IN_MONTHLY_SNAPSHOT`）。
-      staffIds: input.conditions.map((row) => row.staffId),
+      // 渡した行の範囲と揃える。勤務0件でも対象に含めるので、居ない相手を
+      // 「上限に余裕あり」と読むことはない（`STAFF_NOT_IN_MONTHLY_SNAPSHOT`）。
+      staffIds: [...targetStaff],
       completeness: input.reloaded.completeness,
-      assignments: input.reloaded.assignments.map((assignment) => {
-        const startAt = toJstFixedFormat(assignment.startAt);
-        return {
-          shiftAssignmentId: assignment.shiftAssignmentId,
-          // 営業日は区間の開始から決める。タイムゾーンはMVPで Asia/Tokyo 固定。
-          businessDate: startAt.slice(0, 10),
-          staffId: assignment.staffId,
-          roleCode: assignment.roleCode,
-          startAt,
-          endAt: toJstFixedFormat(assignment.endAt),
-          status: assignment.status,
-        };
-      }),
+      assignments,
     },
     staffProfiles: input.conditions.map((row) => ({
       staffId: row.staffId,

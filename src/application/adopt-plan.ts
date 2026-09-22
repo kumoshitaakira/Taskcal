@@ -574,9 +574,12 @@ export function adoptPlan(deps: AdoptPlanDeps) {
           throw error;
         }
         if (!rechecked.ok) {
+          // 誰が外れたかまで残す。理由だけだと、どの候補を見直せばよいか分からない。
           return rejected(
             ERROR_CODES.INVALID_INPUT,
-            `適格性の再検査で外れました（${rechecked.reason}）。`,
+            `適格性の再検査で外れました（${rechecked.reason}${
+              rechecked.staffId ? `／staffId=${rechecked.staffId}` : ""
+            }）。`,
           );
         }
 

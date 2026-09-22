@@ -40,3 +40,26 @@ describe("保存している瞬間を Asia/Tokyo 固定形式へ写す", () => {
     expect(() => toJstFixedFormat("いつか")).toThrow(TaskcalError);
   });
 });
+
+describe("タイムゾーンの無い日時を受け取らない", () => {
+  it("オフセットが無い日時は、サーバのタイムゾーンで解釈せず断る", () => {
+    // `Date.parse("2026-09-26T18:00:00")` はサーバのTZで読む。壁時計の時刻が
+    // 実行環境で変わり、検査した区間と実際の勤務がずれる。
+    let thrown: unknown;
+    try {
+      toJstFixedFormat("2026-09-26T18:00:00");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TaskcalError);
+    expect((thrown as TaskcalError).code).toBe(ERROR_CODES.INVALID_INPUT);
+  });
+
+  it("日付だけの値も断る", () => {
+    expect(() => toJstFixedFormat("2026-09-26")).toThrow(TaskcalError);
+  });
+
+  it("Z 表記は受け取る", () => {
+    expect(toJstFixedFormat("2026-09-26T09:00:00Z")).toBe("2026-09-26T18:00:00+09:00");
+  });
+});
