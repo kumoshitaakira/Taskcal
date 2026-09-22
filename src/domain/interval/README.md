@@ -7,7 +7,8 @@
 - `TimeRange` は半開区間 `[start, end)`、`start < end`。
 - 表示と月境界は `Store.timezone` に従う。
 - 可能時間から既存勤務を差し引いた結果は**区間集合になり得る**。
-  分断された結果を1つの区間へ戻さない。Q03が範囲外のままなら
+  独立した複数の可能時間窓そのものは、候補時間がいずれか1つへ完全に収まるなら許可する。
+  1つの可能時間窓が既存勤務によって分断された場合は、分断を1区間へ戻さず
   `OUT_OF_SCOPE` で明示的に拒否する（`src/contracts/errors.ts`）。
 - 取得できていない勤務を0とみなさない。月次を検査するなら、対象月の
   全入力または「他日は空」の完全なfixtureが必要（A09）。
@@ -31,5 +32,23 @@
 `EligibilityChecker`（`src/contracts/selection.ts`）の中で使われる。提示できる区間の計算、
 既存勤務を差し引いた空き、Q03の分断判定、月次割当の集計がここに要る。
 
-現在は未実装。`src/application/roster-eligibility.ts` が名簿だけで候補を並べており、
-**可能時間を見ていない**。打診の宛先としては使えるが、選定・正式採用の根拠にはできない。
+`src/application/roster-eligibility.ts` は名簿だけで候補を並べるため、**可能時間を見ていない**。
+今回の`index.ts`は時間・勤務条件上の候補適格性を計算するが、既存use caseの打診・選定・
+正式採用へはまだ接続していない。
+
+## 実装済みの純粋計算
+
+`index.ts` は共有の `Commitment`／`SelectionResult` 契約を変更せず、次を決定的に検査する。
+
+`MonthlyScheduleSnapshot` は、applicationの
+`createMonthlyScheduleSnapshot` がCSVの完全性と対象月全日の宣言を検証した後に生成する。
+snapshotには正式採用前の版再検査用に`sourceRevision`と、勤務0件のスタッフも含む対象スタッフ集合を保持する。
+
+- `validateTimeRange`、`overlapsTimeRange`、`containsTimeRange`：半開区間、JST、15分境界、日跨ぎ
+- `deriveAvailableIntervals`：同一スタッフの予定・完了勤務を可能時間から差し引く
+- `calculateMonthlyAssignedMinutes`／`calculateMonthlyCapacity`：完全な月内入力で、`COMPLETED`を含め、`CANCELLED`と`ABSENT`を除外
+- `evaluateCandidateEligibility`：在籍、店舗、職種、欠勤者除外、重複、可能時間、月次上限
+
+月次上限の不足・不完全な入力は0分へ推測せずエラーにする。分断空き、日跨ぎ、15分境界外、
+最長4時間超は`OUT_OF_SCOPE`として返す。候補の選定計画、承諾版の最新性、永続化・正式採用は
+`src/domain/selection/`とA側の共有契約・applicationへ接続するまで扱わない。

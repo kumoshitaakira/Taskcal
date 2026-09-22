@@ -137,7 +137,7 @@ src/adapters/channel/     A  模擬メッセージ受信箱
 src/worker/               A  常駐worker（送信・解釈）
 src/contracts/            共同 API・イベント・モデル出力・永続化の契約
 src/config/               A  環境変数の検査
-src/domain/interval/      B  時間区間、重複、充足計算（README のみ。実装は未着手）
+src/domain/interval/      B  時間区間、重複、候補適格性、月次割当計算（U03実装済み）
 src/domain/selection/     B  候補評価、勤務計画の選定（同上）
 src/adapters/csv/         B  固定CSV正規化・安定ID（Gateway本体は未実装）
 fixtures/ tests/          B中心 デモデータ、単体・統合・受入試験
@@ -210,7 +210,8 @@ npx vitest run tests/unit/monthly-csv.test.ts
 
 ID付きの固定列CSVのみを対象とし、月内の入力完全性はJSON範囲宣言で検査します。
 CSV形式は変更可能な実装上の仮定です。詳細は[RFC-010 §10](docs/rfc/RFC-010-csv-authority.md)を参照。
-時間計算、月次上限、候補選定、欠勤適用、画面接続は次のステップです。
+U03として時間計算、候補適格性、月次割当上限の決定的検査を追加済みです。承諾・候補選定、
+欠勤適用、正式採用、画面接続は次の統合ステップです。
 
 ## 文書の扱い
 
