@@ -120,9 +120,6 @@ jobs:
           }
 
       # service containerはhealthcheckがhealthyになってからjob stepを開始する。
-      # 起動ゲートはCIでDATABASE_URLが欠けた場合にskipせず失敗させる。
-      - name: PostgreSQL統合テスト（DATABASE_URL必須）
-        run: npm run test:integration
-
-      - name: テスト
+      # npm testがunit + integrationの正式なCI入口で、DATABASE_URL欠落時はskipせず失敗する。
+      - name: テスト（unit + PostgreSQL統合）
         run: npm test

@@ -98,12 +98,13 @@ npm run test:integration  # 統合のみ（起動中のDBが必要）
 npm run check:orca     # OrcaRouterの設定点検（実呼出しはしない）
 ```
 
-`npm run test:integration` は専用の起動ゲートを通します。ローカルで`DATABASE_URL`が
-未設定なら、従来どおり統合テストをskip可能とし、`[integration] SKIP`と
+`npm test`がunit + integrationの正式なテスト入口です。ローカルで`DATABASE_URL`が未設定
+なら、unitは実行し、integration本体はskipして`[integration] SKIP`と
 `[integration] RESULT: ...未実行`を標準エラーへ出します。`CI=true`または
 `GITHUB_ACTIONS=true`の環境では、`DATABASE_URL`が未設定・空文字ならVitestを起動せず、
 `[integration] ERROR`を出して失敗します。設定済みなら`[integration] RUN`を出して
-PostgreSQL統合テストを実行します。これにより、CIの緑色が「成功」と「未実行」を隠しません。
+unit + PostgreSQL統合テストを一度だけ実行します。`npm run test:integration`は統合テストだけを
+確認するfocused commandで、ローカル未設定時はVitest自体を起動せず未実行になります。
 
 ### CI
 
@@ -114,7 +115,7 @@ PostgreSQL統合テストを実行します。これにより、CIの緑色が�
 |---|---|---|
 | 静的検査 | 環境ファイルの混入検査、`format:check`、`lint`、`typecheck`、`check:consistency`、`check:orca` | 不要 |
 | ビルド | `build` | 不要 |
-| テストとmigration | PostgreSQL serviceのhealthcheck完了後に`migrate`と再実行（`applied=0`）、`test:integration`（CIでは`DATABASE_URL`必須）、`test` | PostgreSQL 18 |
+| テストとmigration | PostgreSQL serviceのhealthcheck完了後に`migrate`と再実行（`applied=0`）、`npm test`（unit + integrationを1回） | PostgreSQL 18 |
 
 分割している理由は2つです。PostgreSQLの起動に17秒かかりますが、必要なのはテストだけで、
 静的検査とビルドを待たせません。また直列だと、整形で落ちた時点でテストが走らず、修正して
@@ -122,8 +123,13 @@ push し直してから初めてテストの失敗に気付くことになりま
 
 GitHub Actionsの`test`ジョブはPostgreSQL serviceのhealthcheckを定義しています。service
 containerがhealthyになるまでjob stepは開始されないため、最初のmigration stepはDBの起動完了後に
-実行されます。migrationは`src/adapters/db/migrations/`の承認済み番号付きSQLだけを通常runnerで
-適用し、A承認前のdraftはCIへ持ち込みません。
+実行されます。`npm test`はmigration後に一度だけ実行されます。
+
+MigrationのA承認は、A担当者がPull Request上のSQL差分を人手で確認することを意味します。
+通常runnerは`src/adapters/db/migrations/`に置かれた全SQLを読むため、A承認前のdraftをこの
+ディレクトリへ置かず、作業用の別worktree／別ディレクトリで管理します。CIのgreenや
+`applied=0`は人手承認の証拠ではありません。承認済みとしてPRへ入ったSQLだけを通常runnerの
+対象にします。今回の変更ではmigration SQLの内容を追加・確定していません。
 
 CIはOrcaRouterのキーを持ちません。`check:orca` は設定の点検のみで、**実呼出しはしません**。
 実モデル評価はCIの対象外で、手元で予算を設定して実行します（ADR-007）。
