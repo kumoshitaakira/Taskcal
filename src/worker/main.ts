@@ -79,6 +79,9 @@ async function main(): Promise<void> {
 
     // 未処理の返信を解釈する。モデルが未設定なら何もしない（模擬結果を返さない）。
     while (running && drained < DRAIN_LIMIT) {
+      // 解釈は OrcaRouter の応答待ちで長く止まる。直前に beat して、生存確認が
+      // ループ先頭の1回だけに依存しないようにする（runtime-status の WORKER_STALE_MS）。
+      await beat(pool, { instanceId, startedAt, loopCount });
       const outcome = await services.interpretPending().catch((error: unknown) => {
         process.stderr.write(
           `worker: 解釈で例外 ${error instanceof Error ? error.message : String(error)}\n`,

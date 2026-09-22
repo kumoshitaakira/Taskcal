@@ -61,7 +61,15 @@ export interface RuntimeStatus {
   readonly notImplemented: readonly string[];
 }
 
-const WORKER_STALE_MS = 30_000;
+/**
+ * heartbeat がこの時間止まると「接続できない」と表示する。
+ *
+ * worker はループの先頭と、返信の解釈の直前で beat する。解釈は OrcaRouter の応答待ち
+ * （`ORCA_TIMEOUT_MS`、既定20秒・推論モデルでは60秒に設定）で1件あたり最長その時間
+ * 止まるため、タイムアウト上限より長く取る。短くすると、正常に解釈中の worker を
+ * 落ちたと表示する（Day 4の実演で観測）。
+ */
+const WORKER_STALE_MS = 90_000;
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const checkedAt = new Date().toISOString();
